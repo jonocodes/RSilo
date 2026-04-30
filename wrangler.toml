@@ -1,0 +1,16 @@
+name = "rsilo"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "remotestorage"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "remotestorage"
+database_id = "local-dev"
+
+[observability]
+enabled = true

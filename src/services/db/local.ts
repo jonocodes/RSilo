@@ -1,0 +1,197 @@
+import { Database as BunDatabase } from 'bun:sqlite';
+import { join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
+import type { User, OAuthClient, OAuthToken } from './schema';
+
+export class LocalDatabase {
+  private db: BunDatabase;
+
+  constructor(dbPath?: string) {
+    const defaultPath = join(process.cwd(), 'data', 'remotestorage.db');
+    const finalPath = dbPath || defaultPath;
+
+    const dir = join(finalPath, '..');
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    this.db = new BunDatabase(finalPath);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.initSchema();
+  }
+
+  private initSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        storage_quota_bytes INTEGER DEFAULT 10737418240,
+        used_storage_bytes INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS oauth_clients (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        redirect_uris TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        user_id TEXT NOT NULL REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS oauth_tokens (
+        id TEXT PRIMARY KEY,
+        access_token TEXT UNIQUE NOT NULL,
+        refresh_token TEXT UNIQUE,
+        expires_at INTEGER NOT NULL,
+        scopes TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        client_id TEXT NOT NULL REFERENCES oauth_clients(id),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+      CREATE INDEX IF NOT EXISTS idx_oauth_tokens_access_token ON oauth_tokens(access_token);
+      CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh_token ON oauth_tokens(refresh_token);
+      CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
+    `);
+  }
+
+  async getUserByUsername(username: string): Promise<User | null> {
+    const stmt = this.db.prepare('SELECT * FROM users WHERE username = ?');
+    const result = stmt.get(username) as User | undefined;
+    return result || null;
+  }
+
+  async getUserById(id: string): Promise<User | null> {
+    const stmt = this.db.prepare('SELECT * FROM users WHERE id = ?');
+    const result = stmt.get(id) as User | undefined;
+    return result || null;
+  }
+
+  async createUser(id: string, username: string): Promise<void> {
+    const stmt = this.db.prepare('INSERT INTO users (id, username) VALUES (?, ?)');
+    stmt.run(id, username);
+  }
+
+  async getStorageUsage(userId: string): Promise<number> {
+    const stmt = this.db.prepare('SELECT used_storage_bytes FROM users WHERE id = ?');
+    const result = stmt.get(userId) as { used_storage_bytes: number } | undefined;
+    return result?.used_storage_bytes || 0;
+  }
+
+  async updateStorageUsage(userId: string, bytes: number): Promise<void> {
+    const stmt = this.db.prepare('UPDATE users SET used_storage_bytes = ? WHERE id = ?');
+    stmt.run(bytes, userId);
+  }
+
+  async getClient(clientId: string): Promise<OAuthClient | null> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_clients WHERE id = ?');
+    const result = stmt.get(clientId) as OAuthClient | undefined;
+    return result || null;
+  }
+
+  async getTokenByAccessToken(accessToken: string): Promise<OAuthToken | null> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?');
+    const result = stmt.get(accessToken, Math.floor(Date.now() / 1000)) as OAuthToken | undefined;
+    return result || null;
+  }
+
+  async getTokenByRefreshToken(refreshToken: string): Promise<OAuthToken | null> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE refresh_token = ?');
+    const result = stmt.get(refreshToken) as OAuthToken | undefined;
+    return result || null;
+  }
+
+  async createToken(token: Omit<OAuthToken, 'created_at'>): Promise<void> {
+    const stmt = this.db.prepare(
+      'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    stmt.run(
+      token.id,
+      token.access_token,
+      token.refresh_token,
+      token.expires_at,
+      token.scopes,
+      token.user_id,
+      token.client_id
+    );
+  }
+
+  async deleteToken(tokenId: string): Promise<void> {
+    const stmt = this.db.prepare('DELETE FROM oauth_tokens WHERE id = ?');
+    stmt.run(tokenId);
+  }
+
+  async deleteExpiredTokens(): Promise<void> {
+    const stmt = this.db.prepare('DELETE FROM oauth_tokens WHERE expires_at < ?');
+    stmt.run(Math.floor(Date.now() / 1000));
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    const stmt = this.db.prepare('SELECT * FROM users ORDER BY created_at DESC');
+    return stmt.all() as User[];
+  }
+
+  async getUserCount(): Promise<number> {
+    const stmt = this.db.prepare('SELECT COUNT(*) as count FROM users');
+    const result = stmt.get() as { count: number };
+    return result?.count || 0;
+  }
+
+  async getTotalStorage(): Promise<number> {
+    const stmt = this.db.prepare('SELECT SUM(used_storage_bytes) as total FROM users');
+    const result = stmt.get() as { total: number } | undefined;
+    return result?.total || 0;
+  }
+
+  async getTokenCount(): Promise<number> {
+    const stmt = this.db.prepare('SELECT COUNT(*) as count FROM oauth_tokens');
+    const result = stmt.get() as { count: number };
+    return result?.count || 0;
+  }
+
+  async updateUserQuota(username: string, quotaBytes: number): Promise<void> {
+    const stmt = this.db.prepare('UPDATE users SET storage_quota_bytes = ? WHERE username = ?');
+    stmt.run(quotaBytes, username);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  storage_quota_bytes INTEGER DEFAULT 10737418240,
+  used_storage_bytes INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  user_id TEXT NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id TEXT PRIMARY KEY,
+  access_token TEXT UNIQUE NOT NULL,
+  refresh_token TEXT UNIQUE,
+  expires_at INTEGER NOT NULL,
+  scopes TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL REFERENCES oauth_clients(id),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_access_token ON oauth_tokens(access_token);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh_token ON oauth_tokens(refresh_token);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
+`;

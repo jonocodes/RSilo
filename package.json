@@ -1,0 +1,33 @@
+{
+  "name": "rsilo",
+  "version": "0.1.0",
+  "description": "RSilo - RemoteStorage server for Cloudflare Workers + R2 + D1",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:offline": "bun run src/server-offline.ts",
+    "db:setup:local": "bun run src/scripts/setup-local-db.ts",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings=0",
+    "lint:fix": "eslint src --fix",
+    "db:migrate": "wrangler d1 migrations apply"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.15.1",
+    "@cloudflare/workers-types": "^4.20250415.0",
+    "@typescript-eslint/eslint-plugin": "^8.30.1",
+    "@typescript-eslint/parser": "^8.30.1",
+    "eslint": "^9.24.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1",
+    "wrangler": "^4.13.0"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.1",
+    "@types/node": "^25.6.0",
+    "hono": "^4.7.5"
+  }
+}
