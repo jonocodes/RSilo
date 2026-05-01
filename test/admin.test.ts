@@ -194,3 +194,211 @@ describe('Admin endpoints', () => {
     expect(html).toContain('Total Storage');
   });
 });
+
+describe('POST /admin/users', () => {
+  let app: ReturnType<typeof createServer>;
+
+  function makeDb(existingUser: any = null) {
+    return {
+      prepare: (sql: string) => ({
+        bind: (..._args: any[]) => ({
+          first: async () => (sql.includes('SELECT id FROM users') ? existingUser : null),
+          run: async () => ({}),
+        }),
+        first: async () => null,
+        run: async () => ({}),
+        all: async () => ({ results: [] }),
+      }),
+    } as any;
+  }
+
+  beforeAll(() => {
+    app = createServer({ STORAGE: {} as any, DB: makeDb() });
+  });
+
+  it('creates user and returns 201', async () => {
+    const env = { STORAGE: {} as any, DB: makeDb(null) };
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'newuser', password: 'securepassword' }),
+      },
+      env
+    );
+    expect(res.status).toBe(201);
+    const json = await res.json() as any;
+    expect(json.username).toBe('newuser');
+    expect(json.id).toBeDefined();
+    expect(json.password_hash).toBeUndefined();
+  });
+
+  it('returns 409 when username already exists', async () => {
+    const env = { STORAGE: {} as any, DB: makeDb({ id: 'existing-id' }) };
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'alice', password: 'securepassword' }),
+      },
+      env
+    );
+    expect(res.status).toBe(409);
+    const json = await res.json() as any;
+    expect(json.error).toContain('already exists');
+  });
+
+  it('returns 400 when username is missing', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'securepassword' }),
+      },
+      { STORAGE: {} as any, DB: makeDb() }
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when password is missing', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'alice' }),
+      },
+      { STORAGE: {} as any, DB: makeDb() }
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when password is too short', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'alice', password: 'short' }),
+      },
+      { STORAGE: {} as any, DB: makeDb() }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json() as any;
+    expect(json.error).toContain('8 characters');
+  });
+
+  it('returns 400 for invalid username characters', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'alice smith', password: 'securepassword' }),
+      },
+      { STORAGE: {} as any, DB: makeDb() }
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('PATCH /admin/users/:username/password', () => {
+  let app: ReturnType<typeof createServer>;
+  const db = {
+    prepare: () => ({
+      bind: (..._args: any[]) => ({ run: async () => ({}) }),
+      run: async () => ({}),
+    }),
+  } as any;
+
+  beforeAll(() => {
+    app = createServer({ STORAGE: {} as any, DB: db });
+  });
+
+  it('updates password and returns 200', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users/alice/password',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'newpassword123' }),
+      },
+      { STORAGE: {} as any, DB: db }
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json() as any;
+    expect(json.success).toBe(true);
+  });
+
+  it('returns 400 when password is too short', async () => {
+    const res = await app.request(
+      'http://localhost/admin/users/alice/password',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'short' }),
+      },
+      { STORAGE: {} as any, DB: db }
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('Admin auth middleware', () => {
+  let app: ReturnType<typeof createServer>;
+  const db = {
+    prepare: () => ({
+      bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}), all: async () => ({ results: [] }) }),
+      first: async () => null,
+      all: async () => ({ results: [] }),
+      run: async () => ({}),
+    }),
+  } as any;
+
+  beforeAll(() => {
+    app = createServer({ STORAGE: {} as any, DB: db });
+  });
+
+  it('returns 401 when ADMIN_SECRET is set and no auth header', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET' },
+      env
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when ADMIN_SECRET is set and wrong token provided', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET', headers: { Authorization: 'Bearer wrongtoken' } },
+      env
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('allows access with correct ADMIN_SECRET', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET', headers: { Authorization: 'Bearer mysecret' } },
+      env
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('allows access without auth header when ADMIN_SECRET is not set', async () => {
+    const env = { STORAGE: {} as any, DB: db };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET' },
+      env
+    );
+    expect(res.status).toBe(200);
+  });
+});

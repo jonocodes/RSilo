@@ -1,7 +1,7 @@
 import { Database as BunDatabase } from 'bun:sqlite';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import type { User, OAuthClient, OAuthToken } from './schema';
+import type { User, OAuthClient, OAuthToken, OAuthCode } from './schema';
 
 export class LocalDatabase {
   private db: BunDatabase;
@@ -25,6 +25,7 @@ export class LocalDatabase {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
+        password_hash TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
         storage_quota_bytes INTEGER DEFAULT 10737418240,
@@ -50,11 +51,24 @@ export class LocalDatabase {
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
 
+      CREATE TABLE IF NOT EXISTS oauth_codes (
+        code TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
       CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_access_token ON oauth_tokens(access_token);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh_token ON oauth_tokens(refresh_token);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
     `);
+    try {
+      this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+    } catch { /* column already exists */ }
   }
 
   async getUserByUsername(username: string): Promise<User | null> {
@@ -69,9 +83,9 @@ export class LocalDatabase {
     return result || null;
   }
 
-  async createUser(id: string, username: string): Promise<void> {
-    const stmt = this.db.prepare('INSERT INTO users (id, username) VALUES (?, ?)');
-    stmt.run(id, username);
+  async createUser(id: string, username: string, passwordHash: string): Promise<void> {
+    const stmt = this.db.prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)');
+    stmt.run(id, username, passwordHash);
   }
 
   async getStorageUsage(userId: string): Promise<number> {
@@ -156,6 +170,34 @@ export class LocalDatabase {
     stmt.run(quotaBytes, username);
   }
 
+  async updatePasswordHash(username: string, passwordHash: string): Promise<void> {
+    const stmt = this.db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?');
+    stmt.run(passwordHash, Math.floor(Date.now() / 1000), username);
+  }
+
+  async createCode(code: OAuthCode): Promise<void> {
+    const stmt = this.db.prepare(
+      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    stmt.run(code.code, code.client_id, code.user_id, code.redirect_uri, code.scope, code.expires_at);
+  }
+
+  async getCode(code: string): Promise<OAuthCode | null> {
+    const stmt = this.db.prepare(
+      'SELECT * FROM oauth_codes WHERE code = ? AND expires_at > ?'
+    );
+    const result = stmt.get(code, Math.floor(Date.now() / 1000)) as OAuthCode | undefined;
+    return result || null;
+  }
+
+  async deleteCode(code: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_codes WHERE code = ?').run(code);
+  }
+
+  async deleteExpiredCodes(): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(Math.floor(Date.now() / 1000));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -165,6 +207,7 @@ export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
+  password_hash TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   storage_quota_bytes INTEGER DEFAULT 10737418240,
@@ -187,6 +230,16 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   scopes TEXT NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id),
   client_id TEXT NOT NULL REFERENCES oauth_clients(id),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 

@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "dev:offline": "bun run src/server-offline.ts",
+    "dev:offline": "bun --watch src/server-offline.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
     "deploy": "wrangler deploy",
     "test": "vitest run",

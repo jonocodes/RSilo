@@ -658,3 +658,78 @@ describe('Public storage', () => {
     expect(getRes.status).toBe(404);
   });
 });
+
+describe('DB-backed OAuth token auth', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(() => {
+    app = createServer(TEST_ENV);
+  });
+
+  beforeEach(() => {
+    storage.clear();
+  });
+
+  it('accepts a valid DB-backed OAuth token for storage access', async () => {
+    const dbToken = 'real-oauth-access-token';
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (..._args: any[]) => ({
+            first: async () => {
+              if (sql.includes('oauth_tokens')) {
+                return {
+                  access_token: dbToken,
+                  user_id: 'alice',
+                  scopes: 'documents:rw',
+                  expires_at: Math.floor(Date.now() / 1000) + 3600,
+                  created_at: Math.floor(Date.now() / 1000),
+                };
+              }
+              return null;
+            },
+            run: async () => ({}),
+            all: async () => ({ results: [] }),
+          }),
+        }),
+      } as any,
+    };
+
+    const putRes = await app.request(
+      'http://localhost/storage/alice/documents/db-token-test.txt',
+      {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${dbToken}`, 'Content-Type': 'text/plain' },
+        body: 'hello',
+      },
+      dbEnv
+    );
+    expect([200, 201]).toContain(putRes.status);
+  });
+
+  it('rejects an expired DB-backed OAuth token', async () => {
+    const expiredToken = 'expired-oauth-token';
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      DB: {
+        prepare: () => ({
+          bind: (..._args: any[]) => ({
+            first: async () => null,
+            run: async () => ({}),
+          }),
+        }),
+      } as any,
+    };
+
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/test.txt',
+      {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${expiredToken}` },
+      },
+      dbEnv
+    );
+    expect(res.status).toBe(401);
+  });
+});

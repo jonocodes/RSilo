@@ -20,15 +20,37 @@ export function authMiddleware() {
       });
     }
 
-    const payload = await verifyToken(token);
-    if (!payload) {
-      return c.text('Invalid token', 401, {
-        'WWW-Authenticate': 'Bearer realm="storage" error="invalid_token"',
-      });
+    // Try dev token (unsigned JWT) first
+    const devPayload = await verifyToken(token);
+    if (devPayload) {
+      c.set('tokenPayload', devPayload);
+      await next();
+      return;
     }
 
-    c.set('tokenPayload', payload);
-    await next();
+    // Fall back to DB-backed OAuth token lookup
+    const db = (c.env as any)?.DB;
+    if (db && typeof db.prepare === 'function') {
+      const row = await db.prepare(
+        'SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?'
+      ).bind(token, Math.floor(Date.now() / 1000)).first() as any;
+
+      if (row) {
+        const payload: TokenPayload = {
+          sub: row.user_id,
+          scopes: row.scopes,
+          iat: row.created_at,
+          exp: row.expires_at,
+        };
+        c.set('tokenPayload', payload);
+        await next();
+        return;
+      }
+    }
+
+    return c.text('Invalid token', 401, {
+      'WWW-Authenticate': 'Bearer realm="storage" error="invalid_token"',
+    });
   };
 }
 

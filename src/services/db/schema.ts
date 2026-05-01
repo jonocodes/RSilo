@@ -1,10 +1,21 @@
 export interface User {
   id: string;
   username: string;
+  password_hash: string | null;
   created_at: number;
   updated_at: number;
   storage_quota_bytes: number;
   used_storage_bytes: number;
+}
+
+export interface OAuthCode {
+  code: string;
+  client_id: string;
+  user_id: string;
+  redirect_uri: string;
+  scope: string;
+  expires_at: number;
+  created_at: number;
 }
 
 export interface OAuthClient {

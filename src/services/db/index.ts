@@ -1,4 +1,4 @@
-import type { User, OAuthClient, OAuthToken } from './schema';
+import type { User, OAuthClient, OAuthToken, OAuthCode } from './schema';
 import type { D1Database } from '@cloudflare/workers-types';
 
 export class Database {
@@ -20,10 +20,10 @@ export class Database {
     return result || null;
   }
 
-  async createUser(id: string, username: string): Promise<void> {
+  async createUser(id: string, username: string, passwordHash: string): Promise<void> {
     await this.db.prepare(
-      'INSERT INTO users (id, username) VALUES (?, ?)'
-    ).bind(id, username).run();
+      'INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)'
+    ).bind(id, username, passwordHash).run();
   }
 
   async getStorageUsage(userId: string): Promise<number> {
@@ -88,5 +88,27 @@ export class Database {
     await this.db.prepare(
       'DELETE FROM oauth_tokens WHERE expires_at < ?'
     ).bind(Math.floor(Date.now() / 1000)).run();
+  }
+
+  async createCode(code: OAuthCode): Promise<void> {
+    await this.db.prepare(
+      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(code.code, code.client_id, code.user_id, code.redirect_uri, code.scope, code.expires_at).run();
+  }
+
+  async getCode(code: string): Promise<OAuthCode | null> {
+    const result = await this.db.prepare(
+      'SELECT * FROM oauth_codes WHERE code = ? AND expires_at > ?'
+    ).bind(code, Math.floor(Date.now() / 1000)).first<OAuthCode>();
+    return result || null;
+  }
+
+  async deleteCode(code: string): Promise<void> {
+    await this.db.prepare('DELETE FROM oauth_codes WHERE code = ?').bind(code).run();
+  }
+
+  async deleteExpiredCodes(): Promise<void> {
+    await this.db.prepare('DELETE FROM oauth_codes WHERE expires_at < ?')
+      .bind(Math.floor(Date.now() / 1000)).run();
   }
 }
