@@ -258,7 +258,7 @@ adminRouter.get('/', async (c) => {
           <td style="font-size:.875rem">${formatBytes(user.storage_quota_bytes || 0)}</td>
           <td class="actions">
             <form class="quota-form" onsubmit="updateQuota(event, '${escapeHtml(user.username)}')">
-              <input type="number" class="quota-input" name="quota" value="${user.storage_quota_bytes}" step="1073741824" min="1073741824">
+              <input type="number" class="quota-input" name="quota" value="${Math.round((user.storage_quota_bytes || 0) / 1048576)}" step="1024" min="1024">
               <button type="submit" class="btn btn-primary">Set quota</button>
             </form>
             <button class="btn btn-danger" onclick="deleteUser('${escapeHtml(user.username)}')">Delete</button>
@@ -293,7 +293,7 @@ adminRouter.get('/', async (c) => {
         const res = await fetch('/admin/users/' + username + '/quota', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quota_bytes: parseInt(quota) }),
+          body: JSON.stringify({ quota_bytes: parseInt(quota) * 1048576 }),
         });
         if (res.ok) { location.reload(); }
         else { alert('Failed to update quota'); }

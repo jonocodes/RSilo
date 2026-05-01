@@ -7,7 +7,7 @@ export class D1Adapter {
     const self = this;
 
     function makeStatement(values: any[]) {
-      return {
+      const stmt = {
         bind: (...newValues: any[]) => makeStatement(newValues),
 
         first: async <T>(): Promise<T | null> => {
@@ -23,19 +23,19 @@ export class D1Adapter {
           if (sql.includes('oauth_codes') && sql.includes('WHERE code = ?')) {
             return self.db.getCode(values[0]) as Promise<T>;
           }
-          if (sql.includes('users') && sql.includes('username = ?')) {
+          if (sql.includes('FROM users') && sql.includes('username = ?')) {
             return self.db.getUserByUsername(values[0]) as Promise<T>;
           }
           if (sql.includes('used_storage_bytes') && sql.includes('WHERE id = ?')) {
             return { used_storage_bytes: await self.db.getStorageUsage(values[0]) } as Promise<T>;
           }
-          if (sql.includes('users') && sql.includes('WHERE id = ?')) {
+          if (sql.includes('FROM users') && sql.includes('id = ?') && sql.includes('SELECT')) {
             return self.db.getUserById(values[0]) as Promise<T>;
           }
+          if (sql.includes('COUNT(*)') && sql.includes('oauth_tokens')) {
+            return { count: await self.db.getTokenCount() } as Promise<T>;
+          }
           if (sql.includes('COUNT(*)')) {
-            if (sql.includes('oauth_tokens')) {
-              return { count: await self.db.getTokenCount() } as Promise<T>;
-            }
             return { count: await self.db.getUserCount() } as Promise<T>;
           }
           if (sql.includes('SUM')) {
@@ -57,6 +57,14 @@ export class D1Adapter {
               user_id: values[5],
               client_id: values[6],
             });
+          } else if (sql.includes('INSERT INTO oauth_clients')) {
+            await self.db.createClient({
+              id: values[0],
+              name: values[1],
+              redirect_uris: values[2],
+              created_at: values[3],
+              user_id: values[4],
+            });
           } else if (sql.includes('INSERT INTO oauth_codes')) {
             await self.db.createCode({
               code: values[0],
@@ -77,6 +85,8 @@ export class D1Adapter {
             await self.db.updatePasswordHash(values[2], values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('used_storage_bytes')) {
             await self.db.updateStorageUsage(values[1], values[0]);
+          } else if (sql.includes('DELETE FROM users') && sql.includes('username')) {
+            await self.db.deleteUser(values[0]);
           } else if (sql.includes('UPDATE oauth_tokens')) {
             const existing = await self.db.getTokenByRefreshToken(values[3]);
             if (existing) {
@@ -100,13 +110,14 @@ export class D1Adapter {
             const tokens = await self.db.getTokensByUser(values[0]);
             return { results: tokens };
           }
-          if (sql.includes('users') && !sql.includes('WHERE')) {
+          if (sql.includes('FROM users') && !sql.includes('WHERE')) {
             const users = await self.db.getAllUsers();
             return { results: users };
           }
           return { results: [] };
         },
       };
+      return stmt;
     }
 
     return makeStatement([]);

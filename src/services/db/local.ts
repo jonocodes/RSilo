@@ -179,9 +179,19 @@ export class LocalDatabase {
     this.db.prepare('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?').run(tokenId, userId);
   }
 
+  async deleteUser(username: string): Promise<void> {
+    const stmt = this.db.prepare('DELETE FROM users WHERE username = ?');
+    stmt.run(username);
+  }
+
   async updatePasswordHash(username: string, passwordHash: string): Promise<void> {
     const stmt = this.db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?');
     stmt.run(passwordHash, Math.floor(Date.now() / 1000), username);
+  }
+
+  async createClient(client: OAuthClient): Promise<void> {
+    const stmt = this.db.prepare('INSERT INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)');
+    stmt.run(client.id, client.name, client.redirect_uris, client.created_at, client.user_id);
   }
 
   async createCode(code: OAuthCode): Promise<void> {
