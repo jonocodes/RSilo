@@ -143,6 +143,7 @@ oauthRouter.post('/:user/token', async (c) => {
 
   let grantType: string;
   let clientId: string;
+  let clientSecret: string | undefined;
   let code: string | undefined;
   let redirectUri: string | undefined;
   let refreshToken: string | undefined;
@@ -151,6 +152,7 @@ oauthRouter.post('/:user/token', async (c) => {
     const params = new URLSearchParams(await c.req.text());
     grantType = params.get('grant_type') || '';
     clientId = params.get('client_id') || '';
+    clientSecret = params.get('client_secret') || undefined;
     code = params.get('code') || undefined;
     redirectUri = params.get('redirect_uri') || undefined;
     refreshToken = params.get('refresh_token') || undefined;
@@ -158,6 +160,7 @@ oauthRouter.post('/:user/token', async (c) => {
     const json = await c.req.json() as any;
     grantType = json.grant_type || '';
     clientId = json.client_id || '';
+    clientSecret = json.client_secret;
     code = json.code;
     redirectUri = json.redirect_uri;
     refreshToken = json.refresh_token;
@@ -182,6 +185,17 @@ oauthRouter.post('/:user/token', async (c) => {
       return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
     }
 
+    // Validate client_secret if provided
+    if (clientSecret) {
+      const client = await db?.prepare?.(
+        'SELECT * FROM oauth_clients WHERE id = ? AND secret = ?'
+      )?.bind?.(codeData.client_id, clientSecret)?.first?.();
+      
+      if (!client) {
+        return c.json({ error: 'invalid_client', error_description: 'Invalid client credentials' }, 400);
+      }
+    }
+
     await db?.prepare?.('DELETE FROM oauth_codes WHERE code = ?')?.bind?.(code)?.run?.();
 
     const accessToken = generateToken();
@@ -190,7 +204,7 @@ oauthRouter.post('/:user/token', async (c) => {
 
     await db?.prepare?.(
       'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )?.bind?.(crypto.randomUUID(), accessToken, newRefreshToken, expiresAt, codeData.scope, codeData.user_id, clientId)?.run?.();
+    )?.bind?.(crypto.randomUUID(), accessToken, newRefreshToken, expiresAt, codeData.scope, codeData.user_id, codeData.client_id)?.run?.();
 
     return c.json({
       access_token: accessToken,
@@ -212,6 +226,17 @@ oauthRouter.post('/:user/token', async (c) => {
 
     if (!tokenData) {
       return c.json({ error: 'invalid_grant', error_description: 'Invalid refresh token' }, 400);
+    }
+
+    // Validate client_secret if provided
+    if (clientSecret) {
+      const client = await db?.prepare?.(
+        'SELECT * FROM oauth_clients WHERE id = ? AND secret = ?'
+      )?.bind?.(tokenData.client_id, clientSecret)?.first?.();
+      
+      if (!client) {
+        return c.json({ error: 'invalid_client', error_description: 'Invalid client credentials' }, 400);
+      }
     }
 
     const accessToken = generateToken();

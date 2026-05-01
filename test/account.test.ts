@@ -461,3 +461,162 @@ describe('Files — session cookie flags', () => {
     expect(res.headers.get('Location')).toBe('/account');
   });
 });
+
+describe('Files — save (edit)', () => {
+  let app: ReturnType<typeof createServer>;
+  let cookie: string;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
+    cookie = await makeSessionCookie('alice');
+  });
+
+  beforeEach(() => {
+    storage.clear();
+    storage.set('users/alice/storage/documents/note.txt', {
+      body: new TextEncoder().encode('original content').buffer,
+      contentType: 'text/plain',
+      etag: '"orig"',
+    });
+  });
+
+  it('POST /account/save updates file content', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const form = new FormData();
+    form.append('content', 'updated content');
+    const res = await app.request('http://localhost/account/save/documents/note.txt', {
+      method: 'POST',
+      body: form,
+      headers: { Cookie: cookie },
+    }, env);
+    expect(res.status).toBe(204);
+    const stored = storage.get('users/alice/storage/documents/note.txt');
+    expect(new TextDecoder().decode(stored?.body)).toBe('updated content');
+  });
+
+  it('POST /account/save preserves content type', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const form = new FormData();
+    form.append('content', 'new');
+    await app.request('http://localhost/account/save/documents/note.txt', {
+      method: 'POST',
+      body: form,
+      headers: { Cookie: cookie },
+    }, env);
+    expect(storage.get('users/alice/storage/documents/note.txt')?.contentType).toBe('text/plain');
+  });
+
+  it('POST /account/save redirects to login when unauthenticated', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const form = new FormData();
+    form.append('content', 'x');
+    const res = await app.request('http://localhost/account/save/documents/note.txt', {
+      method: 'POST',
+      body: form,
+    }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/account/');
+  });
+});
+
+describe('Files — root browse listing', () => {
+  let app: ReturnType<typeof createServer>;
+  let cookie: string;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
+    cookie = await makeSessionCookie('alice');
+  });
+
+  beforeEach(() => {
+    storage.clear();
+    storage.set('users/alice/storage/photos/img.jpg', {
+      body: new Uint8Array([0xff, 0xd8]).buffer,
+      contentType: 'image/jpeg',
+      etag: '"ph1"',
+    });
+    storage.set('users/alice/storage/documents/note.txt', {
+      body: new TextEncoder().encode('hi').buffer,
+      contentType: 'text/plain',
+      etag: '"doc1"',
+    });
+  });
+
+  it('root browse shows full folder names without truncation', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const res = await app.request('http://localhost/account/browse', {
+      method: 'GET',
+      headers: { Cookie: cookie },
+    }, env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('href="/account/browse/photos"');
+    expect(html).toContain('href="/account/browse/documents"');
+    expect(html).not.toContain('href="/account/browse/hotos"');
+    expect(html).not.toContain('href="/account/browse/ocuments"');
+  });
+});
+
+describe('Files — nested path upload', () => {
+  let app: ReturnType<typeof createServer>;
+  let cookie: string;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
+    cookie = await makeSessionCookie('alice');
+  });
+
+  beforeEach(() => storage.clear());
+
+  it('POST /account/upload/a/b/c stores file at full nested path', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const form = new FormData();
+    form.append('files', new File(['data'], 'file.txt', { type: 'text/plain' }));
+    const res = await app.request('http://localhost/account/upload/photos/2024/summer', {
+      method: 'POST',
+      body: form,
+      headers: { Cookie: cookie },
+    }, env);
+    expect(res.status).toBe(302);
+    expect(storage.has('users/alice/storage/photos/2024/summer/file.txt')).toBe(true);
+  });
+
+  it('POST /account/upload redirects to correct nested browse path', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const form = new FormData();
+    form.append('files', new File(['x'], 'x.txt', { type: 'text/plain' }));
+    const res = await app.request('http://localhost/account/upload/photos/2024', {
+      method: 'POST',
+      body: form,
+      headers: { Cookie: cookie },
+    }, env);
+    expect(res.headers.get('Location')).toBe('/account/browse/photos/2024');
+  });
+});
+
+describe('Files — view binary redirect URL', () => {
+  let app: ReturnType<typeof createServer>;
+  let cookie: string;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
+    cookie = await makeSessionCookie('alice');
+    storage.set('users/alice/storage/photos/2024/img.png', {
+      body: new Uint8Array([0x89, 0x50]).buffer,
+      contentType: 'image/png',
+      etag: '"png1"',
+    });
+  });
+
+  it('view redirects binary to download using real path separators', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const res = await app.request('http://localhost/account/view/photos/2024/img.png', {
+      method: 'GET',
+      headers: { Cookie: cookie },
+    }, env);
+    expect(res.status).toBe(302);
+    const location = res.headers.get('Location') || '';
+    expect(location).toBe('/account/download/photos/2024/img.png');
+    expect(location).not.toContain('%2F');
+  });
+});

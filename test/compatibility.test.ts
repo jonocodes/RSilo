@@ -550,9 +550,13 @@ describe('Error handling compatibility', () => {
     const quotaEnv = {
       STORAGE: dbStorage,
       DB: {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: () => ({
-            first: async () => ({ storage_quota_bytes: 10, used_storage_bytes: 9 })
+            first: async () => {
+              if (sql.includes('oauth_tokens')) return null;
+              if (sql.includes('users')) return { storage_quota_bytes: 10, used_storage_bytes: 9 };
+              return null;
+            }
           })
         })
       } as any,

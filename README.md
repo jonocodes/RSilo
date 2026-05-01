@@ -111,11 +111,15 @@ GET    /admin/stats                 Usage statistics
 GET    /admin/users                 List all users
 GET    /admin/users/:username       Get user details
 POST   /admin/users                 Create a user
+DELETE /admin/users/:username       Delete a user
 PATCH  /admin/users/:username/quota Update storage quota
 PATCH  /admin/users/:username/password Change password
+GET    /admin/login                 Admin login page
+POST   /admin/login                 Sign in (sets session cookie)
+POST   /admin/logout                Sign out
 ```
 
-Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. Set `ADMIN_SECRET` in env to enable.
+Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. Set `ADMIN_SECRET` in env to enable. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
 
 ### Account
 
@@ -125,6 +129,7 @@ POST   /account/login                 Sign in with username/password
 POST   /account/logout                Sign out
 GET    /account/browse                Browse root storage
 GET    /account/browse/*              Browse a subfolder
+GET    /account/view/*                View a text file in browser
 GET    /account/download/*            Download a file
 POST   /account/upload/*              Upload files to a folder
 POST   /account/delete/*              Delete a file
@@ -142,14 +147,15 @@ Cookie-based session (8-hour expiry, HttpOnly, SameSite=Lax).
 2. App redirects user to `/oauth/:user/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
 3. User enters password, reviews scope, approves
 4. Server redirects back with `?code=...`
-5. App exchanges code at `/oauth/:user/token` → gets `access_token` + `refresh_token`
+5. App exchanges code at `/oauth/:user/token` → gets `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
+7. When the access token expires, exchange the refresh token at `/oauth/:user/token` with `grant_type=refresh_token`
 
 Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported.
 
 ### Dev tokens (testing only)
 
-Unsigned JWTs — accepted by the server when no DB token matches. Never use in production.
+Unsigned JWTs — accepted only when `JWT_SECRET` is **not** set in the environment. Setting `JWT_SECRET` disables them entirely. Never use in production.
 
 ```typescript
 import { createTestToken } from './src/index';
@@ -197,6 +203,8 @@ Folder listings under `/public/` still require auth.
 ## User Management
 
 Users are created by an administrator — there is no self-registration.
+
+Username must match `[a-z0-9_.-]+` and password must be at least 8 characters.
 
 ```bash
 # Create user
@@ -264,8 +272,9 @@ bun run deploy
 
 | Secret | Purpose |
 |--------|---------|
-| `SESSION_SECRET` | Signs file manager session cookies — required |
+| `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
 | `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
+| `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
 
 ## Known Limitations
 

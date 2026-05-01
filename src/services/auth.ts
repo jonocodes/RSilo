@@ -6,6 +6,82 @@ export interface TokenPayload {
   exp: number;
 }
 
+function toBase64Url(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+function fromBase64Url(str: string): Uint8Array {
+  const padding = '='.repeat((4 - (str.length % 4)) % 4);
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/') + padding;
+  const binary = atob(base64);
+  return Uint8Array.from(binary.split('').map(c => c.charCodeAt(0)));
+}
+
+export async function signToken(payload: TokenPayload, secret: string): Promise<string> {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const headerB64 = toBase64Url(new TextEncoder().encode(JSON.stringify(header)));
+  const payloadB64 = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${headerB64}.${payloadB64}`)
+  );
+  
+  const signatureB64 = toBase64Url(signature);
+  return `${headerB64}.${payloadB64}.${signatureB64}`;
+}
+
+export async function verifyToken(token: string, secret?: string): Promise<TokenPayload | null> {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+
+    const [headerB64, payloadB64, signatureB64] = parts;
+    
+    // Verify signature if secret provided
+    if (secret) {
+      const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['verify']
+      );
+      
+      const signature = fromBase64Url(signatureB64);
+      const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+      
+      const valid = await crypto.subtle.verify('HMAC', key, signature, data);
+      if (!valid) return null;
+      
+      // Verify algorithm is HS256
+      const header = JSON.parse(atob(headerB64));
+      if (header.alg !== 'HS256') return null;
+    }
+
+    const payload = JSON.parse(atob(payloadB64)) as TokenPayload;
+    if (!payload.sub || !payload.scopes) return null;
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// Dev-only: creates unsigned JWT for testing. Do not use in production.
 export function createTestToken(username: string, scopes = 'documents:rw pictures:rw'): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }));
   const payload = btoa(JSON.stringify({
@@ -15,22 +91,6 @@ export function createTestToken(username: string, scopes = 'documents:rw picture
     exp: Math.floor(Date.now() / 1000) + 86400 * 30,
   }));
   return `${header}.${payload}.`;
-}
-
-export async function verifyToken(token: string, _env?: unknown): Promise<TokenPayload | null> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    if (parts[2] !== '') return null;
-
-    const payload = JSON.parse(atob(parts[1])) as TokenPayload;
-    if (!payload.sub || !payload.scopes) return null;
-    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-
-    return payload;
-  } catch {
-    return null;
-  }
 }
 
 export function hasScope(tokenScopes: string, requiredScope: string): boolean {

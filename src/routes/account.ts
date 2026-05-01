@@ -42,7 +42,8 @@ function getDb(c: any) {
 }
 
 async function listFolder(storage: any, username: string, storagePath: string): Promise<{ name: string; isDir: boolean; size: number; etag: string }[]> {
-  const prefix = buildKey(username, storagePath.endsWith('/') ? storagePath : storagePath + '/');
+  const prefixPath = storagePath ? (storagePath.endsWith('/') ? storagePath : storagePath + '/') : '';
+  const prefix = buildKey(username, prefixPath);
   const raw = await storage.list(prefix);
   const objects: { key: string; size: number; etag: string }[] = 'objects' in raw ? raw.objects : raw;
 
@@ -81,6 +82,10 @@ function formatBytes(n: number): string {
 
 function escapeHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function encodePath(p: string): string {
+  return p.split('/').map(encodeURIComponent).join('/');
 }
 
 const COMMON_CSS = `
@@ -241,15 +246,15 @@ accountRouter.get('/browse', async (c) => {
       <tr>
         <td><span class="icon">${item.isDir ? '📁' : '📄'}</span>
           ${item.isDir
-            ? `<a href="/account/browse/${escapeHtml(item.name)}">${escapeHtml(item.name)}</a>`
-            : `<a href="/account/download/${escapeHtml(item.name)}">${escapeHtml(item.name)}</a>`}
+            ? `<a href="/account/browse/${encodeURIComponent(item.name)}">${escapeHtml(item.name)}</a>`
+            : `<a href="/account/download/${encodeURIComponent(item.name)}">${escapeHtml(item.name)}</a>`}
         </td>
         <td class="size">${item.isDir ? '—' : formatBytes(item.size)}</td>
         <td class="actions">
           ${!item.isDir ? `
-            <a href="/account/view/${escapeHtml(item.name)}" class="btn btn-sm">View</a>
-            <a href="/account/download/${escapeHtml(item.name)}" class="btn btn-sm" download>Download</a>
-            <form method="POST" action="/account/delete/${escapeHtml(item.name)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
+            <a href="/account/view/${encodeURIComponent(item.name)}" class="btn btn-sm">View</a>
+            <a href="/account/download/${encodeURIComponent(item.name)}" class="btn btn-sm" download>Download</a>
+            <form method="POST" action="/account/delete/${encodeURIComponent(item.name)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
               <button class="btn btn-sm btn-danger">Delete</button>
             </form>` : ''}
         </td>
@@ -265,7 +270,7 @@ accountRouter.get('/browse', async (c) => {
         <tbody>${rows}</tbody>
       </table>
       <div class="upload-section">
-        <label>Upload to module:</label>
+        <label>Folder (optional):</label>
         <input type="text" id="upload-module" placeholder="documents" style="padding:.35rem .6rem;border:1px solid #ddd;border-radius:4px;font-size:.875rem;width:140px">
         <label for="upload-files">Files:</label>
         <input type="file" id="upload-files" multiple>
@@ -276,12 +281,11 @@ accountRouter.get('/browse', async (c) => {
   <script>
     function uploadToModule() {
       const mod = document.getElementById('upload-module').value.trim();
-      if (!mod) { alert('Enter a module name (e.g. documents)'); return; }
       const files = document.getElementById('upload-files').files;
       if (!files.length) { alert('Select at least one file'); return; }
       const form = document.createElement('form');
       form.method = 'POST';
-      form.action = '/account/upload/' + encodeURIComponent(mod);
+      form.action = '/account/upload/' + (mod ? mod.split('/').map(encodeURIComponent).join('/') : '');
       form.enctype = 'multipart/form-data';
       const input = document.createElement('input');
       input.type = 'file'; input.name = 'files'; input.multiple = true;
@@ -322,15 +326,15 @@ accountRouter.get('/browse/*', async (c) => {
         <tr>
           <td><span class="icon">${item.isDir ? '📁' : '📄'}</span>
             ${item.isDir
-              ? `<a href="/account/browse/${encodeURIComponent(itemPath)}">${escapeHtml(item.name)}</a>`
-              : `<a href="/account/download/${encodeURIComponent(itemPath)}">${escapeHtml(item.name)}</a>`}
+              ? `<a href="/account/browse/${encodePath(itemPath)}">${escapeHtml(item.name)}</a>`
+              : `<a href="/account/download/${encodePath(itemPath)}">${escapeHtml(item.name)}</a>`}
           </td>
           <td class="size">${item.isDir ? '—' : formatBytes(item.size)}</td>
           <td class="actions">
             ${!item.isDir ? `
-              <a href="/account/view/${encodeURIComponent(itemPath)}" class="btn btn-sm">View</a>
-              <a href="/account/download/${encodeURIComponent(itemPath)}" class="btn btn-sm" download="${escapeHtml(item.name)}">Download</a>
-              <form method="POST" action="/account/delete/${encodeURIComponent(itemPath)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
+              <a href="/account/view/${encodePath(itemPath)}" class="btn btn-sm">View</a>
+              <a href="/account/download/${encodePath(itemPath)}" class="btn btn-sm" download="${escapeHtml(item.name)}">Download</a>
+              <form method="POST" action="/account/delete/${encodePath(itemPath)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
                 <button class="btn btn-sm btn-danger">Delete</button>
               </form>` : ''}
           </td>
@@ -346,11 +350,34 @@ accountRouter.get('/browse/*', async (c) => {
         <thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <form method="POST" action="/account/upload/${encodeURIComponent(browsePath)}" enctype="multipart/form-data" class="upload-section">
-        <label>Upload:</label>
-        <input type="file" name="files" multiple>
-        <button type="submit" class="btn btn-primary btn-sm">Upload</button>
-      </form>
+      <div class="upload-section">
+        <label>Subfolder (optional):</label>
+        <input type="text" id="upload-sub" placeholder="new-folder" style="padding:.35rem .6rem;border:1px solid #ddd;border-radius:4px;font-size:.875rem;width:140px">
+        <label>Files:</label>
+        <input type="file" id="upload-files-sub" multiple>
+        <button class="btn btn-primary btn-sm" onclick="uploadHere()">Upload</button>
+      </div>
+      <script>
+        function uploadHere() {
+          const sub = document.getElementById('upload-sub').value.trim();
+          const files = document.getElementById('upload-files-sub').files;
+          if (!files.length) { alert('Select at least one file'); return; }
+          const base = ${JSON.stringify(browsePath)};
+          const target = sub ? (base ? base + '/' + sub : sub) : base;
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = '/account/upload/' + target.split('/').map(encodeURIComponent).join('/');
+          form.enctype = 'multipart/form-data';
+          const input = document.createElement('input');
+          input.type = 'file'; input.name = 'files'; input.multiple = true;
+          form.appendChild(input);
+          document.body.appendChild(form);
+          const dt = new DataTransfer();
+          for (const f of files) dt.items.add(f);
+          input.files = dt.files;
+          form.submit();
+        }
+      </script>
     </div>
   </div>`;
 
@@ -411,7 +438,7 @@ accountRouter.get('/view/*', async (c) => {
   const isText = contentType.startsWith('text/') || contentType === 'application/json' || TEXT_EXTENSIONS.has(ext);
 
   if (!isText) {
-    return c.redirect(`/account/download/${encodeURIComponent(filePath)}`, 302);
+    return c.redirect(`/account/download/${encodePath(filePath)}`, 302);
   }
 
   const buffer = result.body instanceof ArrayBuffer ? result.body : await (result.body as any).arrayBuffer();
@@ -433,15 +460,86 @@ accountRouter.get('/view/*', async (c) => {
     <div class="card" style="padding:0">
       <div style="padding:0.75rem 1rem;border-bottom:1px solid #eee;display:flex;align-items:center;gap:0.5rem;background:#fafafa">
         <span style="font-weight:500;font-size:0.9rem;flex:1">${escapeHtml(filename)}</span>
-        <a href="/account/download/${encodeURIComponent(filePath)}" class="btn btn-sm" download="${escapeHtml(filename)}">Download</a>
+        <a href="/account/download/${encodePath(filePath)}" class="btn btn-sm" download="${escapeHtml(filename)}">Download</a>
+        <button id="edit-btn" class="btn btn-sm btn-primary" onclick="startEdit()">Edit</button>
+        <button id="save-btn" class="btn btn-sm btn-primary" style="display:none" onclick="saveEdit()">Save</button>
+        <button id="cancel-btn" class="btn btn-sm" style="display:none;border:1px solid #ddd" onclick="cancelEdit()">Cancel</button>
       </div>
-      <pre style="padding:1rem;margin:0;overflow-x:auto;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;background:white">${escapeHtml(text)}</pre>
+      <pre id="view-pre" style="padding:1rem;margin:0;overflow-x:auto;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;background:white">${escapeHtml(text)}</pre>
+      <textarea id="edit-area" style="display:none;width:100%;padding:1rem;border:none;font-family:monospace;font-size:0.85rem;line-height:1.5;resize:vertical;min-height:400px;outline:none;box-sizing:border-box"></textarea>
     </div>
-  </div>`;
+  </div>
+  <script>
+    const original = ${JSON.stringify(text)};
+    function startEdit() {
+      document.getElementById('view-pre').style.display = 'none';
+      const ta = document.getElementById('edit-area');
+      ta.value = original;
+      ta.style.display = 'block';
+      ta.style.height = Math.max(400, ta.scrollHeight) + 'px';
+      ta.focus();
+      document.getElementById('edit-btn').style.display = 'none';
+      document.getElementById('save-btn').style.display = '';
+      document.getElementById('cancel-btn').style.display = '';
+    }
+    function cancelEdit() {
+      document.getElementById('edit-area').style.display = 'none';
+      document.getElementById('view-pre').style.display = '';
+      document.getElementById('edit-btn').style.display = '';
+      document.getElementById('save-btn').style.display = 'none';
+      document.getElementById('cancel-btn').style.display = 'none';
+    }
+    async function saveEdit() {
+      const content = document.getElementById('edit-area').value;
+      const btn = document.getElementById('save-btn');
+      btn.textContent = 'Saving…';
+      btn.disabled = true;
+      const form = new FormData();
+      form.append('content', content);
+      const res = await fetch('/account/save/${encodePath(filePath)}', { method: 'POST', body: form });
+      if (res.ok || res.redirected) {
+        location.reload();
+      } else {
+        alert('Save failed');
+        btn.textContent = 'Save';
+        btn.disabled = false;
+      }
+    }
+  </script>`;
 
   return new Response(renderPage(filename, username, body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
+});
+
+// ── Save (edit) ──────────────────────────────────────────────────────────────
+
+accountRouter.post('/save/*', async (c) => {
+  const username = await getSessionUser(c);
+  if (!username) return c.redirect('/account/', 302);
+
+  const filePath = c.req.path.replace(/^\/account\/save\/?/, '');
+  if (!filePath) return c.redirect('/account/browse', 302);
+
+  const body = await c.req.parseBody() as any;
+  const content: string = body.content ?? '';
+
+  const storage = getStorage(c);
+  const key = buildKey(username, filePath);
+
+  const existing = await storage.head(key);
+  const contentType = existing?.contentType || 'text/plain; charset=utf-8';
+  const encoded = new TextEncoder().encode(content);
+  await storage.put(key, encoded.buffer as ArrayBuffer, contentType);
+
+  const db = getDb(c);
+  if (db?.prepare && existing) {
+    const delta = encoded.byteLength - (existing.contentLength || 0);
+    await db.prepare('UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes + ?) WHERE username = ?')
+      .bind(delta, username).run();
+  }
+
+  return new Response(null, { status: 204 });
 });
 
 // ── Upload ───────────────────────────────────────────────────────────────────
@@ -459,7 +557,7 @@ accountRouter.post('/upload/*', async (c) => {
     : [];
 
   if (!fileList.length) {
-    return c.redirect(`/account/browse/${encodeURIComponent(folderPath)}`, 302);
+    return c.redirect(`/account/browse/${encodePath(folderPath)}`, 302);
   }
 
   const storage = getStorage(c);
@@ -477,7 +575,7 @@ accountRouter.post('/upload/*', async (c) => {
     }
   }
 
-  return c.redirect(`/account/browse/${encodeURIComponent(folderPath)}`, 302);
+  return c.redirect(`/account/browse/${encodePath(folderPath)}`, 302);
 });
 
 // ── Delete ───────────────────────────────────────────────────────────────────

@@ -228,8 +228,10 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   folder.items = items;
 
   const folderJson = JSON.stringify(folder);
-  const hash = folderJson.split('').reduce((a: number, b: string) => a + b.charCodeAt(0), 0);
-  const etag = `"${hash.toString(16)}"`;
+  const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(folderJson));
+  const hashArray = new Uint8Array(hashBuffer);
+  const hashHex = Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('');
+  const etag = `"${hashHex.slice(0, 16)}"`;
 
   return new Response(folderJson, {
     status: 200,

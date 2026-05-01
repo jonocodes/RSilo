@@ -20,15 +20,7 @@ export function authMiddleware() {
       });
     }
 
-    // Try dev token (unsigned JWT) first
-    const devPayload = await verifyToken(token);
-    if (devPayload) {
-      c.set('tokenPayload', devPayload);
-      await next();
-      return;
-    }
-
-    // Fall back to DB-backed OAuth token lookup
+    // Try DB-backed OAuth token lookup first
     const db = (c.env as any)?.DB;
     if (db && typeof db.prepare === 'function') {
       const row = await db.prepare(
@@ -42,6 +34,25 @@ export function authMiddleware() {
           iat: row.created_at,
           exp: row.expires_at,
         };
+        c.set('tokenPayload', payload);
+        await next();
+        return;
+      }
+    }
+
+    // Fall back to dev token (unsigned JWT) only if no JWT_SECRET is set
+    const jwtSecret = (c.env as any)?.JWT_SECRET;
+    if (!jwtSecret) {
+      const devPayload = await verifyToken(token);
+      if (devPayload) {
+        c.set('tokenPayload', devPayload);
+        await next();
+        return;
+      }
+    } else {
+      // Verify with secret
+      const payload = await verifyToken(token, jwtSecret);
+      if (payload) {
         c.set('tokenPayload', payload);
         await next();
         return;
