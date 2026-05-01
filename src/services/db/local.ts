@@ -170,6 +170,15 @@ export class LocalDatabase {
     stmt.run(quotaBytes, username);
   }
 
+  async getTokensByUser(userId: string): Promise<OAuthToken[]> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE user_id = ? ORDER BY created_at DESC');
+    return stmt.all(userId) as OAuthToken[];
+  }
+
+  async deleteTokenByIdAndUser(tokenId: string, userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?').run(tokenId, userId);
+  }
+
   async updatePasswordHash(username: string, passwordHash: string): Promise<void> {
     const stmt = this.db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?');
     stmt.run(passwordHash, Math.floor(Date.now() / 1000), username);

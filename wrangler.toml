@@ -1,6 +1,6 @@
 name = "rsilo"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [[r2_buckets]]
@@ -9,8 +9,16 @@ bucket_name = "remotestorage"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "remotestorage"
-database_id = "local-dev"
+database_name = "remotestorage-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "YOUR_KV_NAMESPACE_ID"
 
 [observability]
 enabled = true
+
+# Secrets — set via `wrangler secret put` or in .dev.vars for local `wrangler dev`:
+#   SESSION_SECRET   — signs file manager session cookies (required)
+#   ADMIN_SECRET     — protects /admin/* endpoints (optional; open if unset)

@@ -17,8 +17,10 @@ function makeMockDb() {
     getClient: vi.fn().mockResolvedValue(null),
     createToken: vi.fn().mockResolvedValue(undefined),
     deleteToken: vi.fn().mockResolvedValue(undefined),
+    deleteTokenByIdAndUser: vi.fn().mockResolvedValue(undefined),
     getTokenByAccessToken: vi.fn().mockResolvedValue(null),
     getTokenByRefreshToken: vi.fn().mockResolvedValue(null),
+    getTokensByUser: vi.fn().mockResolvedValue([]),
     createCode: vi.fn().mockResolvedValue(undefined),
     getCode: vi.fn().mockResolvedValue(null),
     deleteCode: vi.fn().mockResolvedValue(undefined),
@@ -144,6 +146,45 @@ describe('D1Adapter — oauth tokens', () => {
       refresh_token: 'new-ref',
       expires_at: 99999,
     }));
+  });
+
+  it('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ? calls deleteTokenByIdAndUser', async () => {
+    const sql = 'DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?';
+    await adapter.prepare(sql).bind('tok-1', 'alice').run();
+    expect(mockDb.deleteTokenByIdAndUser).toHaveBeenCalledWith('tok-1', 'alice');
+  });
+
+  it('SELECT oauth_tokens WHERE user_id = ? calls getTokensByUser', async () => {
+    const tokens = [
+      { id: 'tok-1', access_token: 'a', scopes: 'documents:rw', user_id: 'alice', client_id: 'app', expires_at: 9999 },
+    ];
+    mockDb.getTokensByUser.mockResolvedValue(tokens);
+    const result = await adapter.prepare('SELECT * FROM oauth_tokens WHERE user_id = ? ORDER BY created_at DESC').bind('alice').all();
+    expect(mockDb.getTokensByUser).toHaveBeenCalledWith('alice');
+    expect((result as any).results).toHaveLength(1);
+  });
+});
+
+describe('D1Adapter — storage usage', () => {
+  let mockDb: ReturnType<typeof makeMockDb>;
+  let adapter: D1Adapter;
+
+  beforeEach(() => {
+    mockDb = makeMockDb();
+    adapter = new D1Adapter(mockDb as any);
+  });
+
+  it('UPDATE users SET used_storage_bytes calls updateStorageUsage', async () => {
+    const sql = 'UPDATE users SET used_storage_bytes = ? WHERE id = ?';
+    await adapter.prepare(sql).bind(4096, 'user-uuid').run();
+    expect(mockDb.updateStorageUsage).toHaveBeenCalledWith('user-uuid', 4096);
+  });
+
+  it('SELECT used_storage_bytes WHERE id calls getStorageUsage', async () => {
+    mockDb.getStorageUsage.mockResolvedValue(8192);
+    const result = await adapter.prepare('SELECT used_storage_bytes FROM users WHERE id = ?').bind('user-uuid').first();
+    expect(mockDb.getStorageUsage).toHaveBeenCalledWith('user-uuid');
+    expect((result as any)?.used_storage_bytes).toBe(8192);
   });
 });
 

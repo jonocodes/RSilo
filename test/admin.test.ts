@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
+import { signSessionToken } from '../src/services/auth';
 
 const mockDb = {
   prepare: (query: string) => {
@@ -189,7 +190,7 @@ describe('Admin endpoints', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('text/html');
     const html = await res.text();
-    expect(html).toContain('RemoteStorage Admin');
+    expect(html).toContain('RSilo Admin');
     expect(html).toContain('Total Users');
     expect(html).toContain('Total Storage');
   });
@@ -400,5 +401,141 @@ describe('Admin auth middleware', () => {
       env
     );
     expect(res.status).toBe(200);
+  });
+
+  it('allows access with valid session cookie', async () => {
+    const secret = 'mysecret';
+    const token = await signSessionToken('admin', secret, 3600);
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: secret };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET', headers: { Cookie: `admin_session=${token}` } },
+      env
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('redirects browser to /admin/login when ADMIN_SECRET is set and no auth', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request(
+      'http://localhost/admin',
+      { method: 'GET', headers: { Accept: 'text/html' } },
+      env
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/admin/login');
+  });
+});
+
+describe('Admin login', () => {
+  let app: ReturnType<typeof createServer>;
+  const db = {
+    prepare: () => ({
+      bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}), all: async () => ({ results: [] }) }),
+      first: async () => null,
+      all: async () => ({ results: [] }),
+      run: async () => ({}),
+    }),
+  } as any;
+
+  beforeAll(() => {
+    app = createServer({ STORAGE: {} as any, DB: db });
+  });
+
+  it('GET /admin/login renders login form when ADMIN_SECRET is set', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request('http://localhost/admin/login', { method: 'GET' }, env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('RSilo Admin');
+    expect(html).toContain('Admin secret');
+  });
+
+  it('GET /admin/login redirects to dashboard when ADMIN_SECRET is not set', async () => {
+    const env = { STORAGE: {} as any, DB: db };
+    const res = await app.request('http://localhost/admin/login', { method: 'GET' }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/admin');
+  });
+
+  it('POST /admin/login with correct secret sets cookie and redirects', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const body = new URLSearchParams({ secret: 'mysecret' });
+    const res = await app.request('http://localhost/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/admin');
+    const cookie = res.headers.get('Set-Cookie') || '';
+    expect(cookie).toContain('admin_session=');
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Strict');
+  });
+
+  it('POST /admin/login with wrong secret returns 401', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const body = new URLSearchParams({ secret: 'wrongsecret' });
+    const res = await app.request('http://localhost/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }, env);
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain('Invalid admin secret');
+  });
+
+  it('POST /admin/logout clears cookie and redirects', async () => {
+    const env = { STORAGE: {} as any, DB: db, ADMIN_SECRET: 'mysecret' };
+    const res = await app.request('http://localhost/admin/logout', { method: 'POST' }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/admin/login');
+    const cookie = res.headers.get('Set-Cookie') || '';
+    expect(cookie).toContain('Max-Age=0');
+  });
+});
+
+describe('DELETE /admin/users/:username', () => {
+  let app: ReturnType<typeof createServer>;
+
+  function makeDb(existingUser: any = { id: 'user-1' }) {
+    return {
+      prepare: (sql: string) => ({
+        bind: (..._args: any[]) => ({
+          first: async () => sql.includes('SELECT id FROM users') ? existingUser : null,
+          run: async () => ({}),
+          all: async () => ({ results: [] }),
+        }),
+        first: async () => null,
+        run: async () => ({}),
+        all: async () => ({ results: [] }),
+      }),
+    } as any;
+  }
+
+  beforeAll(() => {
+    app = createServer({ STORAGE: {} as any, DB: makeDb() });
+  });
+
+  it('DELETE /admin/users/:username returns 200', async () => {
+    const env = { STORAGE: {} as any, DB: makeDb() };
+    const res = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
+    expect(res.status).toBe(200);
+    const json = await res.json() as any;
+    expect(json.success).toBe(true);
+  });
+
+  it('DELETE /admin/users/:username returns 404 for unknown user', async () => {
+    const env = { STORAGE: {} as any, DB: makeDb(null) };
+    const res = await app.request('http://localhost/admin/users/nobody', { method: 'DELETE' }, env);
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /admin/users/:username returns 503 when DB unavailable', async () => {
+    const env = { STORAGE: {} as any, DB: null };
+    const res = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
+    expect(res.status).toBe(503);
   });
 });

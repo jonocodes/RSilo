@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hashPassword, verifyPassword, signSessionToken, verifySessionToken } from '../src/services/auth';
+import { hashPassword, verifyPassword, signSessionToken, verifySessionToken, hasScope, scopeFromPath, parseAuthHeader } from '../src/services/auth';
 
 describe('hashPassword / verifyPassword', () => {
   it('returns pbkdf2 format string', async () => {
@@ -77,5 +77,94 @@ describe('signSessionToken / verifySessionToken', () => {
   it('returns null for malformed token', async () => {
     expect(await verifySessionToken('notavalidtoken', secret)).toBeNull();
     expect(await verifySessionToken('', secret)).toBeNull();
+  });
+
+  it('custom expirySeconds is reflected in token expiry', async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const token = await signSessionToken('alice', secret, 7200);
+    const [dataB64] = token.split('.');
+    const payload = JSON.parse(atob(dataB64));
+    expect(payload.exp).toBeGreaterThanOrEqual(before + 7200);
+    expect(payload.exp).toBeLessThan(before + 7202);
+  });
+
+  it('short-lived token expires and returns null', async () => {
+    const exp = Math.floor(Date.now() / 1000) - 1;
+    const data = JSON.stringify({ username: 'alice', exp });
+    const key = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+    const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const token = `${btoa(data)}.${sigHex}`;
+    expect(await verifySessionToken(token, secret)).toBeNull();
+  });
+});
+
+describe('hasScope', () => {
+  it('exact match grants access', () => {
+    expect(hasScope('documents:rw', 'documents:rw')).toBe(true);
+  });
+
+  it('rw satisfies r requirement', () => {
+    expect(hasScope('documents:rw', 'documents:r')).toBe(true);
+  });
+
+  it('r does not satisfy rw requirement', () => {
+    expect(hasScope('documents:r', 'documents:rw')).toBe(false);
+  });
+
+  it('wildcard * grants any scope', () => {
+    expect(hasScope('*', 'pictures:rw')).toBe(true);
+    expect(hasScope('*', 'anything:r')).toBe(true);
+  });
+
+  it('different module does not grant access', () => {
+    expect(hasScope('pictures:rw', 'documents:rw')).toBe(false);
+  });
+
+  it('multiple scopes — matching one grants access', () => {
+    expect(hasScope('pictures:rw documents:r', 'documents:r')).toBe(true);
+  });
+
+  it('required scope without colon returns false', () => {
+    expect(hasScope('documents:rw', 'documents')).toBe(false);
+  });
+
+  it('empty scopes returns false', () => {
+    expect(hasScope('', 'documents:rw')).toBe(false);
+  });
+});
+
+describe('scopeFromPath', () => {
+  it('extracts module from /storage/:user/:module/path', () => {
+    expect(scopeFromPath('/storage/alice/documents/file.txt').module).toBe('documents');
+  });
+
+  it('extracts module from /:user/:module/path (no storage prefix)', () => {
+    expect(scopeFromPath('/alice/pictures/photo.jpg').module).toBe('pictures');
+  });
+
+  it('returns fallback for very short path', () => {
+    const { module } = scopeFromPath('/storage/alice');
+    expect(typeof module).toBe('string');
+  });
+});
+
+describe('parseAuthHeader', () => {
+  it('extracts token from Bearer header', () => {
+    expect(parseAuthHeader('Bearer mytoken123')).toBe('mytoken123');
+  });
+
+  it('returns null for null input', () => {
+    expect(parseAuthHeader(null)).toBeNull();
+  });
+
+  it('returns null for Basic auth', () => {
+    expect(parseAuthHeader('Basic dXNlcjpwYXNz')).toBeNull();
+  });
+
+  it('returns null for lowercase bearer', () => {
+    expect(parseAuthHeader('bearer mytoken')).toBeNull();
   });
 });

@@ -1,246 +1,277 @@
 # RSilo
 
-A [RemoteStorage.io](https://remotestorage.io)-compatible server for Cloudflare Workers (or local development).
+A [RemoteStorage.io](https://remotestorage.io)-compatible personal cloud storage server for Cloudflare Workers, with a built-in web file manager and OAuth server.
 
 ## What is RemoteStorage?
 
-RemoteStorage is an open protocol for personal cloud storage. Think of it like WebDAV or S3, but with a standardized HTTP API and OAuth-based authentication.
+RemoteStorage is an open protocol for syncing app data across devices. Apps like note-takers, todo lists, and editors store data in your own server rather than a vendor's cloud.
 
-**Key concepts:**
-- **Users** have storage organized into **modules** (like `documents`, `pictures`)
-- **OAuth 2.0** is used for authentication with scope-based access
-- **WebFinger** is used for service discovery
-- Data is stored as files and folders, similar to a filesystem
+- **WebFinger** advertises your storage and auth endpoints
+- **OAuth 2.0** scopes grant apps access to specific modules
+- **HTTP REST** reads and writes files under `/:username/:module/:path`
 
-## Quick Start
-
-### 1. Start the server (offline mode - no account needed)
+## Quick Start (offline dev)
 
 ```bash
 bun install
-bun run db:setup:local
+bun run db:setup:local   # creates DB + storage directory
 bun run dev:offline
 ```
 
-Server runs at `http://localhost:8787`
+Server runs at `http://localhost:8787`. No Cloudflare account needed.
 
-### 2. Store a file
+Go to `http://localhost:8787/admin/` to manage users (default admin secret: `admin`, or set `ADMIN_SECRET` in `.dev.vars`). Create a user there, then sign in at `http://localhost:8787/account`.
+
+To use a different admin secret:
 
 ```bash
-# Create a test token (in production, use OAuth flow)
+ADMIN_SECRET=mysecret bun run db:setup:local
+```
+
+### Use the storage API directly
+
+```bash
+# Dev token — no OAuth needed for testing
 TOKEN="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZSIsInNjb3BlcyI6ImRvY3VtZW50czpydyBwaWN0dXJlczpydyIsImlhdCI6MTcwNjAwMDAwMDAsImV4cCI6OTk5OTk5OTk5OX0."
 
-# Upload a file
+# Upload
 curl -X PUT http://localhost:8787/storage/alice/documents/hello.txt \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: text/plain" \
   -d "Hello, RemoteStorage!"
 
-# Response: 201 Created with ETag header
-```
-
-### 3. Read the file back
-
-```bash
+# Download
 curl http://localhost:8787/storage/alice/documents/hello.txt \
   -H "Authorization: Bearer $TOKEN"
 
-# Response: "Hello, RemoteStorage!"
-```
-
-### 4. List a folder
-
-```bash
+# List folder
 curl http://localhost:8787/storage/alice/documents/ \
   -H "Authorization: Bearer $TOKEN"
 
-# Response: JSON-LD folder listing
-# {
-#   "@context": "http://remotestorage.io/spec/version-1.1",
-#   "items": {
-#     "hello.txt": { "ETag": "\"abc123\"" }
-#   }
-# }
-```
-
-### 5. Delete the file
-
-```bash
+# Delete
 curl -X DELETE http://localhost:8787/storage/alice/documents/hello.txt \
   -H "Authorization: Bearer $TOKEN"
-
-# Response: 204 No Content
-```
-
-### 6. Public sharing (no auth required)
-
-Files under `/public/` can be shared without authentication:
-
-```bash
-# Upload a public file (still requires auth for PUT)
-curl -X PUT http://localhost:8787/storage/alice/public/documents/shared.txt \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: text/plain" \
-  -d "Anyone can read this!"
-
-# Read it without auth (no Authorization header needed)
-curl http://localhost:8787/storage/alice/public/documents/shared.txt
-
-# Response: "Anyone can read this!"
-# Response headers include: Cache-Control: public, no-cache
-```
-
-**Rules (per RemoteStorage spec):**
-- GET requests to public **files** (not ending in `/`) work without auth
-- GET requests to public **folders** (ending in `/`) still require auth (401)
-- PUT/DELETE to public files still require auth with `public:*:rw` scope
-- Public responses include `Cache-Control: public` header for caching
-
-This is useful for sharing documents via hard-to-guess URLs, as mentioned in the [RemoteStorage spec](https://datatracker.ietf.org/doc/html/draft-dejong-remotestorage#section-14).
-
-## API Endpoints
-
-### Storage API
-
-```
-GET    /storage/:username/*          Get file or folder listing
-PUT    /storage/:username/*          Create/update file
-DELETE /storage/:username/*          Delete file
-HEAD   /storage/:username/*          Get metadata without body
-```
-
-### WebFinger (Discovery)
-
-```
-GET    /.well-known/webfinger?resource=acct:alice@example.com
-```
-
-Returns JSON with storage and auth endpoint links.
-
-### OAuth
-
-```
-GET    /oauth/:user                  OAuth server discover info
-GET    /oauth/:user/authorize        Authorization form
-POST   /oauth/:user/token            Token endpoint
-```
-
-### Admin
-
-```
-GET    /admin/                       Admin dashboard (HTML)
-GET    /admin/stats                  Usage statistics
-```
-
-## Authentication
-
-### Dev Tokens (for testing)
-
-Dev tokens are simple JWTs with no signature. Create one programmatically:
-
-```typescript
-import { createTestToken } from './src/index';
-
-const token = createTestToken('alice', 'documents:rw pictures:rw');
-// Returns: eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZS4uLn0.
-```
-
-For curl, construct the token manually (base64 of `{"alg":"none","typ":"JWT"}` + `.` + base64 of `{"sub":"alice","scopes":"documents:rw pictures:rw","iat":1706000000,"exp":9999999999}`):
-
-```bash
-HEADER="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
-PAYLOAD=$(echo -n '{"sub":"alice","scopes":"documents:rw pictures:rw","iat":1706000000,"exp":9999999999}' | base64 -w0 | tr '+/' '-_' | tr -d '=')
-TOKEN="${HEADER}.${PAYLOAD}."
-```
-
-### OAuth Flow (production)
-
-1. Client queries WebFinger for storage info
-2. Redirects user to `/oauth/:user/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
-3. User approves (sees consent form)
-4. Server redirects back with authorization code
-5. Client exchanges code for token at `/oauth/:user/token`
-6. Client uses token in `Authorization: Bearer <token>` header
-
-## Storage Modules
-
-Storage is organized into modules (like filesystem directories):
-
-| Module | Purpose | Example path |
-|--------|---------|--------------|
-| `documents` | Text documents, files | `/storage/alice/documents/projects/readme.md` |
-| `pictures` | Images, photos | `/storage/alice/pictures/vacation/photo.jpg` |
-| `music` | Audio files | `/storage/alice/music/song.mp3` |
-
-You can use any module name - they're not predefined. Scopes are module-specific:
-- `documents:rw` - read/write documents module
-- `pictures:r` - read-only pictures module
-
-## Offline Development
-
-```bash
-# Setup database (one time)
-bun run db:setup:local
-
-# Start server
-bun run dev:offline
-```
-
-Uses SQLite (`data/remotestorage.db`) and local filesystem (`data/storage/`).
-
-## Running Tests
-
-```bash
-# Unit tests (mocked storage, fast)
-bun run test
-
-# E2E tests (real server, real filesystem)
-bun test test/e2e/storage-e2e.test.ts
-
-# Watch mode
-bun run test:watch
-```
-
-**161 tests** covering protocol compliance, storage, auth, OAuth, admin, and E2E.
-
-## Production Deployment
-
-```bash
-# Create Cloudflare resources
-wrangler r2 bucket create remotestorage
-wrangler d1 create remotestorage-db
-
-# Update wrangler.toml with IDs, then deploy
-bun run deploy
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Cloudflare Worker                     │
-│                                                          │
-│  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌──────────┐  │
-│  │ WebFinger│  │  OAuth  │  │ Storage │  │  Admin   │  │
-│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  │
-└───────────────────────────┼───────────────────────────────┘
-                            │
-           ┌────────────────┼────────────────┐
-           │                │                │
-      ┌────▼────┐      ┌────▼────┐     ┌─────▼─────┐
-      │   R2    │      │   D1    │     │ KV (Rate) │
-      └─────────┘      └─────────┘     └───────────┘
+┌──────────────────────────────────────────────────────────┐
+│                    Cloudflare Worker                      │
+│                                                           │
+│  ┌──────────┐ ┌───────┐ ┌─────────┐ ┌───────┐ ┌───────┐ │
+│  │WebFinger │ │ OAuth │ │ Storage │ │ Admin │ │Account│ │
+│  └──────────┘ └───────┘ └─────────┘ └───────┘ └───────┘ │
+└──────────────────────────────────────────────────────────┘
+         │                    │                │
+    ┌────▼────┐          ┌────▼────┐    ┌──────▼──────┐
+    │   R2    │          │   D1    │    │  KV (rate)  │
+    └─────────┘          └─────────┘    └─────────────┘
 ```
 
-For offline development, R2 → local filesystem, D1 → SQLite.
+For offline development: R2 → local filesystem, D1 → SQLite.
+
+## API Endpoints
+
+### Storage
+
+```
+GET    /storage/:username/*        Get file or folder listing
+PUT    /storage/:username/*        Create or update a file
+DELETE /storage/:username/*        Delete a file
+HEAD   /storage/:username/*        Get metadata only
+```
+
+Requires `Authorization: Bearer <token>` with appropriate scope.
+
+### WebFinger (discovery)
+
+```
+GET    /.well-known/webfinger?resource=acct:alice@example.com
+GET    /.well-known/host-meta
+GET    /webfinger/jrd
+GET    /webfinger/xrd
+```
+
+### OAuth
+
+```
+GET    /oauth/:user                 OAuth discovery document
+GET    /oauth/:user/authorize       Login and consent form
+POST   /oauth/:user/authorize       Submit login or consent
+POST   /oauth/:user/token           Exchange code or refresh token
+```
+
+### Admin
+
+```
+GET    /admin/                      Dashboard (HTML)
+GET    /admin/health                Health check
+GET    /admin/stats                 Usage statistics
+GET    /admin/users                 List all users
+GET    /admin/users/:username       Get user details
+POST   /admin/users                 Create a user
+PATCH  /admin/users/:username/quota Update storage quota
+PATCH  /admin/users/:username/password Change password
+```
+
+Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. Set `ADMIN_SECRET` in env to enable.
+
+### Account
+
+```
+GET    /account                       Login page
+POST   /account/login                 Sign in with username/password
+POST   /account/logout                Sign out
+GET    /account/browse                Browse root storage
+GET    /account/browse/*              Browse a subfolder
+GET    /account/download/*            Download a file
+POST   /account/upload/*              Upload files to a folder
+POST   /account/delete/*              Delete a file
+GET    /account/tokens                View OAuth tokens
+POST   /account/tokens/:id/revoke     Revoke a token
+```
+
+Cookie-based session (8-hour expiry, HttpOnly, SameSite=Lax).
+
+## Authentication
+
+### OAuth flow (production)
+
+1. App queries WebFinger to discover auth and storage endpoints
+2. App redirects user to `/oauth/:user/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
+3. User enters password, reviews scope, approves
+4. Server redirects back with `?code=...`
+5. App exchanges code at `/oauth/:user/token` → gets `access_token` + `refresh_token`
+6. App uses `Authorization: Bearer <access_token>` on storage requests
+
+Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported.
+
+### Dev tokens (testing only)
+
+Unsigned JWTs — accepted by the server when no DB token matches. Never use in production.
+
+```typescript
+import { createTestToken } from './src/index';
+const token = createTestToken('alice', 'documents:rw pictures:rw');
+```
+
+Or construct manually:
+
+```bash
+HEADER="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
+PAYLOAD=$(echo -n '{"sub":"alice","scopes":"documents:rw pictures:rw","iat":1706000000,"exp":9999999999}' \
+  | base64 -w0 | tr '+/' '-_' | tr -d '=')
+TOKEN="${HEADER}.${PAYLOAD}."
+```
+
+## Storage Scopes
+
+Scopes are per-module and grant read (`r`) or read-write (`rw`) access:
+
+| Scope | Access |
+|-------|--------|
+| `documents:rw` | Read and write the `documents` module |
+| `pictures:r` | Read-only access to `pictures` |
+| `*:rw` | Read and write all modules |
+
+Module names are arbitrary — any name works. The `public` module is readable without auth (GET only, files not folders).
+
+## Public Files
+
+Files under the `public` module are served without authentication:
+
+```bash
+# Upload (still requires auth)
+curl -X PUT http://localhost:8787/storage/alice/public/shared.txt \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/plain" \
+  -d "Anyone can read this"
+
+# Read without auth
+curl http://localhost:8787/storage/alice/public/shared.txt
+# → Cache-Control: public, no-cache
+```
+
+Folder listings under `/public/` still require auth.
+
+## User Management
+
+Users are created by an administrator — there is no self-registration.
+
+```bash
+# Create user
+curl -X POST http://localhost:8787/admin/users \
+  -H "Authorization: Bearer $ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"secretpass"}'
+
+# Change password
+curl -X PATCH http://localhost:8787/admin/users/alice/password \
+  -H "Authorization: Bearer $ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"password":"newpass"}'
+
+# Update quota (bytes)
+curl -X PATCH http://localhost:8787/admin/users/alice/quota \
+  -H "Authorization: Bearer $ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"quota":10737418240}'
+```
+
+Or use the dashboard at `/admin/`.
+
+## Offline Development
+
+```bash
+bun run db:setup:local   # create local SQLite DB (one time)
+bun run dev:offline      # start server with live reload
+```
+
+Live reload is enabled via `bun --watch`. Storage goes to `data/storage/`, database to `data/remotestorage.db`.
+
+## Running Tests
+
+```bash
+bun run test             # all unit tests (fast, mocked)
+bun run test:watch       # watch mode
+bun test test/e2e/storage-e2e.test.ts  # E2E against real server
+```
+
+**285 tests** across 13 files: protocol compliance, storage, auth, OAuth, admin, file manager, D1 adapter, and E2E.
+
+## Production Deployment
+
+```bash
+# 1. Create Cloudflare resources
+wrangler r2 bucket create remotestorage
+wrangler d1 create remotestorage-db
+wrangler kv namespace create RATE_LIMIT_KV
+
+# 2. Update wrangler.toml with the IDs printed above
+#    - d1_databases[0].database_id
+#    - kv_namespaces[0].id
+
+# 3. Run D1 migrations
+wrangler d1 migrations apply remotestorage-db
+
+# 4. Set secrets
+wrangler secret put SESSION_SECRET   # random string, required
+wrangler secret put ADMIN_SECRET     # protects /admin/*, recommended
+
+# 5. Deploy
+bun run deploy
+```
+
+| Secret | Purpose |
+|--------|---------|
+| `SESSION_SECRET` | Signs file manager session cookies — required |
+| `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
 
 ## Known Limitations
 
-1. **No user registration**: Users are created via dev tokens or OAuth flows. For admin user management, use the `/admin/` dashboard or direct API calls.
-
-2. **Rate limiting**: Requires KV binding in Cloudflare. Optional for offline mode.
-
-3. **Admin UI**: Has no authentication. Protect it via firewall rules or add API key middleware.
+- **No self-registration** — users are created via admin API or dashboard
+- **Rate limiting** — requires a KV namespace binding; silently skipped without one
+- **Single-tenant quota** — storage quota is tracked per user but not enforced on concurrent writes
 
 ## References
 

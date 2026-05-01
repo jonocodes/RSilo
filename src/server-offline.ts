@@ -4,13 +4,36 @@ import { storageRouter } from './routes/storage';
 import { webfingerRouter } from './routes/webfinger';
 import { oauthRouter } from './routes/oauth';
 import { adminRouter } from './routes/admin';
+import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
 import { LocalStorage } from './services/local-storage';
 import { LocalDatabase } from './services/db/local';
 import { D1Adapter } from './services/db/d1-mock';
+import { readFileSync } from 'fs';
+
+function loadDevVars(path: string) {
+  try {
+    const content = readFileSync(path, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      if (key && !(key in process.env)) {
+        process.env[key] = value;
+      }
+    }
+  } catch {}
+}
+
+loadDevVars('.dev.vars');
 
 const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
 const DB_PATH = process.env.DB_PATH || 'data/remotestorage.db';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-session-secret-change-in-production';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin';
 
 const localStorage = new LocalStorage(STORAGE_DIR);
 const localDb = new LocalDatabase(DB_PATH);
@@ -23,14 +46,17 @@ app.use('*', corsMiddleware());
 app.use('*', async (c, next) => {
   (c.env as any).STORAGE = localStorage;
   (c.env as any).DB = d1Adapter;
-  (c.env as any).OAUTH_CODES = new Map();
-  (c.env as any).RATE_LIMIT_KV = undefined;
+  (c.env as any).SESSION_SECRET = SESSION_SECRET;
+  (c.env as any).ADMIN_SECRET = ADMIN_SECRET;
   await next();
 });
 
 app.route('/storage', storageRouter);
 app.route('/oauth', oauthRouter);
+app.get('/admin/', (c) => c.redirect('/admin', 301));
 app.route('/admin', adminRouter);
+app.get('/account/', (c) => c.redirect('/account', 301));
+app.route('/account', accountRouter);
 app.route('/', webfingerRouter);
 
 app.get('/health', (c) => c.json({ status: 'ok', mode: 'offline' }));

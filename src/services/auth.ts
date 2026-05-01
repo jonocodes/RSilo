@@ -121,8 +121,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return toHex(hash) === expectedHex;
 }
 
-export async function signSessionToken(username: string, secret: string): Promise<string> {
-  const exp = Math.floor(Date.now() / 1000) + 600;
+export async function signSessionToken(username: string, secret: string, expirySeconds = 600): Promise<string> {
+  const exp = Math.floor(Date.now() / 1000) + expirySeconds;
   const data = JSON.stringify({ username, exp });
   const key = await crypto.subtle.importKey(
     'raw',

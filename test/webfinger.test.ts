@@ -146,6 +146,41 @@ describe('Content-Type preservation', () => {
   });
 });
 
+describe('host-meta and server info', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(() => {
+    app = createServer(TEST_ENV);
+  });
+
+  it('GET /.well-known/host-meta returns valid XRD XML', async () => {
+    const res = await app.request('http://localhost/.well-known/host-meta', { method: 'GET' }, TEST_ENV);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('application/xrd+xml');
+    const text = await res.text();
+    expect(text).toContain('<?xml');
+    expect(text).toContain('<XRD');
+    expect(text).toContain('</XRD>');
+    expect(text).toContain('lrdd');
+    expect(text).toContain('/webfinger/jrd');
+  });
+
+  it('GET / returns HTML server info page', async () => {
+    const res = await app.request('http://localhost/', { method: 'GET' }, TEST_ENV);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/html');
+    const html = await res.text();
+    expect(html).toContain('RemoteStorage');
+  });
+
+  it('GET /health returns ok', async () => {
+    const res = await app.request('http://localhost/health', { method: 'GET' }, TEST_ENV);
+    expect(res.status).toBe(200);
+    const json = await res.json() as any;
+    expect(json.status).toBe('ok');
+  });
+});
+
 describe('ETag behavior', () => {
   let app: ReturnType<typeof createServer>;
 

@@ -70,14 +70,14 @@ storageRouter.use('/*', async (c, next) => {
 
 storageRouter.use('/*', authMiddleware());
 
+storageRouter.get('/:username/public', async (c) => {
+  return c.redirect('/storage/' + c.req.param('username') + '/public/', 301);
+});
+
 storageRouter.get('/:username/public/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handlePublicStorageGet(c, username, fullPath);
-});
-
-storageRouter.get('/:username/public', async (c) => {
-  return c.redirect('/storage/' + c.req.param('username') + '/public/', 301);
 });
 
 storageRouter.get('/:username/*', requireScope('r'), async (c) => {
@@ -329,6 +329,13 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
   }
 
   await storage.delete(key);
+
+  const db = c.env.DB as any;
+  if (db && typeof db.prepare === 'function') {
+    await db.prepare(
+      'UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes - ?) WHERE username = ?'
+    ).bind(existing.contentLength || 0, username).run();
+  }
 
   return new Response(null, { status: 204, headers: { 'ETag': normalizeETag(existing.etag) || '' } });
 }

@@ -3,6 +3,7 @@ import { storageRouter } from './routes/storage';
 import { webfingerRouter } from './routes/webfinger';
 import { oauthRouter } from './routes/oauth';
 import { adminRouter } from './routes/admin';
+import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
 import type { AppEnv } from './types';
 
@@ -16,7 +17,10 @@ app.use('*', corsMiddleware());
 
 app.route('/storage', storageRouter);
 app.route('/oauth', oauthRouter);
+app.get('/admin/', (c) => c.redirect('/admin', 301));
 app.route('/admin', adminRouter);
+app.get('/account/', (c) => c.redirect('/account', 301));
+app.route('/account', accountRouter);
 app.route('/', webfingerRouter);
 
 app.get('/health', (c) => c.json({ status: 'ok' }));

@@ -34,8 +34,8 @@ webfingerRouter.get('/', (c) => {
 webfingerRouter.get('/.well-known/host-meta', (c) => {
   const baseUrl = getBaseUrl(c);
   return c.text(`<?xml version="1.0" encoding="UTF-8"?>
-XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd/1.0"
-   xmlnshm="http://host-meta.net/xrd/1.0">
+<XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd/1.0"
+   xmlns:hm="http://host-meta.net/xrd/1.0">
   <hm:Host>${c.req.header('Host') || 'localhost'}</hm:Host>
   <Link rel="lrdd" template="${baseUrl}/webfinger/jrd?resource={uri}"/>
 </XRD>`, 200, { 'Content-Type': 'application/xrd+xml' });

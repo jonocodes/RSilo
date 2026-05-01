@@ -576,6 +576,33 @@ describe('Error handling compatibility', () => {
     expect(text).toContain('quota');
   });
 
+  it('PUT exactly at quota boundary succeeds', async () => {
+    const body = 'x'; // 1 byte
+    const quotaEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (..._args: any[]) => ({
+            first: async () => sql.includes('users') ? { storage_quota_bytes: 1, used_storage_bytes: 0 } : null,
+            run: async () => ({}),
+            all: async () => ({ results: [] }),
+          }),
+        }),
+      } as any,
+    };
+    const quotaToken = createTestToken('alice');
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/exact-fit.txt',
+      {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${quotaToken}`, 'Content-Type': 'text/plain' },
+        body,
+      },
+      quotaEnv
+    );
+    expect([200, 201]).toContain(res.status);
+  });
+
 it('rate limited request returns 429', async () => {
     const rateLimitEnv = {
       STORAGE: {

@@ -26,11 +26,11 @@ export class D1Adapter {
           if (sql.includes('users') && sql.includes('username = ?')) {
             return self.db.getUserByUsername(values[0]) as Promise<T>;
           }
-          if (sql.includes('users') && sql.includes('WHERE id = ?')) {
-            return self.db.getUserById(values[0]) as Promise<T>;
-          }
           if (sql.includes('used_storage_bytes') && sql.includes('WHERE id = ?')) {
             return { used_storage_bytes: await self.db.getStorageUsage(values[0]) } as Promise<T>;
+          }
+          if (sql.includes('users') && sql.includes('WHERE id = ?')) {
+            return self.db.getUserById(values[0]) as Promise<T>;
           }
           if (sql.includes('COUNT(*)')) {
             if (sql.includes('oauth_tokens')) {
@@ -67,6 +67,8 @@ export class D1Adapter {
               expires_at: values[5],
               created_at: Math.floor(Date.now() / 1000),
             });
+          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('user_id')) {
+            await self.db.deleteTokenByIdAndUser(values[0], values[1]);
           } else if (sql.includes('DELETE FROM oauth_codes')) {
             await self.db.deleteCode(values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('storage_quota_bytes')) {
@@ -94,6 +96,10 @@ export class D1Adapter {
         },
 
         all: async () => {
+          if (sql.includes('oauth_tokens') && sql.includes('user_id = ?')) {
+            const tokens = await self.db.getTokensByUser(values[0]);
+            return { results: tokens };
+          }
           if (sql.includes('users') && !sql.includes('WHERE')) {
             const users = await self.db.getAllUsers();
             return { results: users };

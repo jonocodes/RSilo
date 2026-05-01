@@ -1,7 +1,26 @@
 import { Hono } from 'hono';
-import { hashPassword } from '../services/auth';
+import { hashPassword, signSessionToken, verifySessionToken } from '../services/auth';
 
 export const adminRouter = new Hono();
+
+const ADMIN_SESSION_COOKIE = 'admin_session';
+const ADMIN_SESSION_EXPIRY = 28800; // 8 hours
+
+function getAdminCookie(req: Request): string | null {
+  const cookie = req.headers.get('Cookie') || '';
+  for (const part of cookie.split(';')) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx === -1) continue;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k === ADMIN_SESSION_COOKIE) return v || null;
+  }
+  return null;
+}
+
+function adminCookieHeader(token: string, maxAge: number): string {
+  return `${ADMIN_SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=${maxAge}`;
+}
 
 adminRouter.use('*', async (c, next) => {
   const secret = (c.env as any)?.ADMIN_SECRET;
@@ -9,16 +28,128 @@ adminRouter.use('*', async (c, next) => {
     await next();
     return;
   }
-  const auth = c.req.header('Authorization') || '';
-  if (auth !== `Bearer ${secret}`) {
-    return c.json({ error: 'Unauthorized' }, 401);
+
+  // Login/logout routes are always accessible
+  const pathname = new URL(c.req.url).pathname;
+  if (pathname === '/admin/login' || pathname === '/admin/logout') {
+    await next();
+    return;
   }
-  await next();
+
+  // Bearer token (API / curl access)
+  const auth = c.req.header('Authorization') || '';
+  if (auth === `Bearer ${secret}`) {
+    await next();
+    return;
+  }
+
+  // Session cookie (browser access)
+  const sessionToken = getAdminCookie(c.req.raw);
+  if (sessionToken) {
+    const valid = await verifySessionToken(sessionToken, secret);
+    if (valid) {
+      await next();
+      return;
+    }
+  }
+
+  // Redirect browsers to login; return 401 for API clients
+  const accept = c.req.header('Accept') || '';
+  if (accept.includes('text/html')) {
+    return c.redirect('/admin/login', 302);
+  }
+  return c.json({ error: 'Unauthorized' }, 401);
 });
+
+// ── Login ────────────────────────────────────────────────────────────────────
+
+function loginPage(error = false): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — RSilo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .box { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); width: 100%; max-width: 340px; }
+    h1 { font-size: 1.25rem; margin-bottom: 1.5rem; }
+    .field { margin-bottom: 1rem; }
+    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.3rem; }
+    input[type=password] { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
+    input:focus { outline: none; border-color: #0066cc; box-shadow: 0 0 0 2px rgba(0,102,204,.15); }
+    button { width: 100%; padding: 0.65rem; background: #1a1a1a; color: white; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; margin-top: 0.5rem; }
+    button:hover { background: #333; }
+    .error { color: #dc3545; font-size: 0.875rem; padding: 0.5rem 0.75rem; background: #fff5f5; border-radius: 4px; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>RSilo Admin</h1>
+    ${error ? `<div class="error">Invalid admin secret</div>` : ''}
+    <form method="POST" action="/admin/login">
+      <div class="field">
+        <label for="secret">Admin secret</label>
+        <input type="password" id="secret" name="secret" autofocus autocomplete="off">
+      </div>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
+adminRouter.get('/login', async (c) => {
+  const secret = (c.env as any)?.ADMIN_SECRET;
+  if (!secret) return c.redirect('/admin', 302);
+
+  const sessionToken = getAdminCookie(c.req.raw);
+  if (sessionToken && await verifySessionToken(sessionToken, secret)) {
+    return c.redirect('/admin/', 302);
+  }
+
+  return new Response(loginPage(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+});
+
+adminRouter.post('/login', async (c) => {
+  const secret = (c.env as any)?.ADMIN_SECRET;
+  if (!secret) return c.redirect('/admin', 302);
+
+  const body = await c.req.parseBody() as any;
+  const submitted = (body.secret || '').trim();
+
+  if (submitted !== secret) {
+    return new Response(loginPage(true), {
+      status: 401,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  const token = await signSessionToken('admin', secret, ADMIN_SESSION_EXPIRY);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Location': '/admin',
+      'Set-Cookie': adminCookieHeader(token, ADMIN_SESSION_EXPIRY),
+    },
+  });
+});
+
+adminRouter.post('/logout', async (c) => {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Location': '/admin/login',
+      'Set-Cookie': adminCookieHeader('', 0),
+    },
+  });
+});
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
 
 adminRouter.get('/', async (c) => {
   const db = (c.env as any).DB;
-  const origin = c.req.header('Origin') || '*';
 
   const usersResult = await db?.prepare?.('SELECT id, username, created_at, storage_quota_bytes, used_storage_bytes FROM users ORDER BY created_at DESC LIMIT 100')?.all?.() || { results: [] };
   const userCountResult = await db?.prepare?.('SELECT COUNT(*) as count FROM users')?.first?.() || { count: 0 };
@@ -30,42 +161,49 @@ adminRouter.get('/', async (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RemoteStorage Admin</title>
+  <title>RSilo Admin</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
     .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
-    h1 { margin-bottom: 1.5rem; color: #1a1a1a; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    h1 { color: #1a1a1a; }
+    h2 { margin-bottom: 1rem; }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
     .stat-card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .stat-card h3 { font-size: 0.875rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-card .value { font-size: 2rem; font-weight: 600; color: #1a1a1a; margin-top: 0.5rem; }
     table { width: 100%; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #eee; }
-    th { background: #fafafa; font-weight: 600; color: #666; }
+    th { background: #fafafa; font-weight: 600; color: #666; font-size: 0.875rem; }
     tr:last-child td { border-bottom: none; }
-    .actions { display: flex; gap: 0.5rem; }
-    .btn { padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; font-size: 0.875rem; cursor: pointer; border: none; }
+    .actions { display: flex; gap: 0.5rem; align-items: center; }
+    .btn { padding: 0.4rem 0.85rem; border-radius: 4px; text-decoration: none; font-size: 0.8rem; cursor: pointer; border: none; font-family: inherit; }
     .btn-primary { background: #0066cc; color: white; }
     .btn-primary:hover { background: #0052a3; }
+    .btn-danger { background: white; color: #dc3545; border: 1px solid #dc3545; }
+    .btn-danger:hover { background: #dc3545; color: white; }
+    .btn-subtle { background: white; color: #555; border: 1px solid #ddd; }
+    .btn-subtle:hover { background: #f5f5f5; }
     .quota-form { display: flex; gap: 0.5rem; align-items: center; }
-    .quota-input { padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; width: 120px; }
-    .usage-bar { width: 100px; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; margin-left: 0.5rem; }
+    .quota-input { padding: 0.4rem 0.6rem; border: 1px solid #ddd; border-radius: 4px; width: 120px; font-size: 0.8rem; }
+    .usage-bar { width: 80px; height: 6px; background: #eee; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; margin-left: 0.5rem; }
     .usage-bar-fill { height: 100%; background: #0066cc; }
-    .create-user-section { margin-bottom: 2rem; background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .create-user-section h2 { margin-bottom: 1rem; }
+    .create-section { margin-bottom: 2rem; background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .create-form { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
     .form-field { display: flex; flex-direction: column; gap: 0.25rem; }
     .form-field label { font-size: 0.875rem; font-weight: 500; }
     .form-field input { padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem; }
-    .api-section { margin-top: 2rem; background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .api-section h2 { margin-bottom: 1rem; }
-    pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.875rem; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>RemoteStorage Admin</h1>
+    <div class="page-header">
+      <h1>RSilo Admin</h1>
+      <form method="POST" action="/admin/logout" style="margin:0">
+        <button type="submit" class="btn btn-subtle">Sign out</button>
+      </form>
+    </div>
 
     <div class="stats">
       <div class="stat-card">
@@ -82,7 +220,7 @@ adminRouter.get('/', async (c) => {
       </div>
     </div>
 
-    <div class="create-user-section">
+    <div class="create-section">
       <h2>Create User</h2>
       <div class="create-form">
         <div class="form-field">
@@ -93,55 +231,42 @@ adminRouter.get('/', async (c) => {
           <label for="new-password">Password</label>
           <input type="password" id="new-password" placeholder="••••••••">
         </div>
-        <button class="btn btn-primary" onclick="createUser()">Create</button>
+        <button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem" onclick="createUser()">Create</button>
       </div>
     </div>
 
-    <h2 style="margin-bottom: 1rem;">Users</h2>
+    <h2 style="margin-bottom:1rem">Users</h2>
     <table>
       <thead>
         <tr>
           <th>Username</th>
           <th>Created</th>
-          <th>Storage</th>
+          <th>Storage used</th>
           <th>Quota</th>
-          <th>Usage</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         ${(usersResult.results || []).map((user: any) => `
         <tr>
-          <td>${escapeHtml(user.username)}</td>
-          <td>${new Date(user.created_at * 1000).toLocaleDateString()}</td>
-          <td>${formatBytes(user.used_storage_bytes || 0)}</td>
-          <td>${formatBytes(user.storage_quota_bytes || 0)}</td>
-          <td>
-            ${Math.round(((user.used_storage_bytes || 0) / (user.storage_quota_bytes || 1)) * 100)}%
-            <div class="usage-bar"><div class="usage-bar-fill" style="width: ${Math.min(100, ((user.used_storage_bytes || 0) / (user.storage_quota_bytes || 1)) * 100)}%"></div></div>
+          <td><strong>${escapeHtml(user.username)}</strong></td>
+          <td style="color:#666;font-size:.875rem">${new Date(user.created_at * 1000).toLocaleDateString()}</td>
+          <td style="font-size:.875rem">
+            ${formatBytes(user.used_storage_bytes || 0)}
+            <div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100, ((user.used_storage_bytes || 0) / (user.storage_quota_bytes || 1)) * 100)}%"></div></div>
           </td>
+          <td style="font-size:.875rem">${formatBytes(user.storage_quota_bytes || 0)}</td>
           <td class="actions">
             <form class="quota-form" onsubmit="updateQuota(event, '${escapeHtml(user.username)}')">
               <input type="number" class="quota-input" name="quota" value="${user.storage_quota_bytes}" step="1073741824" min="1073741824">
-              <button type="submit" class="btn btn-primary">Update Quota</button>
+              <button type="submit" class="btn btn-primary">Set quota</button>
             </form>
+            <button class="btn btn-danger" onclick="deleteUser('${escapeHtml(user.username)}')">Delete</button>
           </td>
         </tr>
         `).join('')}
       </tbody>
     </table>
-
-    <div class="api-section">
-      <h2>API Endpoints</h2>
-      <pre>GET  /admin/health                      - Health check
-GET  /admin/stats                       - Statistics
-GET  /admin/users                       - List users
-POST /admin/users                       - Create user (body: {"username": "alice", "password": "secret"})
-GET  /admin/users/:username             - User details
-PATCH /admin/users/:username/quota      - Update quota (body: {"quota_bytes": 10737418240})
-PATCH /admin/users/:username/password   - Change password (body: {"password": "newpass"})</pre>
-      <p style="margin-top:0.75rem;font-size:0.875rem;color:#666">Set <code>ADMIN_SECRET</code> env var to require <code>Authorization: Bearer &lt;secret&gt;</code> on all admin routes.</p>
-    </div>
   </div>
 
   <script>
@@ -153,56 +278,74 @@ PATCH /admin/users/:username/password   - Change password (body: {"password": "n
         const res = await fetch('/admin/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password }),
         });
         const data = await res.json();
-        if (res.ok) {
-          location.reload();
-        } else {
-          alert('Error: ' + (data.error || 'Unknown error'));
-        }
-      } catch (e) {
-        alert('Error: ' + e.message);
-      }
+        if (res.ok) { location.reload(); }
+        else { alert('Error: ' + (data.error || 'Unknown error')); }
+      } catch (e) { alert('Error: ' + e.message); }
     }
 
     async function updateQuota(event, username) {
       event.preventDefault();
-      const form = event.target;
-      const quota = form.quota.value;
+      const quota = event.target.quota.value;
       try {
         const res = await fetch('/admin/users/' + username + '/quota', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quota_bytes: parseInt(quota) })
+          body: JSON.stringify({ quota_bytes: parseInt(quota) }),
         });
-        if (res.ok) {
-          location.reload();
-        } else {
-          alert('Failed to update quota');
+        if (res.ok) { location.reload(); }
+        else { alert('Failed to update quota'); }
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function deleteUser(username) {
+      if (!confirm('Delete user "' + username + '"? This cannot be undone.')) return;
+      try {
+        const res = await fetch('/admin/users/' + username, { method: 'DELETE' });
+        if (res.ok) { location.reload(); }
+        else {
+          const data = await res.json();
+          alert('Error: ' + (data.error || 'Unknown error'));
         }
-      } catch (e) {
-        alert('Error: ' + e.message);
-      }
+      } catch (e) { alert('Error: ' + e.message); }
     }
   </script>
 </body>
 </html>`;
 
-  return new Response(html, {
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Access-Control-Allow-Origin': origin,
-    }
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+});
+
+// ── API ───────────────────────────────────────────────────────────────────────
+
+adminRouter.get('/health', (c) => {
+  return c.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+});
+
+adminRouter.get('/stats', async (c) => {
+  const db = (c.env as any).DB;
+  if (!db || typeof db.prepare !== 'function') {
+    return c.json({ error: 'Database not available' }, 503);
+  }
+  const userCount = await db.prepare('SELECT COUNT(*) as count FROM users').first() as { count: number } | null;
+  const totalStorage = await db.prepare('SELECT SUM(used_storage_bytes) as total FROM users').first() as { total: number } | null;
+  const tokenCount = await db.prepare('SELECT COUNT(*) as count FROM oauth_tokens').first() as { count: number } | null;
+  return c.json({
+    total_users: userCount?.count || 0,
+    total_storage_bytes: totalStorage?.total || 0,
+    active_tokens: tokenCount?.count || 0,
   });
 });
 
-adminRouter.get('/health', (c) => {
-  return c.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-  });
+adminRouter.get('/users', async (c) => {
+  const db = (c.env as any).DB;
+  if (!db || typeof db.prepare !== 'function') {
+    return c.json({ error: 'Database not available' }, 503);
+  }
+  const result = await db.prepare('SELECT id, username, created_at, storage_quota_bytes, used_storage_bytes FROM users ORDER BY created_at DESC LIMIT 100').all();
+  return c.json({ users: result.results || [], total: result.results?.length || 0 });
 });
 
 adminRouter.post('/users', async (c) => {
@@ -236,60 +379,46 @@ adminRouter.post('/users', async (c) => {
   const passwordHash = await hashPassword(body.password);
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-
-  await db.prepare(
-    'INSERT INTO users (id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-  ).bind(id, username, passwordHash, now, now).run();
+  await db.prepare('INSERT INTO users (id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, username, passwordHash, now, now).run();
 
   return c.json({ id, username, created_at: now }, 201);
-});
-
-adminRouter.get('/users', async (c) => {
-  const db = (c.env as any).DB;
-  if (!db || typeof db.prepare !== 'function') {
-    return c.json({ error: 'Database not available' }, 503);
-  }
-
-  const result = await db.prepare('SELECT id, username, created_at, storage_quota_bytes, used_storage_bytes FROM users ORDER BY created_at DESC LIMIT 100').all();
-
-  return c.json({
-    users: result.results || [],
-    total: result.results?.length || 0,
-  });
 });
 
 adminRouter.get('/users/:username', async (c) => {
   const username = c.req.param('username');
   const db = (c.env as any).DB;
-
   if (!db || typeof db.prepare !== 'function') {
     return c.json({ error: 'Database not available' }, 503);
   }
-
   const user = await db.prepare('SELECT id, username, created_at, updated_at, storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?').bind(username).first();
-
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
-  }
-
+  if (!user) return c.json({ error: 'User not found' }, 404);
   return c.json(user);
+});
+
+adminRouter.delete('/users/:username', async (c) => {
+  const username = c.req.param('username');
+  const db = (c.env as any).DB;
+  if (!db || typeof db.prepare !== 'function') {
+    return c.json({ error: 'Database not available' }, 503);
+  }
+  const existing = await db.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
+  if (!existing) return c.json({ error: 'User not found' }, 404);
+  await db.prepare('DELETE FROM users WHERE username = ?').bind(username).run();
+  return c.json({ success: true });
 });
 
 adminRouter.patch('/users/:username/quota', async (c) => {
   const username = c.req.param('username');
   const body = await c.req.json() as { quota_bytes?: number };
   const db = (c.env as any).DB;
-
   if (!db || typeof db.prepare !== 'function') {
     return c.json({ error: 'Database not available' }, 503);
   }
-
   if (typeof body.quota_bytes !== 'number') {
     return c.json({ error: 'quota_bytes must be a number' }, 400);
   }
-
   await db.prepare('UPDATE users SET storage_quota_bytes = ? WHERE username = ?').bind(body.quota_bytes, username).run();
-
   return c.json({ success: true, storage_quota_bytes: body.quota_bytes });
 });
 
@@ -297,38 +426,16 @@ adminRouter.patch('/users/:username/password', async (c) => {
   const username = c.req.param('username');
   const body = await c.req.json() as { password?: string };
   const db = (c.env as any).DB;
-
   if (!db || typeof db.prepare !== 'function') {
     return c.json({ error: 'Database not available' }, 503);
   }
-
   if (!body.password || body.password.length < 8) {
     return c.json({ error: 'password must be at least 8 characters' }, 400);
   }
-
   const passwordHash = await hashPassword(body.password);
   await db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?')
     .bind(passwordHash, Math.floor(Date.now() / 1000), username).run();
-
   return c.json({ success: true });
-});
-
-adminRouter.get('/stats', async (c) => {
-  const db = (c.env as any).DB;
-
-  if (!db || typeof db.prepare !== 'function') {
-    return c.json({ error: 'Database not available' }, 503);
-  }
-
-  const userCount = await db.prepare('SELECT COUNT(*) as count FROM users').first() as { count: number } | null;
-  const totalStorage = await db.prepare('SELECT SUM(used_storage_bytes) as total FROM users').first() as { total: number } | null;
-  const tokenCount = await db.prepare('SELECT COUNT(*) as count FROM oauth_tokens').first() as { count: number } | null;
-
-  return c.json({
-    total_users: userCount?.count || 0,
-    total_storage_bytes: totalStorage?.total || 0,
-    active_tokens: tokenCount?.count || 0,
-  });
 });
 
 function formatBytes(bytes: number): string {

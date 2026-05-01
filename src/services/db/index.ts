@@ -84,6 +84,19 @@ export class Database {
     ).bind(tokenId).run();
   }
 
+  async getTokensByUser(userId: string): Promise<OAuthToken[]> {
+    const result = await this.db.prepare(
+      'SELECT * FROM oauth_tokens WHERE user_id = ? ORDER BY created_at DESC'
+    ).bind(userId).all<OAuthToken>();
+    return result.results || [];
+  }
+
+  async deleteTokenByIdAndUser(tokenId: string, userId: string): Promise<void> {
+    await this.db.prepare(
+      'DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?'
+    ).bind(tokenId, userId).run();
+  }
+
   async deleteExpiredTokens(): Promise<void> {
     await this.db.prepare(
       'DELETE FROM oauth_tokens WHERE expires_at < ?'

@@ -657,6 +657,17 @@ describe('Public storage', () => {
 
     expect(getRes.status).toBe(404);
   });
+
+  it('GET /storage/:user/public (no trailing slash) with auth redirects to /public/', async () => {
+    const token = createTestToken('alice', 'public:rw');
+    const res = await app.request(
+      'http://localhost/storage/alice/public',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('/storage/alice/public/');
+  });
 });
 
 describe('DB-backed OAuth token auth', () => {
@@ -731,5 +742,81 @@ describe('DB-backed OAuth token auth', () => {
       dbEnv
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe('Storage quota — tracking', () => {
+  let app: ReturnType<typeof createServer>;
+  const token = createTestToken('alice');
+
+  beforeEach(() => {
+    storage.clear();
+  });
+
+  beforeAll(() => {
+    app = createServer(TEST_ENV);
+  });
+
+  it('PUT increments used_storage_bytes in DB', async () => {
+    let updatedBytes: number | null = null;
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...args: any[]) => ({
+            first: async () => sql.includes('users') ? { storage_quota_bytes: 1000000, used_storage_bytes: 0 } : null,
+            run: async () => {
+              if (sql.includes('used_storage_bytes') && sql.includes('UPDATE')) {
+                updatedBytes = args[0];
+              }
+            },
+            all: async () => ({ results: [] }),
+          }),
+        }),
+      } as any,
+    };
+
+    const body = 'hello storage';
+    await app.request('http://localhost/storage/alice/documents/track.txt', {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body,
+    }, dbEnv);
+
+    expect(updatedBytes).toBe(new TextEncoder().encode(body).byteLength);
+  });
+
+  it('DELETE decrements used_storage_bytes in DB', async () => {
+    const fileBody = new TextEncoder().encode('to be deleted');
+    storage.set('users/alice/storage/documents/todelete.txt', {
+      body: fileBody.buffer,
+      etag: '"xyz"',
+      contentType: 'text/plain',
+    });
+
+    let decrementArg: number | null = null;
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...args: any[]) => ({
+            first: async () => null,
+            run: async () => {
+              if (sql.includes('used_storage_bytes') && sql.includes('UPDATE')) {
+                decrementArg = args[0];
+              }
+            },
+            all: async () => ({ results: [] }),
+          }),
+        }),
+      } as any,
+    };
+
+    await app.request('http://localhost/storage/alice/documents/todelete.txt', {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` },
+    }, dbEnv);
+
+    expect(decrementArg).toBe(fileBody.byteLength);
   });
 });
