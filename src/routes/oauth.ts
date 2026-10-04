@@ -142,7 +142,6 @@ oauthRouter.post('/:user/token', async (c) => {
   const contentType = c.req.header('Content-Type') || '';
 
   let grantType: string;
-  let clientId: string;
   let clientSecret: string | undefined;
   let code: string | undefined;
   let redirectUri: string | undefined;
@@ -151,7 +150,6 @@ oauthRouter.post('/:user/token', async (c) => {
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const params = new URLSearchParams(await c.req.text());
     grantType = params.get('grant_type') || '';
-    clientId = params.get('client_id') || '';
     clientSecret = params.get('client_secret') || undefined;
     code = params.get('code') || undefined;
     redirectUri = params.get('redirect_uri') || undefined;
@@ -159,7 +157,6 @@ oauthRouter.post('/:user/token', async (c) => {
   } else {
     const json = await c.req.json() as any;
     grantType = json.grant_type || '';
-    clientId = json.client_id || '';
     clientSecret = json.client_secret;
     code = json.code;
     redirectUri = json.redirect_uri;

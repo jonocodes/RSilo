@@ -136,7 +136,7 @@ adminRouter.post('/login', async (c) => {
   });
 });
 
-adminRouter.post('/logout', async (c) => {
+adminRouter.post('/logout', async () => {
   return new Response(null, {
     status: 302,
     headers: {

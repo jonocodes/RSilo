@@ -54,13 +54,15 @@ export class R2Storage {
     };
   }
 
-  async list(prefix: string): Promise<{ key: string; size: number; etag: string }[]> {
+  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }> {
     const listed = await this.bucket.list({ prefix });
-    return listed.objects.map(obj => ({
-      key: obj.key,
-      size: obj.size,
-      etag: obj.etag,
-    }));
+    return {
+      objects: listed.objects.map(obj => ({
+        key: obj.key,
+        size: obj.size,
+        etag: obj.etag,
+      })),
+    };
   }
 }
 

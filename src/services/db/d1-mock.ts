@@ -27,21 +27,21 @@ export class D1Adapter {
             return self.db.getUserByUsername(values[0]) as Promise<T>;
           }
           if (sql.includes('used_storage_bytes') && sql.includes('WHERE id = ?')) {
-            return { used_storage_bytes: await self.db.getStorageUsage(values[0]) } as Promise<T>;
+            return { used_storage_bytes: await self.db.getStorageUsage(values[0]) } as unknown as T;
           }
           if (sql.includes('FROM users') && sql.includes('id = ?') && sql.includes('SELECT')) {
             return self.db.getUserById(values[0]) as Promise<T>;
           }
           if (sql.includes('COUNT(*)') && sql.includes('oauth_tokens')) {
-            return { count: await self.db.getTokenCount() } as Promise<T>;
+            return { count: await self.db.getTokenCount() } as unknown as T;
           }
           if (sql.includes('COUNT(*)')) {
-            return { count: await self.db.getUserCount() } as Promise<T>;
+            return { count: await self.db.getUserCount() } as unknown as T;
           }
           if (sql.includes('SUM')) {
-            return { total: await self.db.getTotalStorage() } as Promise<T>;
+            return { total: await self.db.getTotalStorage() } as unknown as T;
           }
-          return null as Promise<T>;
+          return null;
         },
 
         run: async () => {

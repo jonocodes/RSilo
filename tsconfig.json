@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "types": ["@cloudflare/workers-types", "@types/node", "vitest/globals"],
+    "types": ["@cloudflare/workers-types", "@types/node", "bun", "vitest/globals"],
     "lib": ["ES2022"],
     "skipLibCheck": true,
     "isolatedModules": true,

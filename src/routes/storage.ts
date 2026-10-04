@@ -3,21 +3,19 @@ import { authMiddleware, requireScope } from '../middleware/auth';
 import { buildKey } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { TokenPayload } from '../services/auth';
-import type { LocalStorage } from '../services/local-storage';
+import type { AppEnv } from '../types';
 
 type StorageInterface = {
   get(key: string): Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
   put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
   delete(key: string): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
-  list(prefix: string): Promise<{ key: string; size: number; etag: string }[]>;
+  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }>;
 };
 
 function getStorage(c: any): StorageInterface {
   return c.env.STORAGE as StorageInterface;
 }
-
-type Params = { username: string };
 
 export const storageRouter = new Hono();
 
@@ -40,7 +38,7 @@ storageRouter.use('/*', async (c, next) => {
     return c.text('Invalid path', 400);
   }
 
-  const kv = c.env.RATE_LIMIT_KV;
+  const kv = (c.env as AppEnv).RATE_LIMIT_KV;
   if (kv && typeof kv.get === 'function') {
     const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
     const identifier = `ip:${ip}`;
@@ -98,7 +96,7 @@ storageRouter.delete('/:username/*', requireScope('rw'), async (c) => {
   return handleStorageDelete(c, username, fullPath);
 });
 
-storageRouter.options('/*', (c) => {
+storageRouter.options('/*', () => {
   const headers = new Headers();
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, If-Match, If-None-Match, Origin, X-Requested-With');
@@ -205,7 +203,7 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   const folderKey = buildKey(username, folderPath);
 
   const objects = await storage.list(folderKey);
-  const allObjects = 'objects' in objects ? objects.objects : objects;
+  const allObjects = objects.objects;
 
   const items: Record<string, { ETag: string }> = {};
   const seenFolders = new Set<string>();
@@ -265,7 +263,7 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   const body = await c.req.arrayBuffer();
   const bodySize = body.byteLength;
 
-  const db = c.env.DB as any;
+  const db = (c.env as AppEnv).DB;
   if (db && typeof db.prepare === 'function') {
     const userResult = await db.prepare(
       'SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?'
@@ -332,7 +330,7 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
 
   await storage.delete(key);
 
-  const db = c.env.DB as any;
+  const db = (c.env as AppEnv).DB;
   if (db && typeof db.prepare === 'function') {
     await db.prepare(
       'UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes - ?) WHERE username = ?'

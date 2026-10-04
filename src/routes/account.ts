@@ -45,7 +45,7 @@ async function listFolder(storage: any, username: string, storagePath: string): 
   const prefixPath = storagePath ? (storagePath.endsWith('/') ? storagePath : storagePath + '/') : '';
   const prefix = buildKey(username, prefixPath);
   const raw = await storage.list(prefix);
-  const objects: { key: string; size: number; etag: string }[] = 'objects' in raw ? raw.objects : raw;
+  const objects: { key: string; size: number; etag: string }[] = raw.objects;
 
   const files: { name: string; isDir: boolean; size: number; etag: string }[] = [];
   const seenDirs = new Set<string>();
@@ -222,7 +222,7 @@ accountRouter.post('/login', async (c) => {
   });
 });
 
-accountRouter.post('/logout', async (c) => {
+accountRouter.post('/logout', async () => {
   return new Response(null, {
     status: 302,
     headers: {

@@ -240,12 +240,14 @@ Live reload is enabled via `bun --watch`. Storage goes to `data/storage/`, datab
 ## Running Tests
 
 ```bash
-bun run test             # all unit tests (fast, mocked)
+bun run test             # all tests (fast, mocked + offline server E2E)
 bun run test:watch       # watch mode
+bun run typecheck        # tsc --noEmit
+bun run lint             # eslint src
 bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 ```
 
-**285 tests** across 13 files: protocol compliance, storage, auth, OAuth, admin, file manager, D1 adapter, and E2E.
+**339 tests** across 18 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, and E2E against the offline server.
 
 ## Production Deployment
 

@@ -25,7 +25,7 @@ app.route('/', webfingerRouter);
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
-export function createServer(env: AppEnv) {
+export function createServer(_env: AppEnv) {
   return app;
 }
 
