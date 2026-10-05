@@ -149,6 +149,7 @@ async function handlePublicStorageGet(c: any, username: string, fullPath: string
       'Content-Length': result.metadata.contentLength.toString(),
       'ETag': etag || '',
       'Cache-Control': 'no-cache',
+      'Content-Encoding': 'identity',
       'Last-Modified': httpDate(result.metadata.lastModified),
     },
   });
@@ -197,6 +198,7 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
       'Content-Length': result.metadata.contentLength.toString(),
       'ETag': etag || '',
       'Cache-Control': 'no-cache',
+      'Content-Encoding': 'identity',
       'Last-Modified': httpDate(result.metadata.lastModified),
     },
   });
@@ -254,6 +256,7 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
       'Content-Type': 'application/ld+json; charset=utf-8',
       'ETag': etag,
       'Cache-Control': 'no-cache',
+      'Content-Encoding': 'identity',
     },
   });
 }

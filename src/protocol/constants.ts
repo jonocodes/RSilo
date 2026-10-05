@@ -21,9 +21,9 @@ export function createEmptyFolder(): FolderItem {
 export function normalizeETag(etag: string | null | undefined): string | null {
   if (!etag) return null;
 
-  let isWeak = false;
+  // R2 may return weak ETags ("W/..."). remoteStorage expects strong, stable
+  // validators, so we drop the weak prefix and always emit a quoted ETag.
   if (etag.startsWith('W/')) {
-    isWeak = true;
     etag = etag.slice(2);
   }
 
@@ -34,7 +34,7 @@ export function normalizeETag(etag: string | null | undefined): string | null {
     etag += '"';
   }
 
-  return (isWeak ? 'W/' : '') + etag.toLowerCase();
+  return etag.toLowerCase();
 }
 
 // Strip quotes from ETag for comparison
