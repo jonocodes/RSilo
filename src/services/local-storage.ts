@@ -112,43 +112,50 @@ export class LocalStorage {
     return metadata;
   }
 
-  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }> {
-    const dirPath = this.resolveKey(prefix);
+  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
+    const objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] = [];
+    const keyPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
+    const baseDir = this.resolveKey(keyPrefix);
 
-    if (!existsSync(dirPath)) {
-      return { objects: [] };
-    }
+    const walk = (dir: string, prefixKey: string) => {
+      if (!existsSync(dir)) return;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.endsWith('.meta')) continue;
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          objects.push({
+            key: (prefixKey + entry.name + '/').replace(/\\/g, '/'),
+            size: 0,
+            etag: '',
+            lastModified: statSync(fullPath).mtime.toISOString(),
+          });
+          walk(fullPath, prefixKey + entry.name + '/');
+        } else {
+          const stats = statSync(fullPath);
+          const metaPath = fullPath + '.meta';
+          let etag = `"${randomUUID().slice(0, 8)}"`;
+          let contentType = 'application/octet-stream';
 
-    const entries = readdirSync(dirPath, { withFileTypes: true });
-    const objects: { key: string; size: number; etag: string }[] = [];
+          if (existsSync(metaPath)) {
+            try {
+              const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+              etag = meta.etag || etag;
+              contentType = meta.contentType || contentType;
+            } catch {}
+          }
 
-    for (const entry of entries) {
-      const fullPath = join(dirPath, entry.name);
-      if (entry.isFile()) {
-        const stats = statSync(fullPath);
-        const metaPath = fullPath + '.meta';
-        let etag = `"${randomUUID().slice(0, 8)}"`;
-
-        if (existsSync(metaPath)) {
-          try {
-            const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-            etag = meta.etag || etag;
-          } catch {}
+          objects.push({
+            key: (prefixKey + entry.name).replace(/\\/g, '/'),
+            size: stats.size,
+            etag,
+            contentType,
+            lastModified: stats.mtime.toISOString(),
+          });
         }
-
-        objects.push({
-          key: join(prefix, entry.name).replace(/\\/g, '/'),
-          size: stats.size,
-          etag,
-        });
-      } else if (entry.isDirectory()) {
-        objects.push({
-          key: join(prefix, entry.name + '/').replace(/\\/g, '/'),
-          size: 0,
-          etag: '',
-        });
       }
-    }
+    };
+
+    walk(baseDir, keyPrefix);
 
     return { objects };
   }

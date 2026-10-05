@@ -14,7 +14,7 @@ export interface StorageInterface {
   put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
   delete(key: string): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
-  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }>;
+  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }>;
 }
 
 export interface StorageContext {

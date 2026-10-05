@@ -189,7 +189,7 @@ describe('DELETE storage', () => {
       TEST_ENV
     );
 
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
 
     const getRes = await app.request(
       'http://localhost/storage/alice/documents/to-delete',
@@ -240,7 +240,7 @@ describe('DELETE storage', () => {
       TEST_ENV
     );
 
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
     const etag = delRes.headers.get('ETag');
     expect(etag).toMatch(/^"[^"]+"$/);
   });
@@ -616,7 +616,7 @@ describe('Public storage', () => {
   });
 
   it('GET public file without auth returns 200', async () => {
-    const token = createTestToken('alice', 'public:rw');
+    const token = createTestToken('alice', 'documents:rw');
     await app.request(
       'http://localhost/storage/alice/public/documents/public-file.txt',
       {
@@ -635,7 +635,7 @@ describe('Public storage', () => {
 
     expect(getRes.status).toBe(200);
     expect(await getRes.text()).toBe('public content');
-    expect(getRes.headers.get('Cache-Control')).toBe('public, no-cache');
+    expect(getRes.headers.get('Cache-Control')).toBe('no-cache');
   });
 
   it('GET public folder without auth returns 401', async () => {

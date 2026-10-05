@@ -114,6 +114,9 @@ export function hasScope(tokenScopes: string, requiredScope: string): boolean {
     if (name === requiredName && perms.startsWith(requiredPerm)) {
       return true;
     }
+    if (name === '*' && perms.startsWith(requiredPerm)) {
+      return true;
+    }
   }
   return false;
 }
@@ -124,7 +127,11 @@ export function scopeFromPath(fullPath: string): { module: string; permission: s
   if (segments[0] === 'storage') {
     startIdx = 1;
   }
-  const module = segments.length > startIdx + 1 ? segments[startIdx + 1] : segments[startIdx] || '*';
+  let categoryIdx = startIdx + 1;
+  if (segments[categoryIdx] === 'public') {
+    categoryIdx += 1;
+  }
+  const module = segments.length > categoryIdx ? segments[categoryIdx] : '*';
   return { module, permission: 'rw' };
 }
 

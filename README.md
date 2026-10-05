@@ -111,11 +111,11 @@ You can review and revoke granted tokens any time under `/account/tokens`.
 
 ## Share a file publicly
 
-Files uploaded under the `public` module are readable by anyone (folder listings still require auth):
+Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still require auth. The write uses the same `<module>` scope as the private data:
 
 ```bash
-bun run dev-token alice 'public:rw'
-# then PUT to /storage/alice/public/hello.txt and GET it without auth
+bun run dev-token alice 'documents:rw'
+# then PUT to /storage/alice/public/documents/hello.txt and GET it without auth
 ```
 
 ## Managing multiple users (optional)
@@ -280,21 +280,21 @@ Scopes are per-module and grant read (`r`) or read-write (`rw`) access:
 | `pictures:r` | Read-only access to `pictures` |
 | `*:rw` | Read and write all modules |
 
-Module names are arbitrary — any name works. The `public` module is readable without auth (GET only, files not folders).
+Module names are arbitrary — any name works. Files under `public/<module>/` are readable without auth (files only; folder listings require auth).
 
 ### Public files
 
 ```bash
-TOKEN="$(bun run dev-token alice 'public:rw')"
+TOKEN="$(bun run dev-token alice 'documents:rw')"
 
-# Upload (still requires auth)
-curl -X PUT http://localhost:8787/storage/alice/public/shared.txt \
+# Upload (still requires auth, using the module's scope)
+curl -X PUT http://localhost:8787/storage/alice/public/documents/shared.txt \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/plain" \
   -d "Anyone can read this"
 
 # Read without auth
-curl http://localhost:8787/storage/alice/public/shared.txt
-# → Cache-Control: public, no-cache
+curl http://localhost:8787/storage/alice/public/documents/shared.txt
+# → Cache-Control: no-cache
 ```
 
 ### User management (admin API)

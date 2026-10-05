@@ -254,7 +254,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     describe('DELETE', () => {
-      it('deletes existing file and returns 204', async () => {
+      it('deletes existing file and returns 200', async () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
@@ -268,7 +268,7 @@ describe('RemoteStorage Protocol Compliance', () => {
           env
         );
 
-        expect(res.status).toBe(204);
+        expect(res.status).toBe(200);
       });
 
       it('returns 404 when deleting non-existent', async () => {

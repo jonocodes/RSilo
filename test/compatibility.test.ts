@@ -207,7 +207,7 @@ describe('RemoteStorage.js client compatibility', () => {
     expect(res.status).toBeOneOf([200, 204]);
   });
 
-  it('DELETE returns 204 on success', async () => {
+  it('DELETE returns 200 on success', async () => {
     const token = createTestToken('testuser');
 
     await app.request(
@@ -229,7 +229,7 @@ describe('RemoteStorage.js client compatibility', () => {
       TEST_ENV
     );
 
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
   });
 
   it('GET returns proper Content-Length for text content', async () => {

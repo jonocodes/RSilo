@@ -34,10 +34,10 @@ export class R2Storage {
     }
 
     const metadata: BlobMetadata = {
-      contentType: (object as any).contentType || (object as any).metadata?.contentType || 'application/octet-stream',
+      contentType: (object as any).contentType || (object as any).metadata?.contentType || (object as any).httpMetadata?.contentType || 'application/octet-stream',
       contentLength: object.size ?? (object as any).metadata?.contentLength ?? body.byteLength,
       etag: (object as any).etag ?? (object as any).metadata?.etag ?? null,
-      lastModified: (object as any).lastModified,
+      lastModified: (object as any).uploaded?.toISOString?.() ?? (object as any).lastModified,
     };
 
     return { body, metadata };
@@ -62,17 +62,19 @@ export class R2Storage {
       contentType: object.httpMetadata?.contentType || 'application/octet-stream',
       contentLength: object.size,
       etag: object.etag,
-      lastModified: (object as any).lastModified,
+      lastModified: (object as any).uploaded?.toISOString?.() ?? (object as any).lastModified,
     };
   }
 
-  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }> {
+  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
     const listed = await this.bucket.list({ prefix });
     return {
       objects: listed.objects.map(obj => ({
         key: obj.key,
         size: obj.size,
         etag: obj.etag,
+        contentType: obj.httpMetadata?.contentType,
+        lastModified: (obj as any).uploaded?.toISOString?.(),
       })),
     };
   }

@@ -99,11 +99,26 @@ function extractStoragePath(fullPath: string, username: string): string {
   return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
 }
 
+function httpDate(value?: string): string {
+  const date = value ? new Date(value) : new Date();
+  return isNaN(date.getTime()) ? new Date().toUTCString() : date.toUTCString();
+}
+
+async function shortHash(input: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
 async function handlePublicStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
   const path = extractStoragePath(fullPath, username);
+  const storage = getStorage(c);
 
-  if (path.endsWith('/')) {
-    return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
+  if (path === '' || path.endsWith('/')) {
+    const payload = c.get('tokenPayload') as TokenPayload | undefined;
+    if (!payload || payload.sub !== username) {
+      return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
+    }
+    return handleFolderGet(c, storage, username, path);
   }
 
   if (!isValidPath(path)) {
@@ -111,7 +126,6 @@ async function handlePublicStorageGet(c: any, username: string, fullPath: string
   }
 
   const key = buildKey(username, path);
-  const storage = getStorage(c);
 
   const result = await storage.get(key);
   if (!result) {
@@ -134,7 +148,8 @@ async function handlePublicStorageGet(c: any, username: string, fullPath: string
       'Content-Type': result.metadata.contentType,
       'Content-Length': result.metadata.contentLength.toString(),
       'ETag': etag || '',
-      'Cache-Control': 'public, no-cache',
+      'Cache-Control': 'no-cache',
+      'Last-Modified': httpDate(result.metadata.lastModified),
     },
   });
 }
@@ -151,7 +166,7 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
     return c.text('Invalid path', 400);
   }
 
-  const isFolderRequest = path.endsWith('/');
+  const isFolderRequest = path === '' || path.endsWith('/');
   const key = buildKey(username, path);
 
   const storage = getStorage(c);
@@ -182,42 +197,56 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
       'Content-Length': result.metadata.contentLength.toString(),
       'ETag': etag || '',
       'Cache-Control': 'no-cache',
+      'Last-Modified': httpDate(result.metadata.lastModified),
     },
   });
 }
 
 async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
-  const folderPath = path.endsWith('/') ? path : path + '/';
+  const folderPath = path === '' || path.endsWith('/') ? path : path + '/';
   const folderKey = buildKey(username, folderPath);
 
-  const objects = await storage.list(folderKey);
-  const allObjects = objects.objects;
+  const { objects } = await storage.list(folderKey);
 
-  const items: Record<string, { ETag: string }> = {};
-  const seenFolders = new Set<string>();
+  const items: Record<string, any> = {};
+  const folderChildren: Record<string, string[]> = {};
 
-  for (const obj of allObjects) {
+  for (const obj of objects) {
     const relativePath = obj.key.slice(folderKey.length);
+    if (!relativePath) continue;
+    const isFolder = relativePath.endsWith('/');
     const segments = relativePath.split('/').filter(Boolean);
-    if (segments.length === 1) {
-      items[segments[0]] = { ETag: obj.etag };
-    } else if (segments.length > 1) {
+    if (!isFolder && segments.length === 1) {
+      items[segments[0]] = {
+        ETag: stripQuotes(obj.etag),
+        'Content-Type': obj.contentType || 'application/octet-stream',
+        'Content-Length': obj.size,
+        'Last-Modified': httpDate(obj.lastModified),
+      };
+    } else {
       const folderName = segments[0] + '/';
-      if (!seenFolders.has(folderName)) {
-        seenFolders.add(folderName);
-        items[folderName] = { ETag: '' };
-      }
+      (folderChildren[folderName] ||= []).push(`${relativePath}:${obj.etag}`);
+      if (!items[folderName]) items[folderName] = { ETag: '' };
     }
+  }
+
+  for (const [folderName, children] of Object.entries(folderChildren)) {
+    items[folderName].ETag = await shortHash(children.sort().join('\n'));
   }
 
   const folder = createEmptyFolder();
   folder.items = items;
 
   const folderJson = JSON.stringify(folder);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(folderJson));
-  const hashArray = new Uint8Array(hashBuffer);
-  const hashHex = Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('');
-  const etag = `"${hashHex.slice(0, 16)}"`;
+  const etag = `"${await shortHash(folderJson)}"`;
+
+  const ifNoneMatch = c.req.header('If-None-Match');
+  if (ifNoneMatch) {
+    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
+    if (requestedEtags.includes(stripQuotes(etag))) {
+      return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
+    }
+  }
 
   return new Response(folderJson, {
     status: 200,
@@ -243,6 +272,10 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
 
   if (path.endsWith('/')) {
     return c.text("can't write to folder", 400);
+  }
+
+  if (c.req.header('Content-Range')) {
+    return c.text('Content-Range is not supported', 400);
   }
 
   const key = buildKey(username, path);
@@ -274,8 +307,13 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   }
 
   const ifMatch = c.req.header('If-Match');
-  if (ifMatch && currentEtag && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
-    return c.text('Precondition Failed', 412);
+  if (ifMatch) {
+    if (!currentEtag) {
+      return c.text('Precondition Failed', 412);
+    }
+    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
+      return c.text('Precondition Failed', 412);
+    }
   }
 
   const contentType = c.req.header('Content-Type') || 'application/octet-stream';
@@ -312,6 +350,18 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
   const storage = getStorage(c);
 
   const existing = await storage.head(key);
+
+  const ifMatch = c.req.header('If-Match');
+  if (ifMatch) {
+    if (!existing) {
+      return c.text('Precondition Failed', 412);
+    }
+    const currentEtag = normalizeETag(existing.etag) || '';
+    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
+      return c.text('Precondition Failed', 412);
+    }
+  }
+
   if (!existing) {
     return c.text('Not Found', 404);
   }
@@ -325,5 +375,5 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
     ).bind(existing.contentLength || 0, username).run();
   }
 
-  return new Response(null, { status: 204, headers: { 'ETag': normalizeETag(existing.etag) || '' } });
+  return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(existing.etag) || '' } });
 }

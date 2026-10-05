@@ -124,8 +124,15 @@ webfingerRouter.get('/oauth/:user', async (c) => {
   }, 200, { 'Content-Type': 'application/json' } as any);
 });
 
-function getBaseUrl(c: { req: { header: (name: string) => string | undefined } }): string {
-  const protocol = c.req.header('X-Forwarded-Proto') || 'https';
+function getBaseUrl(c: { req: { header: (name: string) => string | undefined; url: string } }): string {
+  let protocol = c.req.header('X-Forwarded-Proto');
+  if (!protocol) {
+    try {
+      protocol = new URL(c.req.url).protocol.replace(':', '');
+    } catch {
+      protocol = 'https';
+    }
+  }
   const host = c.req.header('Host') || 'localhost';
   return `${protocol}://${host}`;
 }

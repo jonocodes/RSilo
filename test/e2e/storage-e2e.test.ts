@@ -116,7 +116,7 @@ describe('Storage E2E', () => {
       headers: { 'Authorization': `Bearer ${token}` },
     });
 
-    expect(delRes.status).toBe(204);
+    expect(delRes.status).toBe(200);
     expect(existsSync(filePath)).toBe(false);
   });
 
