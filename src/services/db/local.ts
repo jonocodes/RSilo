@@ -131,6 +131,11 @@ export class LocalDatabase {
     return stmt.all(userId) as OAuthToken[];
   }
 
+  async getAllTokens(): Promise<OAuthToken[]> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens ORDER BY created_at DESC');
+    return stmt.all() as OAuthToken[];
+  }
+
   async deleteTokenByIdAndUser(tokenId: string, userId: string): Promise<void> {
     this.db.prepare('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?').run(tokenId, userId);
   }

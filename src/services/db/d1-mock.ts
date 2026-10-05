@@ -79,6 +79,8 @@ export class D1Adapter {
             await self.db.deleteTokenByIdAndUser(values[0], values[1]);
           } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('client_id')) {
             await self.db.deleteTokensByClient(values[0]);
+          } else if (sql.includes('DELETE FROM oauth_tokens')) {
+            await self.db.deleteToken(values[0]);
           } else if (sql.includes('DELETE FROM oauth_clients')) {
             await self.db.deleteClient(values[0]);
           } else if (sql.includes('DELETE FROM oauth_codes')) {
@@ -117,6 +119,10 @@ export class D1Adapter {
           if (sql.includes('FROM users') && !sql.includes('WHERE')) {
             const users = await self.db.getAllUsers();
             return { results: users };
+          }
+          if (sql.includes('FROM oauth_tokens') && !sql.includes('WHERE')) {
+            const tokens = await self.db.getAllTokens();
+            return { results: tokens };
           }
           if (sql.includes('FROM oauth_clients')) {
             const clients = await self.db.getAllClients();

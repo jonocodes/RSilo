@@ -109,7 +109,7 @@ Apps do **not** need any setup on your side — there is no client registration 
 3. Sign in, check the app name and **where it redirects to**, and approve the requested module permissions.
 4. The app gets a token and starts syncing into that module.
 
-You can review and revoke an app's access from `/admin` (OAuth clients) or `/account/tokens`.
+You can review and revoke an app's access from `/admin` (Authorized apps) or `/account/tokens`.
 
 ## Share a file publicly
 
