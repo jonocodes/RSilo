@@ -30,7 +30,7 @@ This is for the person who owns the server. You deploy it once, create your acco
 ## What you get
 
 - **Web file manager** at `/account` — browse, upload, download, delete, and view files
-- **Admin dashboard** at `/admin` — create users, set storage quotas, change passwords
+- **Admin dashboard** at `/admin` — create users, set storage quotas, and review/revoke app access
 - **OAuth + WebFinger** so RemoteStorage apps can connect
 - **Public sharing** through the `public` module
 - Everything fits inside Cloudflare's **free tier** (see [Running on the Cloudflare free tier](#running-on-the-cloudflare-free-tier))
@@ -99,6 +99,19 @@ Generate any of them with `bun run secret`.
 1. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
 2. Create yourself a user (username `[a-z0-9_.-]+`, password ≥ 8 characters).
 3. Go to `/account` and sign in with that username and password.
+
+## Change a password
+
+There is no self-service form yet, so passwords are changed with the admin API. On a single-user instance you are the admin, so this is how you change your own:
+
+```bash
+curl -X PATCH https://<your-worker>.workers.dev/admin/users/alice/password \
+  -H "Authorization: Bearer <ADMIN_SECRET>" \
+  -H "Content-Type: application/json" \
+  -d '{"password":"newpass123"}'   # at least 8 characters
+```
+
+Existing app tokens (authorizations) keep working after a password change — revoke any you no longer want from `/admin` (Authorized apps) or `/account/tokens`.
 
 ## Connect a RemoteStorage app
 
@@ -312,7 +325,7 @@ curl -X POST http://localhost:8787/admin/users \
 curl -X PATCH http://localhost:8787/admin/users/alice/password \
   -H "Authorization: Bearer $ADMIN_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"password":"newpass"}'
+  -d '{"password":"newpass123"}'
 
 # Update quota (bytes)
 curl -X PATCH http://localhost:8787/admin/users/alice/quota \
