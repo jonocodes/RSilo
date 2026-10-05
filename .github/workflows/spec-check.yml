@@ -1,0 +1,55 @@
+name: remoteStorage spec-check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  spec-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run remoteStorage spec-check
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/rsilo
+          STORAGE_DIR=/tmp/rsilo/storage \
+          DB_PATH=/tmp/rsilo/db.sqlite \
+          PORT=8788 \
+          SESSION_SECRET=ci-secret \
+          ADMIN_SECRET=ci-admin \
+          bun run src/server-offline.ts > /tmp/rsilo/server.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8788/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:8788/health
+
+          RW=$(bun run dev-token alice 'api-test-suite:rw' | tail -1)
+          RO=$(bun run dev-token alice 'api-test-suite:r' | tail -1)
+          GL=$(bun run dev-token alice '*:rw' | tail -1)
+
+          git clone https://github.com/0dataapp/spec-check /tmp/spec-check
+          cd /tmp/spec-check
+          git checkout e969675a41c8bbffa35dc8d8c0eea0e82846695b
+          npm install --no-audit --no-fund
+
+          cat > .env <<EOF
+          SERVER_URL="http://localhost:8788"
+          ACCOUNT_HANDLE="alice"
+          TOKEN_READ_WRITE="$RW"
+          TOKEN_READ_ONLY="$RO"
+          TOKEN_GLOBAL="$GL"
+          EOF
+
+          npm test
