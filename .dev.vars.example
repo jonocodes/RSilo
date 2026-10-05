@@ -6,3 +6,6 @@ SESSION_SECRET=change-me-to-a-random-string
 
 # Optional: protects /admin/* endpoints. Offline dev defaults to 'admin' if unset.
 ADMIN_SECRET=
+
+# Optional: if set, disables unsigned dev tokens (recommended in production).
+JWT_SECRET=

@@ -80,7 +80,7 @@ wrangler secret put ADMIN_SECRET     # bun run secret
 wrangler secret put JWT_SECRET       # bun run secret
 ```
 
-Alternatively, delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` and run `bun run deploy` — wrangler will provision the resources and write their IDs back.
+Alternatively, delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` and run `wrangler deploy` — wrangler will provision the resources and write their IDs back — then `bun run db:migrate:remote`.
 
 </details>
 

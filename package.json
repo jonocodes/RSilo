@@ -10,7 +10,7 @@
     "secret": "bun run src/scripts/secret.ts",
     "setup": "bun run src/scripts/setup.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
-    "deploy": "wrangler deploy",
+    "deploy": "bun run db:migrate:remote && wrangler deploy",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
