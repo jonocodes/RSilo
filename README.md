@@ -1,5 +1,7 @@
 # RSilo
 
+> **Canonical repository:** [jonocodes/RSilo on GitHub](https://github.com/jonocodes/RSilo). The Codeberg mirror is deprecated.
+
 A [RemoteStorage.io](https://remotestorage.io)-compatible personal storage server that runs on Cloudflare Workers, with a built-in web file manager and OAuth server.
 
 **Typical use case:** one person runs their own storage area, so their apps — notes, todos, editors, photos — sync to infrastructure they control instead of a vendor's cloud. Multi-user works too, but a single-user setup is the default happy path.
