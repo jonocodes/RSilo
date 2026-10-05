@@ -66,13 +66,13 @@ webfingerRouter.get('/.well-known/webfinger', async (c) => {
         type: PROTOCOL_VERSION,
         properties: {
           'http://remotestorage.io/spec/version': PROTOCOL_VERSION,
-          'http://tools.ietf.org/html/rfc6749#section-4.2': `${getBaseUrl(c)}/oauth/${user}`,
+          'http://tools.ietf.org/html/rfc6749#section-4.2': `${getBaseUrl(c)}/oauth/${user}/authorize`,
         }
       },
       {
         rel: 'remoteStorage',
         api: 'simple',
-        auth: `${getBaseUrl(c)}/oauth/${user}`,
+        auth: `${getBaseUrl(c)}/oauth/${user}/authorize`,
         template: `${getBaseUrl(c)}/storage/${user}/{category}`,
       }
     ]
@@ -92,7 +92,7 @@ webfingerRouter.get('/webfinger/jrd', async (c) => {
     links: [{
       rel: 'remoteStorage',
       api: 'simple',
-      auth: `${getBaseUrl(c)}/oauth/${user}`,
+      auth: `${getBaseUrl(c)}/oauth/${user}/authorize`,
       template: `${getBaseUrl(c)}/storage/${user}/{category}`,
     }]
   }, 200, { 'Content-Type': 'application/jrd+json' } as any);

@@ -78,7 +78,7 @@ describe('WebFinger endpoint', () => {
     const json = await res.json();
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink.properties).toBeDefined();
-    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toContain('/oauth/bob');
+    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toContain('/oauth/bob/authorize');
   });
 });
 
