@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "dev:offline": "bun --watch src/server-offline.ts",
+    "dev-token": "bun run src/scripts/dev-token.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
     "deploy": "wrangler deploy",
     "test": "vitest run",

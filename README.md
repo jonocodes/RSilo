@@ -1,57 +1,164 @@
 # RSilo
 
-A [RemoteStorage.io](https://remotestorage.io)-compatible personal cloud storage server for Cloudflare Workers, with a built-in web file manager and OAuth server.
+A [RemoteStorage.io](https://remotestorage.io)-compatible personal storage server that runs on Cloudflare Workers, with a built-in web file manager and OAuth server.
+
+**Typical use case:** one person runs their own storage area, so their apps — notes, todos, editors, photos — sync to infrastructure they control instead of a vendor's cloud. Multi-user works too, but a single-user setup is the default happy path.
 
 ## What is RemoteStorage?
 
-RemoteStorage is an open protocol for syncing app data across devices. Apps like note-takers, todo lists, and editors store data in your own server rather than a vendor's cloud.
+RemoteStorage is an open protocol for syncing app data across devices. A server advertises where data lives, apps ask for permission to a module (like `documents` or `pictures`), then read/write files over plain HTTP.
 
 - **WebFinger** advertises your storage and auth endpoints
 - **OAuth 2.0** scopes grant apps access to specific modules
-- **HTTP REST** reads and writes files under `/:username/:module/:path`
+- **HTTP REST** reads and writes files under `/storage/:username/:module/:path`
 
-## Quick Start (offline dev)
+## Where to start
+
+| If you want to… | Go to |
+|-----------------|-------|
+| Run your own server and connect your apps | [For admins](#for-admins-run-your-own-server) |
+| Work on the code, extend it, or read the API | [For developers](#for-developers) |
+
+---
+
+# For admins: run your own server
+
+You own the server. You deploy it once, create your account, then connect apps. You do not need to understand Cloudflare internals — this section walks through it.
+
+## What you get
+
+- **Web file manager** at `/account` — browse, upload, download, delete, and view files
+- **Admin dashboard** at `/admin` — create users, set storage quotas, change passwords
+- **OAuth + WebFinger** so RemoteStorage apps can connect
+- **Public sharing** through the `public` module
+- Everything fits inside Cloudflare's **free tier** (see [Running on the Cloudflare free tier](#running-on-the-cloudflare-free-tier))
+
+## Deploy it
+
+The service runs as a single Cloudflare Worker with three bindings: **R2** (file storage), **D1** (users and tokens) and **KV** (rate limiting).
+
+### Option A — Deploy to Cloudflare button (no CLI)
+
+> Requires the source to live in a **public GitHub or GitLab** repository. This project's canonical repo is on Codeberg, so you would mirror it to GitHub first.
+
+```md
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=<YOUR_REPO_URL>)
+```
+
+Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2/D1/KV automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
+
+### Option B — Command line
+
+Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file), plus `bun` and `wrangler`.
 
 ```bash
 bun install
-bun run db:setup:local   # creates DB + storage directory
-bun run dev:offline
+wrangler login          # or export CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
 ```
 
-Server runs at `http://localhost:8787`. No Cloudflare account needed.
+Then either let wrangler create the resources for you, or create them yourself.
 
-Go to `http://localhost:8787/admin/` to manage users (default admin secret: `admin`, or set `ADMIN_SECRET` in `.dev.vars`). Create a user there, then sign in at `http://localhost:8787/account`.
-
-To use a different admin secret:
+**B1 — Let wrangler provision.** Delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` (keep the `binding` lines), then:
 
 ```bash
-ADMIN_SECRET=mysecret bun run db:setup:local
+bun run deploy
+wrangler d1 migrations apply DB --remote   # run after the first deploy
 ```
 
-### Use the storage API directly
+Wrangler creates the resources, writes their IDs back into `wrangler.toml`, and deploys.
+
+**B2 — Create the resources explicitly.**
 
 ```bash
-# Dev token — no OAuth needed for testing
-TOKEN="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZSIsInNjb3BlcyI6ImRvY3VtZW50czpydyBwaWN0dXJlczpydyIsImlhdCI6MTcwNjAwMDAwMDAsImV4cCI6OTk5OTk5OTk5OX0."
-
-# Upload
-curl -X PUT http://localhost:8787/storage/alice/documents/hello.txt \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: text/plain" \
-  -d "Hello, RemoteStorage!"
-
-# Download
-curl http://localhost:8787/storage/alice/documents/hello.txt \
-  -H "Authorization: Bearer $TOKEN"
-
-# List folder
-curl http://localhost:8787/storage/alice/documents/ \
-  -H "Authorization: Bearer $TOKEN"
-
-# Delete
-curl -X DELETE http://localhost:8787/storage/alice/documents/hello.txt \
-  -H "Authorization: Bearer $TOKEN"
+wrangler r2 bucket create remotestorage
+wrangler d1 create remotestorage-db
+wrangler kv namespace create RATE_LIMIT_KV
+# put the printed IDs into wrangler.toml (database_id, kv id)
+wrangler d1 migrations apply remotestorage-db --remote
+bun run deploy
 ```
+
+### Set secrets (both options)
+
+```bash
+wrangler secret put SESSION_SECRET   # random string, required
+wrangler secret put ADMIN_SECRET     # protects /admin/*, recommended
+wrangler secret put JWT_SECRET       # disables unsigned dev tokens, recommended in production
+```
+
+| Secret | Purpose |
+|--------|---------|
+| `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
+| `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
+| `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
+
+## Create your account and sign in
+
+1. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
+2. Create yourself a user (username `[a-z0-9_.-]+`, password ≥ 8 characters).
+3. Go to `/account` and sign in with that username and password.
+
+## Connect a RemoteStorage app
+
+1. In the app, enter your server address (e.g. `https://<your-worker>.workers.dev`).
+2. The app discovers your endpoints via WebFinger and sends you to the OAuth consent page.
+3. Sign in, review the requested module permissions, and approve.
+4. The app gets a token and starts syncing into that module.
+
+You can review and revoke granted tokens any time under `/account/tokens`.
+
+## Share a file publicly
+
+Files uploaded under the `public` module are readable by anyone (folder listings still require auth):
+
+```bash
+bun run dev-token alice 'public:rw'
+# then PUT to /storage/alice/public/hello.txt and GET it without auth
+```
+
+## Managing multiple users (optional)
+
+Single-user is the common case. If you want more, create users from the dashboard or the admin API — see [For developers → User management](#admin). Each user gets their own namespace under `/storage/:username/`.
+
+## Running on the Cloudflare free tier
+
+RSilo is sized to fit inside Cloudflare's free allowances with room to spare. The one thing to understand: **R2 is the only product here that can bill you on overage.** Workers, D1, and KV simply stop working when their free limits are reached, but R2 charges per GB-month and per operation once you pass its free tier — and R2 requires a payment method on file to enable, so overage is charged automatically.
+
+### Free allowances
+
+| Product | Free allowance | When exceeded |
+|---------|----------------|---------------|
+| Workers | 100,000 requests/day, 10 ms CPU/invocation | Hard stop (errors), no charge |
+| R2 storage | 10 GB-month (Standard class only) | $0.015 / GB-month |
+| R2 Class A operations | 1,000,000 / month | $4.50 / million |
+| R2 Class B operations | 10,000,000 / month | $0.36 / million |
+| R2 egress | Unlimited | Free |
+| D1 | 5 GB storage, 5M rows read/day, 100k rows written/day | Errors on the Free plan |
+| KV | 100k reads/day, 1k writes/day, 1 GB | Errors on the Free plan |
+
+### How RSilo maps to R2 operation classes
+
+| Client action | R2 call | Class |
+|---------------|---------|-------|
+| Upload a file (`PUT /storage/...`) | `PutObject` | A |
+| List a folder (`GET /storage/.../`) | `ListObjects` | A |
+| Download a file (`GET /storage/...`) | `GetObject` | B |
+| Read metadata (`HEAD /storage/...`) | `HeadObject` | B |
+| Delete a file (`DELETE /storage/...`) | `DeleteObject` | free |
+
+### Keeping the bill at $0
+
+1. **Stay on the Workers Free plan.** Free Workers hard-stop at 100k requests/day; the Paid plan auto-bills overages with no hard switch.
+2. **Keep the bucket private.** Do not enable the r2.dev public URL or attach a custom domain to the bucket. RSilo serves everything through the Worker (including the `public` module), and R2 does not bill unauthorized requests. A public bucket would also let callers bypass the Worker entirely.
+3. **Use Standard storage only.** Infrequent Access has **no free tier** and bills from the first operation — even from viewing the bucket in the dashboard.
+4. **Set a budget alert as an early warning.** Manage Account → Billing → Billable Usage → Create budget alert (or Notifications → Add → Budget Alert). It is **informational only** — Cloudflare offers no native hard spend cap for R2, and per-product billing notifications are only available on Professional plans or higher.
+5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet.
+
+> RemoteStorage clients never talk to R2 directly — they speak HTTP to the Worker, which reaches R2 through the binding. "Private bucket" and working RemoteStorage clients are not in conflict.
+
+---
+
+# For developers
 
 ## Architecture
 
@@ -69,9 +176,23 @@ curl -X DELETE http://localhost:8787/storage/alice/documents/hello.txt \
     └─────────┘          └─────────┘    └─────────────┘
 ```
 
-For offline development: R2 → local filesystem, D1 → SQLite.
+For offline development: R2 → local filesystem, D1 → SQLite (via a D1-compatible adapter), KV → absent.
 
-## API Endpoints
+The routes talk to storage through a small `StorageInterface`. In production `getStorage()` wraps the raw R2 binding in `R2Storage`; offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`.
+
+## Local development (offline)
+
+No Cloudflare account needed:
+
+```bash
+bun install
+bun run db:setup:local   # creates data/remotestorage.db + data/storage/
+bun run dev:offline      # http://localhost:8787 with live reload
+```
+
+`ADMIN_SECRET` defaults to `admin` offline; set it in `.dev.vars` or the environment to change it. `bun run dev` runs `wrangler dev` instead, which emulates R2/D1/KV locally.
+
+## API reference
 
 ### Storage
 
@@ -82,7 +203,7 @@ DELETE /storage/:username/*        Delete a file
 HEAD   /storage/:username/*        Get metadata only
 ```
 
-Requires `Authorization: Bearer <token>` with appropriate scope.
+Requires `Authorization: Bearer <token>` with appropriate scope. Paths ending in `/` are folders.
 
 ### WebFinger (discovery)
 
@@ -119,7 +240,7 @@ POST   /admin/login                 Sign in (sets session cookie)
 POST   /admin/logout                Sign out
 ```
 
-Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. Set `ADMIN_SECRET` in env to enable. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
+Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
 
 ### Account
 
@@ -147,7 +268,7 @@ Cookie-based session (8-hour expiry, HttpOnly, SameSite=Lax).
 2. App redirects user to `/oauth/:user/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
 3. User enters password, reviews scope, approves
 4. Server redirects back with `?code=...`
-5. App exchanges code at `/oauth/:user/token` → gets `access_token` (1-hour expiry) + `refresh_token`
+5. App exchanges code at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
 7. When the access token expires, exchange the refresh token at `/oauth/:user/token` with `grant_type=refresh_token`
 
@@ -155,23 +276,15 @@ Both `response_type=code` (authorization code) and `response_type=token` (implic
 
 ### Dev tokens (testing only)
 
-Unsigned JWTs — accepted only when `JWT_SECRET` is **not** set in the environment. Setting `JWT_SECRET` disables them entirely. Never use in production.
-
-```typescript
-import { createTestToken } from './src/index';
-const token = createTestToken('alice', 'documents:rw pictures:rw');
-```
-
-Or construct manually:
+Unsigned JWTs, accepted only when `JWT_SECRET` is **not** set. Setting `JWT_SECRET` disables them entirely — never rely on them in production. Generate one with:
 
 ```bash
-HEADER="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
-PAYLOAD=$(echo -n '{"sub":"alice","scopes":"documents:rw pictures:rw","iat":1706000000,"exp":9999999999}' \
-  | base64 -w0 | tr '+/' '-_' | tr -d '=')
-TOKEN="${HEADER}.${PAYLOAD}."
+TOKEN="$(bun run dev-token alice 'documents:rw pictures:rw')"
 ```
 
-## Storage Scopes
+`createTestToken(username, scopes)` is also exported from `src/index.ts` if you need it in code.
+
+## Storage scopes
 
 Scopes are per-module and grant read (`r`) or read-write (`rw`) access:
 
@@ -183,11 +296,11 @@ Scopes are per-module and grant read (`r`) or read-write (`rw`) access:
 
 Module names are arbitrary — any name works. The `public` module is readable without auth (GET only, files not folders).
 
-## Public Files
-
-Files under the `public` module are served without authentication:
+### Public files
 
 ```bash
+TOKEN="$(bun run dev-token alice 'public:rw')"
+
 # Upload (still requires auth)
 curl -X PUT http://localhost:8787/storage/alice/public/shared.txt \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/plain" \
@@ -198,13 +311,7 @@ curl http://localhost:8787/storage/alice/public/shared.txt
 # → Cache-Control: public, no-cache
 ```
 
-Folder listings under `/public/` still require auth.
-
-## User Management
-
-Users are created by an administrator — there is no self-registration.
-
-Username must match `[a-z0-9_.-]+` and password must be at least 8 characters.
+### User management (admin API)
 
 ```bash
 # Create user
@@ -226,18 +333,22 @@ curl -X PATCH http://localhost:8787/admin/users/alice/quota \
   -d '{"quota":10737418240}'
 ```
 
-Or use the dashboard at `/admin/`.
+## Project layout
 
-## Offline Development
-
-```bash
-bun run db:setup:local   # create local SQLite DB (one time)
-bun run dev:offline      # start server with live reload
+```
+src/
+  index.ts            Worker entry (Hono app)
+  server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
+  routes/             storage, webfinger, oauth, admin, account
+  services/           auth, r2 (+ getStorage adapter), local-storage, db/
+  middleware/         auth, cors
+  protocol/           constants (ETag normalisation, path validation)
+  scripts/            setup-local-db, dev-token
+drizzle/migrations/   D1 migrations
+test/                 unit, compliance and E2E suites
 ```
 
-Live reload is enabled via `bun --watch`. Storage goes to `data/storage/`, database to `data/remotestorage.db`.
-
-## Running Tests
+## Testing
 
 ```bash
 bun run test             # all tests (fast, mocked + offline server E2E)
@@ -249,76 +360,7 @@ bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 
 **339 tests** across 18 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, and E2E against the offline server.
 
-## Production Deployment
-
-```bash
-# 0. Enable R2 in the dashboard first (it requires a payment method on file)
-
-# 1. Create Cloudflare resources
-wrangler r2 bucket create remotestorage
-wrangler d1 create remotestorage-db
-wrangler kv namespace create RATE_LIMIT_KV
-
-# 2. Update wrangler.toml with the IDs printed above
-#    - d1_databases[0].database_id
-#    - kv_namespaces[0].id
-#    (migrations_dir is already set to drizzle/migrations)
-
-# 3. Run D1 migrations
-wrangler d1 migrations apply remotestorage-db --remote
-
-# 4. Set secrets
-wrangler secret put SESSION_SECRET   # random string, required
-wrangler secret put ADMIN_SECRET     # protects /admin/*, recommended
-wrangler secret put JWT_SECRET       # disables unsigned dev tokens, recommended in production
-
-# 5. Deploy
-bun run deploy
-```
-
-| Secret | Purpose |
-|--------|---------|
-| `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
-| `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
-| `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
-
-## Running on the Cloudflare Free Tier
-
-RSilo is sized to fit inside Cloudflare's free allowances with room to spare. The one thing to understand: **R2 is the only product here that can bill you on overage.** Workers, D1, and KV simply stop working when their free limits are reached, but R2 charges per GB-month and per operation once you pass its free tier — and R2 requires a payment method on file to enable, so overage is charged automatically.
-
-### Free allowances
-
-| Product | Free allowance | When exceeded |
-|---------|----------------|---------------|
-| Workers | 100,000 requests/day, 10 ms CPU/invocation | Hard stop (errors), no charge |
-| R2 storage | 10 GB-month (Standard class only) | $0.015 / GB-month |
-| R2 Class A operations | 1,000,000 / month | $4.50 / million |
-| R2 Class B operations | 10,000,000 / month | $0.36 / million |
-| R2 egress | Unlimited | Free |
-| D1 | 5 GB storage, 5M rows read/day, 100k rows written/day | Errors on the Free plan |
-| KV | 100k reads/day, 1k writes/day, 1 GB | Errors on the Free plan |
-
-### How RSilo maps to R2 operation classes
-
-| Client action | R2 call | Class |
-|---------------|---------|-------|
-| Upload a file (`PUT /storage/...`) | `PutObject` | A |
-| List a folder (`GET /storage/.../`) | `ListObjects` | A |
-| Download a file (`GET /storage/...`) | `GetObject` | B |
-| Read metadata (`HEAD /storage/...`) | `HeadObject` | B |
-| Delete a file (`DELETE /storage/...`) | `DeleteObject` | free |
-
-### Keeping the bill at $0
-
-1. **Stay on the Workers Free plan.** Free Workers hard-stop at 100k requests/day; the Paid plan auto-bills overages with no hard switch.
-2. **Keep the bucket private.** Do not enable the r2.dev public URL or attach a custom domain to the bucket. RSilo serves everything through the Worker (including the `public` module), and R2 does not bill unauthorized requests. A public bucket would also let callers bypass the Worker entirely.
-3. **Use Standard storage only.** Infrequent Access has **no free tier** and bills from the first operation — even from viewing the bucket in the dashboard.
-4. **Set a budget alert as an early warning.** Manage Account → Billing → Billable Usage → Create budget alert (or Notifications → Add → Budget Alert). It is **informational only** — Cloudflare offers no native hard spend cap for R2, and per-product billing notifications are only available on Professional plans or higher.
-5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet.
-
-> RemoteStorage clients never talk to R2 directly — they speak HTTP to the Worker, which reaches R2 through the binding. "Private bucket" and working RemoteStorage clients are not in conflict.
-
-## Known Limitations
+## Known limitations
 
 - **No self-registration** — users are created via admin API or dashboard
 - **Rate limiting** — requires a KV namespace binding; silently skipped without one
