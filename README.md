@@ -252,6 +252,8 @@ bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 ## Production Deployment
 
 ```bash
+# 0. Enable R2 in the dashboard first (it requires a payment method on file)
+
 # 1. Create Cloudflare resources
 wrangler r2 bucket create remotestorage
 wrangler d1 create remotestorage-db
@@ -260,13 +262,15 @@ wrangler kv namespace create RATE_LIMIT_KV
 # 2. Update wrangler.toml with the IDs printed above
 #    - d1_databases[0].database_id
 #    - kv_namespaces[0].id
+#    (migrations_dir is already set to drizzle/migrations)
 
 # 3. Run D1 migrations
-wrangler d1 migrations apply remotestorage-db
+wrangler d1 migrations apply remotestorage-db --remote
 
 # 4. Set secrets
 wrangler secret put SESSION_SECRET   # random string, required
 wrangler secret put ADMIN_SECRET     # protects /admin/*, recommended
+wrangler secret put JWT_SECRET       # disables unsigned dev tokens, recommended in production
 
 # 5. Deploy
 bun run deploy
@@ -277,6 +281,42 @@ bun run deploy
 | `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
 | `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
 | `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
+
+## Running on the Cloudflare Free Tier
+
+RSilo is sized to fit inside Cloudflare's free allowances with room to spare. The one thing to understand: **R2 is the only product here that can bill you on overage.** Workers, D1, and KV simply stop working when their free limits are reached, but R2 charges per GB-month and per operation once you pass its free tier — and R2 requires a payment method on file to enable, so overage is charged automatically.
+
+### Free allowances
+
+| Product | Free allowance | When exceeded |
+|---------|----------------|---------------|
+| Workers | 100,000 requests/day, 10 ms CPU/invocation | Hard stop (errors), no charge |
+| R2 storage | 10 GB-month (Standard class only) | $0.015 / GB-month |
+| R2 Class A operations | 1,000,000 / month | $4.50 / million |
+| R2 Class B operations | 10,000,000 / month | $0.36 / million |
+| R2 egress | Unlimited | Free |
+| D1 | 5 GB storage, 5M rows read/day, 100k rows written/day | Errors on the Free plan |
+| KV | 100k reads/day, 1k writes/day, 1 GB | Errors on the Free plan |
+
+### How RSilo maps to R2 operation classes
+
+| Client action | R2 call | Class |
+|---------------|---------|-------|
+| Upload a file (`PUT /storage/...`) | `PutObject` | A |
+| List a folder (`GET /storage/.../`) | `ListObjects` | A |
+| Download a file (`GET /storage/...`) | `GetObject` | B |
+| Read metadata (`HEAD /storage/...`) | `HeadObject` | B |
+| Delete a file (`DELETE /storage/...`) | `DeleteObject` | free |
+
+### Keeping the bill at $0
+
+1. **Stay on the Workers Free plan.** Free Workers hard-stop at 100k requests/day; the Paid plan auto-bills overages with no hard switch.
+2. **Keep the bucket private.** Do not enable the r2.dev public URL or attach a custom domain to the bucket. RSilo serves everything through the Worker (including the `public` module), and R2 does not bill unauthorized requests. A public bucket would also let callers bypass the Worker entirely.
+3. **Use Standard storage only.** Infrequent Access has **no free tier** and bills from the first operation — even from viewing the bucket in the dashboard.
+4. **Set a budget alert as an early warning.** Manage Account → Billing → Billable Usage → Create budget alert (or Notifications → Add → Budget Alert). It is **informational only** — Cloudflare offers no native hard spend cap for R2, and per-product billing notifications are only available on Professional plans or higher.
+5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet.
+
+> RemoteStorage clients never talk to R2 directly — they speak HTTP to the Worker, which reaches R2 through the binding. "Private bucket" and working RemoteStorage clients are not in conflict.
 
 ## Known Limitations
 
@@ -291,4 +331,6 @@ bun run deploy
 - [Armadietto (Node.js reference impl)](https://github.com/remotestorage/armadietto)
 - [Cloudflare Workers](https://workers.cloudflare.com/)
 - [Cloudflare R2](https://developers.cloudflare.com/r2/)
+- [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+- [Cloudflare budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/)
 - [Cloudflare D1](https://developers.cloudflare.com/d1/)
