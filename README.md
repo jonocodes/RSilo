@@ -346,7 +346,7 @@ bun run lint             # eslint src
 bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 ```
 
-**339 tests** across 18 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, and E2E against the offline server.
+**342 tests** across 19 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 

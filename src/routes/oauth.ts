@@ -154,7 +154,6 @@ oauthRouter.post('/:user/token', async (c) => {
   const contentType = c.req.header('Content-Type') || '';
 
   let grantType: string;
-  let clientSecret: string | undefined;
   let code: string | undefined;
   let redirectUri: string | undefined;
   let refreshToken: string | undefined;
@@ -162,14 +161,12 @@ oauthRouter.post('/:user/token', async (c) => {
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const params = new URLSearchParams(await c.req.text());
     grantType = params.get('grant_type') || '';
-    clientSecret = params.get('client_secret') || undefined;
     code = params.get('code') || undefined;
     redirectUri = params.get('redirect_uri') || undefined;
     refreshToken = params.get('refresh_token') || undefined;
   } else {
     const json = await c.req.json() as any;
     grantType = json.grant_type || '';
-    clientSecret = json.client_secret;
     code = json.code;
     redirectUri = json.redirect_uri;
     refreshToken = json.refresh_token;
@@ -192,17 +189,6 @@ oauthRouter.post('/:user/token', async (c) => {
 
     if (codeData.redirect_uri !== redirectUri) {
       return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
-    }
-
-    // Validate client_secret if provided
-    if (clientSecret) {
-      const client = await db?.prepare?.(
-        'SELECT * FROM oauth_clients WHERE id = ? AND secret = ?'
-      )?.bind?.(codeData.client_id, clientSecret)?.first?.();
-      
-      if (!client) {
-        return c.json({ error: 'invalid_client', error_description: 'Invalid client credentials' }, 400);
-      }
     }
 
     await db?.prepare?.('DELETE FROM oauth_codes WHERE code = ?')?.bind?.(code)?.run?.();
@@ -235,17 +221,6 @@ oauthRouter.post('/:user/token', async (c) => {
 
     if (!tokenData) {
       return c.json({ error: 'invalid_grant', error_description: 'Invalid refresh token' }, 400);
-    }
-
-    // Validate client_secret if provided
-    if (clientSecret) {
-      const client = await db?.prepare?.(
-        'SELECT * FROM oauth_clients WHERE id = ? AND secret = ?'
-      )?.bind?.(tokenData.client_id, clientSecret)?.first?.();
-      
-      if (!client) {
-        return c.json({ error: 'invalid_client', error_description: 'Invalid client credentials' }, 400);
-      }
     }
 
     const accessToken = generateToken();

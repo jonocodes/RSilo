@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings=0",
     "lint:fix": "eslint src --fix",
-    "db:migrate": "wrangler d1 migrations apply",
+    "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
