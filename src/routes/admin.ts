@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { hashPassword, signSessionToken, verifySessionToken } from '../services/auth';
+import { debugRouter } from './debug';
 
 export const adminRouter = new Hono();
 
@@ -367,6 +368,8 @@ adminRouter.get('/', async (c) => {
 });
 
 // ── API ───────────────────────────────────────────────────────────────────────
+
+adminRouter.route('/debug', debugRouter);
 
 adminRouter.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });

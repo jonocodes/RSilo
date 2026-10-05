@@ -153,7 +153,7 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
 2. **Keep the bucket private.** Do not enable the r2.dev public URL or attach a custom domain to the bucket. RSilo serves everything through the Worker (including the `public` module), and R2 does not bill unauthorized requests. A public bucket would also let callers bypass the Worker entirely.
 3. **Use Standard storage only.** Infrequent Access has no free tier and bills from the first operation — even from viewing the bucket in the dashboard.
 4. **Set a budget alert as an early warning.** In the Cloudflare dashboard go to **Manage Account → Billing → Billable Usage → Create budget alert** (or **Notifications → Add → Budget Alert**) and set a low threshold. You'll get an email if spend starts to rise. It is only a warning — Cloudflare has no built-in hard spending cap for R2, and per-product billing notifications require a Professional plan or higher.
-5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet.
+5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet. For visibility, Cloudflare's built-in R2 metrics already break operations down by Class A/B per bucket — see the bucket's **Metrics** tab or query the `r2OperationsAdaptiveGroups` GraphQL dataset — which is enough for the intended single-user setup.
 
 > RemoteStorage clients never talk to R2 directly — they speak HTTP to the Worker, which reaches R2 through the binding. "Private bucket" and working RemoteStorage clients are not in conflict.
 
@@ -242,6 +242,39 @@ POST   /admin/logout                Sign out
 ```
 
 Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
+
+### Debug (observability)
+
+Read-only endpoints for diagnosing a running instance. They live under `/admin`, so they inherit the same `ADMIN_SECRET` gate; secret values are never returned (booleans only).
+
+```
+GET    /admin/debug/token           Introspect a storage/OAuth token (whoami, scopes)
+POST   /admin/debug/token           Same, with the token in the JSON body
+GET    /admin/debug/storage/:user   Actual storage vs the DB counter, plus drift
+GET    /admin/debug/health/deep     Live round-trip check of each binding
+GET    /admin/debug/env             Redacted runtime, bindings and secret presence
+GET    /admin/debug/oauth           OAuth clients, tokens and pending codes
+GET    /admin/debug/echo            Echo a request; parse a storage path's scope
+```
+
+```bash
+# Who is this token, and what can it do?
+TOKEN="$(bun run dev-token alice 'documents:rw')"
+curl "http://localhost:8787/admin/debug/token?token=$TOKEN&scope=documents:rw&scope=pictures:r"
+
+# Does the DB usage counter match what is actually in storage?
+curl http://localhost:8787/admin/debug/storage/alice
+
+# Are R2, D1 and KV actually reachable?
+curl http://localhost:8787/admin/debug/health/deep
+
+# What scope would a request to this URL need?
+curl "http://localhost:8787/admin/debug/echo?path=/storage/alice/documents/note.txt&method=PUT"
+```
+
+`/admin/debug/storage/:user` recomputes usage by listing objects, which is an R2 **Class A** operation — call it on demand, not on a timer. `drift_bytes = actual_bytes - db_used_storage_bytes`; a positive value means the denormalised counter under-reports (quota is being under-enforced).
+
+`/admin/debug/echo` redacts `Authorization`, `Cookie` and `X-RS-Token`; to introspect a storage token pass it as `?token=` (or the `X-RS-Token` header), not as `Authorization`, which the admin gate consumes.
 
 ### Account
 
@@ -340,7 +373,7 @@ curl -X PATCH http://localhost:8787/admin/users/alice/quota \
 src/
   index.ts            Worker entry (Hono app)
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
-  routes/             storage, webfinger, oauth, admin, account
+  routes/             storage, webfinger, oauth, admin, account, debug
   services/           auth, r2 (+ getStorage adapter), local-storage, db/
   middleware/         auth, cors
   protocol/           constants (ETag normalisation, path validation)
@@ -359,7 +392,7 @@ bun run lint             # eslint src
 bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 ```
 
-**342 tests** across 19 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
+**362 tests** across 20 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, debug/observability, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 

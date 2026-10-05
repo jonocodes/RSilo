@@ -23,6 +23,7 @@ function makeMockDb() {
     getTokensByUser: vi.fn().mockResolvedValue([]),
     createCode: vi.fn().mockResolvedValue(undefined),
     getCode: vi.fn().mockResolvedValue(null),
+    getAllCodes: vi.fn().mockResolvedValue([]),
     deleteCode: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -185,6 +186,23 @@ describe('D1Adapter — storage usage', () => {
     const result = await adapter.prepare('SELECT used_storage_bytes FROM users WHERE id = ?').bind('user-uuid').first();
     expect(mockDb.getStorageUsage).toHaveBeenCalledWith('user-uuid');
     expect((result as any)?.used_storage_bytes).toBe(8192);
+  });
+});
+
+describe('D1Adapter — oauth codes listing', () => {
+  let mockDb: ReturnType<typeof makeMockDb>;
+  let adapter: D1Adapter;
+
+  beforeEach(() => {
+    mockDb = makeMockDb();
+    adapter = new D1Adapter(mockDb as any);
+  });
+
+  it('SELECT * FROM oauth_codes calls getAllCodes', async () => {
+    mockDb.getAllCodes.mockResolvedValue([{ code: 'abc123', user_id: 'alice', scope: 'documents:rw' }]);
+    const result = await adapter.prepare('SELECT * FROM oauth_codes').all();
+    expect((result as any).results).toHaveLength(1);
+    expect((result as any).results[0].code).toBe('abc123');
   });
 });
 

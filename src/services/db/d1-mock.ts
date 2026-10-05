@@ -112,6 +112,10 @@ export class D1Adapter {
         },
 
         all: async () => {
+          if (sql.includes('FROM oauth_codes')) {
+            const codes = await self.db.getAllCodes();
+            return { results: codes };
+          }
           if (sql.includes('oauth_tokens') && sql.includes('user_id = ?')) {
             const tokens = await self.db.getTokensByUser(values[0]);
             return { results: tokens };
