@@ -45,11 +45,13 @@ The service runs as a single Cloudflare Worker with three bindings: **R2** (file
 
 Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2/D1/KV automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
 
+The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance).
+
 ### Option B — Command line
 
 Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file), plus `bun` and `wrangler`.
 
-The easiest way is the bundled setup script, which logs in, creates the resources, patches `wrangler.toml`, runs migrations, generates secrets, and deploys:
+The easiest way is the bundled setup script, which logs in, creates the resources, writes a gitignored `wrangler.prod.toml` with their real IDs, runs migrations, generates secrets, and deploys:
 
 ```bash
 bun install
@@ -70,10 +72,10 @@ wrangler login          # or export CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
 wrangler r2 bucket create remotestorage
 wrangler d1 create remotestorage-db
 wrangler kv namespace create RATE_LIMIT_KV
-# put the printed IDs into wrangler.toml (database_id, kv id)
+# copy wrangler.toml to wrangler.prod.toml (gitignored) and put the
+# printed IDs there (database_id, kv id)
 
-# Migrate and deploy
-wrangler d1 migrations apply remotestorage-db --remote
+# Migrate and deploy (bun run deploy auto-detects wrangler.prod.toml)
 bun run deploy
 
 # Secrets
@@ -82,7 +84,7 @@ wrangler secret put ADMIN_SECRET     # bun run secret
 wrangler secret put JWT_SECRET       # bun run secret
 ```
 
-Alternatively, delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` and run `wrangler deploy` — wrangler will provision the resources and write their IDs back — then `bun run db:migrate:remote`.
+Alternatively, let wrangler provision the resources: delete the `database_id` and KV `id` lines from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy them from `wrangler d1 list` / `wrangler kv namespace list` if you need them later.
 
 </details>
 
@@ -93,6 +95,18 @@ Alternatively, delete the `database_id`, `bucket_name` and KV `id` lines from `w
 | `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
 
 Generate any of them with `bun run secret`.
+
+### Deploying updates to your own instance
+
+The committed `wrangler.toml` holds placeholder IDs so the Deploy to Cloudflare button works for everyone. Your real, account-specific IDs live in the gitignored `wrangler.prod.toml`, written by `bun run setup`.
+
+`bun run deploy` uses `wrangler.prod.toml` automatically when it exists, so shipping an update is just:
+
+```bash
+bun run deploy
+```
+
+If `wrangler.prod.toml` is missing, it falls back to the committed `wrangler.toml` — the path Cloudflare's button uses, where the IDs are injected for you. To rebuild the prod config after provisioning new resources, re-run `bun run setup` (or copy `wrangler.toml` and paste in the IDs by hand).
 
 ## Create your account and sign in
 
@@ -344,7 +358,7 @@ src/
   services/           auth, r2 (+ getStorage adapter), local-storage, db/
   middleware/         auth, cors
   protocol/           constants (ETag normalisation, path validation)
-  scripts/            setup-local-db, dev-token
+  scripts/            setup, deploy, secret, dev-token, setup-local-db
 drizzle/migrations/   D1 migrations
 test/                 unit, compliance and E2E suites
 ```
@@ -359,7 +373,7 @@ bun run lint             # eslint src
 bun test test/e2e/storage-e2e.test.ts  # E2E against real server
 ```
 
-**342 tests** across 19 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
+**344 tests** across 20 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 

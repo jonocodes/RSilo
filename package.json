@@ -10,14 +10,14 @@
     "secret": "bun run src/scripts/secret.ts",
     "setup": "bun run src/scripts/setup.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
-    "deploy": "bun run db:migrate:remote && wrangler deploy",
+    "deploy": "bun run src/scripts/deploy.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings=0",
     "lint:fix": "eslint src --fix",
     "db:migrate": "wrangler d1 migrations apply DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+    "db:migrate:remote": "bun run src/scripts/deploy.ts --migrate-only"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.15.1",

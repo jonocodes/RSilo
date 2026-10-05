@@ -5,6 +5,7 @@ import { join } from 'node:path';
 const ROOT = process.cwd();
 const WRANGLER = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 const CONFIG = join(ROOT, 'wrangler.toml');
+const PROD_CONFIG = join(ROOT, 'wrangler.prod.toml');
 
 const BUCKET = process.env.RSILO_BUCKET ?? 'remotestorage';
 const DB_NAME = process.env.RSILO_DB ?? 'remotestorage-db';
@@ -89,11 +90,11 @@ if (kvId) {
 let toml = readFileSync(CONFIG, 'utf8');
 toml = toml.replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
 toml = toml.replace(/(\[\[kv_namespaces\]\][\s\S]*?\bid\s*=\s*)"[^"]*"/, `$1"${kvId}"`);
-writeFileSync(CONFIG, toml);
-console.log('✓ wrangler.toml updated with resource IDs');
+writeFileSync(PROD_CONFIG, toml);
+console.log('✓ wrangler.prod.toml written with resource IDs (gitignored)');
 
 console.log('\nApplying D1 migrations…');
-if (wrangler(['d1', 'migrations', 'apply', DB_NAME, '--remote']).status !== 0) {
+if (wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', PROD_CONFIG]).status !== 0) {
   fail('D1 migrations failed.');
 }
 
@@ -104,7 +105,7 @@ setSecret('JWT_SECRET', randomHex(32));
 setSecret('ADMIN_SECRET', adminSecret);
 
 console.log('\nDeploying…');
-const deploy = wrangler(['deploy'], true);
+const deploy = wrangler(['deploy', '--config', PROD_CONFIG], true);
 console.log(deploy.out);
 if (deploy.status !== 0) fail('Deploy failed.');
 

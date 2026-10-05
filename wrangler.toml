@@ -1,3 +1,7 @@
+# Committed config with placeholder resource IDs so the "Deploy to Cloudflare"
+# button can provision fresh resources in the deployer's account.
+# Never commit real IDs here — local production IDs live in the gitignored
+# wrangler.prod.toml (written by `bun run setup`).
 name = "rsilo"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
@@ -10,12 +14,12 @@ bucket_name = "remotestorage"
 [[d1_databases]]
 binding = "DB"
 database_name = "remotestorage-db"
-database_id = "4952ded9-7a41-41bf-97fd-7348ba1d47bd"
+database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "drizzle/migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "e977c15659514ce19d92b2a5f355d912"
+id = "00000000000000000000000000000000"
 
 [observability]
 enabled = true
