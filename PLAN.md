@@ -237,9 +237,9 @@ Completed. OAuth routes implemented, D1 schema created.
 - [x] OAuth authorize endpoint (HTML form-based consent)
 - [x] OAuth token endpoint (authorization_code, refresh_token grants)
 - [x] Admin UI dashboard (`/admin/` HTML page)
-- [ ] Storage quotas per user (enforcement)
-- [ ] Rate limiting (enforcement)
-- [ ] Admin API key protection
+- [x] Storage quotas per user (atomic enforcement and rollback)
+- [x] Rate limiting (storage and authentication endpoints)
+- [x] Admin API key/session protection
 
 ---
 
@@ -249,37 +249,30 @@ Issues found in code review, grouped by priority.
 
 ## Critical (auth bypass / data exposure)
 
-- [ ] **JWT signing**: swap `alg: 'none'` for HS256 using `JWT_SECRET` — currently any forged token is accepted (`src/services/auth.ts:9-17`)
-- [ ] **Admin auth**: protect all `/admin/*` routes with an API key or restrict to internal-only (`src/routes/admin.ts`)
-- [ ] **OAuth client secret validation**: `clientSecret` is parsed but never checked against the database in the token endpoint (`src/routes/oauth.ts:186-256`)
-- [ ] **OAuth client ID mismatch**: use `codeData.client_id` instead of the request's `clientId` when inserting the token (`src/routes/oauth.ts:245`)
+- [x] **JWT signing**: production JWTs use HS256 with `JWT_SECRET`; unsigned test tokens require explicit local-development mode
+- [x] **Admin auth**: `/admin/*` uses API-key or admin-session authentication and fails closed when unconfigured
+- [x] **Public OAuth clients**: RemoteStorage clients are dynamically registered public clients, so no unused `clientSecret` is accepted or implied
+- [x] **OAuth client ID mismatch**: token insertion uses the client ID persisted with the authorization code
 
 ## High (reliability / data integrity)
 
-- [ ] **Authorization codes in KV/D1**: codes are stored in an in-memory `Map` — Cloudflare spins up multiple Worker instances so codes won't survive across them (`src/routes/oauth.ts:41-48`)
-- [ ] **Quota not decremented on delete**: `handleStorageDelete` never updates `used_storage_bytes` (`src/routes/storage.ts:257-283`)
-- [ ] **Quota race condition**: check → write → update is not atomic; concurrent requests can exceed quota (`src/routes/storage.ts:218-250`)
+- [x] **Authorization codes in D1**: codes are persisted, consumed, and expired through the database
+- [x] **Delete quota accounting**: successful deletes decrement `used_storage_bytes`, with rollback on object-storage failure
+- [x] **Atomic quota enforcement**: writes reserve their exact size delta atomically before object storage and roll back failed writes
 
 ## Medium (spec compliance / correctness)
 
-- [ ] **Weak folder ETag**: character-code sum collides trivially; replace with `crypto.subtle.digest('SHA-256', ...)` (`src/routes/storage.ts:181-182`)
-- [ ] **`If-Match` not enforced on missing files**: precondition check is skipped when `currentEtag === null`, violating the spec (`src/routes/storage.ts:238-241`)
-- [ ] **CORS origin fallback**: falls back to `*` when origin header is absent; reflected origin should also be validated (`src/middleware/cors.ts:9`)
+- [x] **Folder ETags**: folder descriptions use SHA-256-derived ETags
+- [x] **`If-Match` on missing files**: PUT and DELETE return 412 when the target does not exist
+- [x] **CORS origin handling**: supplied origins are reflected; origin-less requests use `*`, without credentialed CORS
 
 ---
 
 ## Current Test Status
 
-**158 tests passing** across 9 test files:
-- `test/storage.test.ts` - 21 tests (core storage CRUD, folder listing, path validation, ETag, If-Match)
-- `test/webfinger.test.ts` - 7 tests (WebFinger discovery, OAuth endpoint)
-- `test/scopes.test.ts` - 7 tests (scope-based access control, token validation)
-- `test/compatibility.test.ts` - 21 tests (RemoteStorage.js client compatibility, error handling, HEAD requests, Content-Type, multi-file folder listing, rate limiting, quotas)
-- `test/oauth.test.ts` - 6 tests (OAuth endpoints, discoverability, CORS)
-- `test/admin.test.ts` - 8 tests (admin endpoints, user management, stats)
-- `test/compliance/remoteStorage.test.ts` - 38 tests (RemoteStorage protocol compliance by section)
-- `test/compliance/webfinger.test.ts` - 24 tests (WebFinger, ETag, Content-Type, folder listing compliance)
-- `test/compliance/edgeCases.test.ts` - 26 tests (auth edge cases, path validation, content negotiation, HTTP methods)
+**364 tests passing** across 21 test files. The suite covers core storage behavior, RemoteStorage/WebFinger compliance, authentication and OAuth, admin/account flows, quota accounting, D1/R2 adapters, schema checks, security regressions, and offline-server E2E behavior.
+
+Source and test TypeScript are checked separately with `bun run typecheck` and `bun run typecheck:test`; ESLint covers both `src` and `test`.
 
 ## Recent Fixes
 

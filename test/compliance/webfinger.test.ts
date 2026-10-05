@@ -315,7 +315,7 @@ describe('Content-Type Compliance', () => {
   it('stores Content-Type from PUT request', async () => {
     const storage = {
       async get() { return null; },
-      async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+      async put(_key: string, _body: ArrayBuffer, _options?: { httpMetadata?: { contentType?: string } }) {
         return '"test"';
       },
       async delete() {},
@@ -361,7 +361,7 @@ describe('Content-Type Compliance', () => {
   it('defaults to application/octet-stream when no Content-Type provided', async () => {
     const storage = {
       async get() { return null; },
-      async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+      async put(_key: string, _body: ArrayBuffer, _options?: { httpMetadata?: { contentType?: string } }) {
         return '"test"';
       },
       async delete() {},
@@ -389,7 +389,7 @@ describe('Folder Listing Compliance', () => {
       async put() { return '"test"'; },
       async delete() {},
       async head() { return null; },
-      async list(options: { prefix: string }) {
+      async list(_options: { prefix: string }) {
         return { objects: [] };
       },
     };
@@ -414,7 +414,7 @@ describe('Folder Listing Compliance', () => {
       async put() { return '"test"'; },
       async delete() {},
       async head() { return null; },
-      async list(options: { prefix: string }) {
+      async list(_options: { prefix: string }) {
         return { objects: [
           { key: 'users/alice/storage/documents/file.txt', etag: '"abc"' }
         ] };
@@ -442,7 +442,7 @@ describe('Folder Listing Compliance', () => {
       async put() { return '"test"'; },
       async delete() {},
       async head() { return null; },
-      async list(options: { prefix: string }) {
+      async list(_options: { prefix: string }) {
         return { objects: [
           { key: 'users/alice/storage/documents/sub/file.txt', etag: '"abc"' }
         ] };
@@ -468,7 +468,7 @@ describe('Folder Listing Compliance', () => {
       async put() { return '"test"'; },
       async delete() {},
       async head() { return null; },
-      async list(options: { prefix: string }) {
+      async list(_options: { prefix: string }) {
         return { objects: [] };
       },
     };

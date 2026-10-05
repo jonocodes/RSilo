@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
+import { waitForServer } from './helpers';
 
 const SERVER_URL = 'http://localhost:8790';
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-account');
@@ -31,14 +32,7 @@ describe('Account E2E', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    await new Promise<void>((resolve) => {
-      server.stdout?.on('data', (data: Buffer) => {
-        if (data.toString().includes('Listening')) {
-          resolve();
-        }
-      });
-      setTimeout(resolve, 2000);
-    });
+    await waitForServer(SERVER_URL);
   });
 
   afterAll(async () => {
@@ -95,7 +89,7 @@ describe('Account E2E', () => {
   });
 
   it('login with wrong password redirects to error', async () => {
-    const user = await createUser('testuser1', 'password123');
+    await createUser('testuser1', 'password123');
 
     const res = await fetch(`${SERVER_URL}/account/login`, {
       method: 'POST',
@@ -111,7 +105,7 @@ describe('Account E2E', () => {
   });
 
   it('login with correct password sets cookie and redirects to browse', async () => {
-    const user = await createUser('testuser2', 'password123');
+    await createUser('testuser2', 'password123');
 
     const res = await fetch(`${SERVER_URL}/account/login`, {
       method: 'POST',

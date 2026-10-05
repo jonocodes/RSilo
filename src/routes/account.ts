@@ -1,15 +1,40 @@
 import { Hono } from 'hono';
 import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
+import { getSessionSecret, isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
+import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
+import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { enforceRateLimit } from '../services/rate-limit';
+import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 
 export const accountRouter = new Hono();
 
 const SESSION_COOKIE = 'rsilo_session';
 const SESSION_EXPIRY = 28800; // 8 hours
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "form-action 'self'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
 
-function getSessionSecret(env: any): string {
-  return env?.SESSION_SECRET || 'dev-session-secret-change-in-production';
-}
+accountRouter.use('*', async (c, next) => {
+  await next();
+  c.header('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('X-Content-Type-Options', 'nosniff');
+});
+
+accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
+  headers: {
+    'Content-Type': 'text/javascript; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+  },
+}));
 
 function getSessionFromRequest(req: Request): string | null {
   const cookie = req.headers.get('Cookie') || '';
@@ -25,8 +50,9 @@ function getSessionFromRequest(req: Request): string | null {
 
 async function getSessionUser(c: any): Promise<string | null> {
   const token = getSessionFromRequest(c.req.raw);
-  if (!token) return null;
-  return verifySessionToken(token, getSessionSecret(c.env));
+  const secret = getSessionSecret(c.env);
+  if (!token || !secret) return null;
+  return verifySessionToken(token, secret);
 }
 
 function sessionCookieHeader(token: string, maxAge: number): string {
@@ -143,6 +169,7 @@ function renderPage(title: string, username: string, body: string, activePage = 
     </form>
   </header>
   ${body}
+  <script src="/account/client.js" defer></script>
 </body>
 </html>`;
 }
@@ -199,6 +226,8 @@ accountRouter.post('/login', async (c) => {
   const username = (body.username || '').trim().toLowerCase();
   const password = body.password || '';
 
+  const rateLimited = await enforceRateLimit(c, { namespace: 'account-login', account: username });
+  if (rateLimited) return rateLimited;
   if (!username || !password) return c.redirect('/account/?error=1', 302);
 
   const db = getDb(c);
@@ -208,7 +237,10 @@ accountRouter.post('/login', async (c) => {
     return c.redirect('/account/?error=1', 302);
   }
 
-  const token = await signSessionToken(username, getSessionSecret(c.env), SESSION_EXPIRY);
+  const secret = getSessionSecret(c.env);
+  if (!secret) return c.text('Server authentication is not configured', 503);
+
+  const token = await signSessionToken(username, secret, SESSION_EXPIRY);
   return new Response(null, {
     status: 302,
     headers: {
@@ -250,7 +282,7 @@ accountRouter.get('/browse', async (c) => {
           ${!item.isDir ? `
             <a href="/account/view/${encodeURIComponent(item.name)}" class="btn btn-sm">View</a>
             <a href="/account/download/${encodeURIComponent(item.name)}" class="btn btn-sm" download>Download</a>
-            <form method="POST" action="/account/delete/${encodeURIComponent(item.name)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
+            <form method="POST" action="/account/delete/${encodeURIComponent(item.name)}" style="margin:0" data-confirm-message="Delete ${escapeHtml(item.name)}?">
               <button class="btn btn-sm btn-danger">Delete</button>
             </form>` : ''}
         </td>
@@ -270,29 +302,10 @@ accountRouter.get('/browse', async (c) => {
         <input type="text" id="upload-module" placeholder="documents" style="padding:.35rem .6rem;border:1px solid #ddd;border-radius:4px;font-size:.875rem;width:140px">
         <label for="upload-files">Files:</label>
         <input type="file" id="upload-files" multiple>
-        <button class="btn btn-primary btn-sm" onclick="uploadToModule()">Upload</button>
+        <button class="btn btn-primary btn-sm" data-upload-path="" data-folder-input="upload-module" data-file-input="upload-files">Upload</button>
       </div>
     </div>
-  </div>
-  <script>
-    function uploadToModule() {
-      const mod = document.getElementById('upload-module').value.trim();
-      const files = document.getElementById('upload-files').files;
-      if (!files.length) { alert('Select at least one file'); return; }
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = '/account/upload/' + (mod ? mod.split('/').map(encodeURIComponent).join('/') : '');
-      form.enctype = 'multipart/form-data';
-      const input = document.createElement('input');
-      input.type = 'file'; input.name = 'files'; input.multiple = true;
-      form.appendChild(input);
-      document.body.appendChild(form);
-      const dt = new DataTransfer();
-      for (const f of files) dt.items.add(f);
-      input.files = dt.files;
-      form.submit();
-    }
-  </script>`;
+  </div>`;
 
   return new Response(renderPage('Files', username, body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -330,7 +343,7 @@ accountRouter.get('/browse/*', async (c) => {
             ${!item.isDir ? `
               <a href="/account/view/${encodePath(itemPath)}" class="btn btn-sm">View</a>
               <a href="/account/download/${encodePath(itemPath)}" class="btn btn-sm" download="${escapeHtml(item.name)}">Download</a>
-              <form method="POST" action="/account/delete/${encodePath(itemPath)}" style="margin:0" onsubmit="return confirm('Delete ${escapeHtml(item.name)}?')">
+              <form method="POST" action="/account/delete/${encodePath(itemPath)}" style="margin:0" data-confirm-message="Delete ${escapeHtml(item.name)}?">
                 <button class="btn btn-sm btn-danger">Delete</button>
               </form>` : ''}
           </td>
@@ -351,29 +364,8 @@ accountRouter.get('/browse/*', async (c) => {
         <input type="text" id="upload-sub" placeholder="new-folder" style="padding:.35rem .6rem;border:1px solid #ddd;border-radius:4px;font-size:.875rem;width:140px">
         <label>Files:</label>
         <input type="file" id="upload-files-sub" multiple>
-        <button class="btn btn-primary btn-sm" onclick="uploadHere()">Upload</button>
+        <button class="btn btn-primary btn-sm" data-upload-path="${escapeHtml(browsePath)}" data-folder-input="upload-sub" data-file-input="upload-files-sub">Upload</button>
       </div>
-      <script>
-        function uploadHere() {
-          const sub = document.getElementById('upload-sub').value.trim();
-          const files = document.getElementById('upload-files-sub').files;
-          if (!files.length) { alert('Select at least one file'); return; }
-          const base = ${JSON.stringify(browsePath)};
-          const target = sub ? (base ? base + '/' + sub : sub) : base;
-          const form = document.createElement('form');
-          form.method = 'POST';
-          form.action = '/account/upload/' + target.split('/').map(encodeURIComponent).join('/');
-          form.enctype = 'multipart/form-data';
-          const input = document.createElement('input');
-          input.type = 'file'; input.name = 'files'; input.multiple = true;
-          form.appendChild(input);
-          document.body.appendChild(form);
-          const dt = new DataTransfer();
-          for (const f of files) dt.items.add(f);
-          input.files = dt.files;
-          form.submit();
-        }
-      </script>
     </div>
   </div>`;
 
@@ -401,7 +393,7 @@ accountRouter.get('/download/*', async (c) => {
   return new Response(result.body, {
     headers: {
       'Content-Type': result.metadata.contentType || 'application/octet-stream',
-      'Content-Length': String(result.metadata.contentLength || result.body.byteLength),
+      'Content-Length': String(result.metadata.contentLength),
       'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
       'ETag': result.metadata.etag || '',
     },
@@ -437,7 +429,9 @@ accountRouter.get('/view/*', async (c) => {
     return c.redirect(`/account/download/${encodePath(filePath)}`, 302);
   }
 
-  const buffer = result.body instanceof ArrayBuffer ? result.body : await (result.body as any).arrayBuffer();
+  const maximum = maxObjectSize(c.env);
+  if (result.metadata.contentLength > maximum) return c.text(`Object exceeds the ${maximum}-byte limit`, 413);
+  const buffer = result.body instanceof ArrayBuffer ? result.body : await new Response(result.body).arrayBuffer();
   const text = new TextDecoder().decode(buffer);
   const filename = filePath.split('/').pop() || filePath;
 
@@ -457,51 +451,14 @@ accountRouter.get('/view/*', async (c) => {
       <div style="padding:0.75rem 1rem;border-bottom:1px solid #eee;display:flex;align-items:center;gap:0.5rem;background:#fafafa">
         <span style="font-weight:500;font-size:0.9rem;flex:1">${escapeHtml(filename)}</span>
         <a href="/account/download/${encodePath(filePath)}" class="btn btn-sm" download="${escapeHtml(filename)}">Download</a>
-        <button id="edit-btn" class="btn btn-sm btn-primary" onclick="startEdit()">Edit</button>
-        <button id="save-btn" class="btn btn-sm btn-primary" style="display:none" onclick="saveEdit()">Save</button>
-        <button id="cancel-btn" class="btn btn-sm" style="display:none;border:1px solid #ddd" onclick="cancelEdit()">Cancel</button>
+        <button id="edit-btn" class="btn btn-sm btn-primary">Edit</button>
+        <button id="save-btn" class="btn btn-sm btn-primary" style="display:none" data-save-path="/account/save/${encodePath(filePath)}">Save</button>
+        <button id="cancel-btn" class="btn btn-sm" style="display:none;border:1px solid #ddd">Cancel</button>
       </div>
       <pre id="view-pre" style="padding:1rem;margin:0;overflow-x:auto;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;background:white">${escapeHtml(text)}</pre>
-      <textarea id="edit-area" style="display:none;width:100%;padding:1rem;border:none;font-family:monospace;font-size:0.85rem;line-height:1.5;resize:vertical;min-height:400px;outline:none;box-sizing:border-box"></textarea>
+      <textarea id="edit-area" style="display:none;width:100%;padding:1rem;border:none;font-family:monospace;font-size:0.85rem;line-height:1.5;resize:vertical;min-height:400px;outline:none;box-sizing:border-box">${escapeHtml(text)}</textarea>
     </div>
-  </div>
-  <script>
-    const original = ${JSON.stringify(text)};
-    function startEdit() {
-      document.getElementById('view-pre').style.display = 'none';
-      const ta = document.getElementById('edit-area');
-      ta.value = original;
-      ta.style.display = 'block';
-      ta.style.height = Math.max(400, ta.scrollHeight) + 'px';
-      ta.focus();
-      document.getElementById('edit-btn').style.display = 'none';
-      document.getElementById('save-btn').style.display = '';
-      document.getElementById('cancel-btn').style.display = '';
-    }
-    function cancelEdit() {
-      document.getElementById('edit-area').style.display = 'none';
-      document.getElementById('view-pre').style.display = '';
-      document.getElementById('edit-btn').style.display = '';
-      document.getElementById('save-btn').style.display = 'none';
-      document.getElementById('cancel-btn').style.display = 'none';
-    }
-    async function saveEdit() {
-      const content = document.getElementById('edit-area').value;
-      const btn = document.getElementById('save-btn');
-      btn.textContent = 'Saving…';
-      btn.disabled = true;
-      const form = new FormData();
-      form.append('content', content);
-      const res = await fetch('/account/save/${encodePath(filePath)}', { method: 'POST', body: form });
-      if (res.ok || res.redirected) {
-        location.reload();
-      } else {
-        alert('Save failed');
-        btn.textContent = 'Save';
-        btn.disabled = false;
-      }
-    }
-  </script>`;
+  </div>`;
 
   return new Response(renderPage(filename, username, body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -526,13 +483,22 @@ accountRouter.post('/save/*', async (c) => {
   const existing = await storage.head(key);
   const contentType = existing?.contentType || 'text/plain; charset=utf-8';
   const encoded = new TextEncoder().encode(content);
-  await storage.put(key, encoded.buffer as ArrayBuffer, contentType);
-
-  const db = getDb(c);
-  if (db?.prepare && existing) {
-    const delta = encoded.byteLength - (existing.contentLength || 0);
-    await db.prepare('UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes + ?) WHERE username = ?')
-      .bind(delta, username).run();
+  if (encoded.byteLength > maxObjectSize(c.env)) return c.text('Object exceeds the configured size limit', 413);
+  try {
+    await putUserObject({
+      storage,
+      db: getDb(c),
+      allowUnaccounted: isLocalDevelopment(c.env),
+      username,
+      key,
+      body: encoded.buffer as ArrayBuffer,
+      contentType,
+      existing,
+    });
+  } catch (error) {
+    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
+    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+    throw error;
   }
 
   return new Response(null, { status: 204 });
@@ -544,6 +510,13 @@ accountRouter.post('/upload/*', async (c) => {
   const username = await getSessionUser(c);
   if (!username) return c.redirect('/account/', 302);
 
+  const maximum = maxObjectSize(c.env);
+  try {
+    rejectOversizedContentLength(c.req.raw, maximum, 1024 * 1024);
+  } catch (error) {
+    if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
+    throw error;
+  }
   const folderPath = c.req.path.replace(/^\/account\/upload\/?/, '');
 
   const body = await c.req.parseBody({ all: true }) as any;
@@ -555,6 +528,9 @@ accountRouter.post('/upload/*', async (c) => {
   if (!fileList.length) {
     return c.redirect(`/account/browse/${encodePath(folderPath)}`, 302);
   }
+  if (fileList.some((file) => file.size > maximum)) {
+    return c.text('Object exceeds the configured size limit', 413);
+  }
 
   const storage = getStorage(c);
   const db = getDb(c);
@@ -563,11 +539,22 @@ accountRouter.post('/upload/*', async (c) => {
     const filePath = folderPath ? `${folderPath}/${file.name}` : file.name;
     const key = buildKey(username, filePath);
     const buffer = await file.arrayBuffer();
-    await storage.put(key, buffer, file.type || 'application/octet-stream');
-
-    if (db?.prepare) {
-      await db.prepare('UPDATE users SET used_storage_bytes = used_storage_bytes + ? WHERE username = ?')
-        .bind(buffer.byteLength, username).run();
+    const existing = await storage.head(key);
+    try {
+      await putUserObject({
+        storage,
+        db,
+        allowUnaccounted: isLocalDevelopment(c.env),
+        username,
+        key,
+        body: buffer,
+        contentType: file.type || 'application/octet-stream',
+        existing,
+      });
+    } catch (error) {
+      if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
+      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+      throw error;
     }
   }
 
@@ -588,11 +575,18 @@ accountRouter.post('/delete/*', async (c) => {
 
   const existing = await storage.head(key);
   if (existing) {
-    await storage.delete(key);
-    const db = getDb(c);
-    if (db?.prepare) {
-      await db.prepare('UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes - ?) WHERE username = ?')
-        .bind(existing.contentLength || 0, username).run();
+    try {
+      await deleteUserObject({
+        storage,
+        db: getDb(c),
+        allowUnaccounted: isLocalDevelopment(c.env),
+        username,
+        key,
+        existing,
+      });
+    } catch (error) {
+      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+      throw error;
     }
   }
 
@@ -621,8 +615,8 @@ accountRouter.get('/tokens', async (c) => {
           <td><span style="font-size:.8rem;color:#555">${escapeHtml(tok.scopes)}</span></td>
           <td class="size">${expired ? '<span style="color:#dc3545">Expired</span>' : exp.toLocaleDateString()}</td>
           <td class="actions">
-            <form method="POST" action="/account/tokens/${escapeHtml(tok.id)}/revoke" style="margin:0"
-              onsubmit="return confirm('Revoke this token?')">
+            <form method="POST" action="/account/tokens/${encodeURIComponent(tok.id)}/revoke" style="margin:0"
+              data-confirm-message="Revoke this token?">
               <button class="btn btn-sm btn-danger">Revoke</button>
             </form>
           </td>

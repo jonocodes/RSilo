@@ -1,5 +1,8 @@
 import { Hono } from 'hono';
 import { hashPassword, signSessionToken, verifySessionToken } from '../services/auth';
+import { getAdminSecret, isLocalDevelopment } from '../config';
+import { buildKey, getStorage } from '../services/r2';
+import { enforceRateLimit } from '../services/rate-limit';
 import { debugRouter } from './debug';
 
 export const adminRouter = new Hono();
@@ -24,10 +27,13 @@ function adminCookieHeader(token: string, maxAge: number): string {
 }
 
 adminRouter.use('*', async (c, next) => {
-  const secret = (c.env as any)?.ADMIN_SECRET;
+  const secret = getAdminSecret(c.env);
   if (!secret) {
-    await next();
-    return;
+    if (isLocalDevelopment(c.env)) {
+      await next();
+      return;
+    }
+    return c.json({ error: 'Server authentication is not configured' }, 503);
   }
 
   // Login/logout routes are always accessible
@@ -102,7 +108,7 @@ function loginPage(error = false): string {
 }
 
 adminRouter.get('/login', async (c) => {
-  const secret = (c.env as any)?.ADMIN_SECRET;
+  const secret = getAdminSecret(c.env);
   if (!secret) return c.redirect('/admin', 302);
 
   const sessionToken = getAdminCookie(c.req.raw);
@@ -114,9 +120,11 @@ adminRouter.get('/login', async (c) => {
 });
 
 adminRouter.post('/login', async (c) => {
-  const secret = (c.env as any)?.ADMIN_SECRET;
+  const secret = getAdminSecret(c.env);
   if (!secret) return c.redirect('/admin', 302);
 
+  const rateLimited = await enforceRateLimit(c, { namespace: 'admin-login', account: 'admin' });
+  if (rateLimited) return rateLimited;
   const body = await c.req.parseBody() as any;
   const submitted = (body.secret || '').trim();
 
@@ -455,8 +463,41 @@ adminRouter.delete('/users/:username', async (c) => {
   }
   const existing = await db.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
   if (!existing) return c.json({ error: 'User not found' }, 404);
-  await db.prepare('DELETE FROM users WHERE username = ?').bind(username).run();
-  return c.json({ success: true });
+
+  const storage = getStorage(c);
+  if (!storage || typeof storage.list !== 'function' || typeof storage.delete !== 'function') {
+    return c.json({ error: 'Storage not available' }, 503);
+  }
+
+  const prefix = buildKey(username, '');
+  let deletedObjects = 0;
+  try {
+    const listed = await storage.list(prefix);
+    const objectKeys = listed.objects
+      .map((object) => object.key)
+      .filter((key) => key.startsWith(prefix) && !key.endsWith('/'));
+    await Promise.all(objectKeys.map((key) => storage.delete(key)));
+    deletedObjects = objectKeys.length;
+  } catch {
+    return c.json({ error: 'Storage cleanup failed; user was not deleted' }, 502);
+  }
+
+  const statements = [
+    db.prepare('DELETE FROM oauth_tokens WHERE user_id = ?').bind(username),
+    db.prepare('DELETE FROM oauth_codes WHERE user_id = ?').bind(username),
+    db.prepare('DELETE FROM oauth_clients WHERE user_id = ?').bind(username),
+    db.prepare('DELETE FROM users WHERE username = ?').bind(username),
+  ];
+
+  if (typeof db.deleteUserData === 'function') {
+    await db.deleteUserData(username);
+  } else if (typeof db.batch === 'function') {
+    await db.batch(statements);
+  } else {
+    for (const statement of statements) await statement.run();
+  }
+
+  return c.json({ success: true, deleted_objects: deletedObjects });
 });
 
 adminRouter.delete('/tokens/:id', async (c) => {

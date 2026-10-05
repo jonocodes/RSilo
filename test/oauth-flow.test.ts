@@ -74,23 +74,16 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect([200, 400, 401]).toContain(res.status);
+      expect(res.status).toBe(200);
     });
 
     it('handles expired authorization code', async () => {
       const env = createTestEnv();
       const app = createServer(env);
 
-      env.DB.prepare = (query: string) => ({
+      env.DB.prepare = (_query: string) => ({
         bind: () => ({
-          first: async () => ({
-            code: 'expired-code',
-            user_id: '1',
-            client_id: 'test-client',
-            redirect_uri: 'http://localhost/callback',
-            scopes: 'documents:rw',
-            expires_at: Date.now() - 1000,
-          }),
+          first: async () => null,
           run: async () => ({ success: true }),
         }),
         first: async () => null,
@@ -113,7 +106,7 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect([200, 400]).toContain(res.status);
+      expect(res.status).toBe(400);
     });
 
     it('rejects mismatched redirect_uri', async () => {
@@ -156,7 +149,7 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect([200, 400, 401]).toContain(res.status);
+      expect(res.status).toBe(200);
     });
   });
 
@@ -184,7 +177,7 @@ describe('OAuth Flow Tests', () => {
       const env = createTestEnv();
       const app = createServer(env);
 
-      env.DB.prepare = (query: string) => ({
+      env.DB.prepare = (_query: string) => ({
         bind: () => ({
           first: async () => null,
           run: async () => ({ success: true }),
@@ -230,7 +223,9 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBeDefined();
+      expect(res.status).toBe(204);
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://example.com');
+      expect(res.headers.get('Access-Control-Allow-Methods')).toContain('POST');
     });
   });
 
@@ -245,7 +240,7 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect([200, 404]).toContain(res.status);
+      expect(res.status).toBe(200);
     });
   });
 });
@@ -279,7 +274,7 @@ describe('Database Error Handling', () => {
       env
     );
 
-    expect([200, 403, 404, 500, 503]).toContain(res.status);
+    expect(res.status).toBe(500);
   });
 });
 
@@ -302,15 +297,11 @@ describe('Storage Error Handling', () => {
     const app = createServer(env);
     const token = createTestToken('alice', '*:rw');
 
-    try {
-      const res = await app.request(
-        'http://localhost/storage/alice/documents/test.txt',
-        { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-        env
-      );
-      expect([404, 500, 503]).toContain(res.status);
-    } catch (error: any) {
-      expect(error).toBeDefined();
-    }
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/test.txt',
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      env
+    );
+    expect(res.status).toBe(500);
   });
 });

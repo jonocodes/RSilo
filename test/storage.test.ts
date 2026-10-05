@@ -67,7 +67,7 @@ describe('PUT + GET storage', () => {
       TEST_ENV
     );
 
-    expect([200, 201, 204]).toContain(putRes.status);
+    expect(putRes.status).toBe(201);
 
     const getRes = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -153,6 +153,26 @@ describe('PUT + GET storage', () => {
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('PUT');
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+  });
+});
+
+describe('Object size limits', () => {
+  it('rejects an oversized upload before storing it', async () => {
+    const app = createServer(TEST_ENV);
+    const token = createTestToken('alice');
+    const env = { ...TEST_ENV, MAX_OBJECT_SIZE_BYTES: '4' };
+    const res = await app.request('http://localhost/storage/alice/documents/large.txt', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'text/plain',
+        'Content-Length': '5',
+      },
+      body: '12345',
+    }, env as any);
+
+    expect(res.status).toBe(413);
+    expect(storage.has('users/alice/storage/documents/large.txt')).toBe(false);
   });
 });
 
@@ -347,7 +367,7 @@ describe('Folder listing', () => {
     expect(getRes.status).toBe(200);
     expect(getRes.headers.get('Content-Type')).toContain('application/ld+json');
 
-    const json = await getRes.json();
+    const json = await getRes.json() as any;
     expect(json['@context']).toBe('http://remotestorage.io/spec/folder-description');
     expect(json.items).toBeDefined();
     expect(Object.keys(json.items).length).toBeGreaterThanOrEqual(2);
@@ -376,7 +396,7 @@ describe('Folder listing', () => {
     );
 
     expect(getRes.status).toBe(200);
-    const json = await getRes.json();
+    const json = await getRes.json() as any;
     expect(json.items).toBeDefined();
     const itemKeys = Object.keys(json.items);
     expect(itemKeys).toContain('level1/');
@@ -395,7 +415,7 @@ describe('Folder listing', () => {
     );
 
     expect(getRes.status).toBe(200);
-    const json = await getRes.json();
+    const json = await getRes.json() as any;
     expect(json.items).toEqual({});
   });
 });
@@ -716,7 +736,7 @@ describe('DB-backed OAuth token auth', () => {
       },
       dbEnv
     );
-    expect([200, 201]).toContain(putRes.status);
+    expect(putRes.status).toBe(201);
   });
 
   it('rejects an expired DB-backed OAuth token', async () => {
@@ -789,7 +809,7 @@ describe('Storage quota — tracking', () => {
   it('DELETE decrements used_storage_bytes in DB', async () => {
     const fileBody = new TextEncoder().encode('to be deleted');
     storage.set('users/alice/storage/documents/todelete.txt', {
-      body: fileBody.buffer,
+      body: fileBody.buffer as ArrayBuffer,
       etag: '"xyz"',
       contentType: 'text/plain',
     });
@@ -817,6 +837,6 @@ describe('Storage quota — tracking', () => {
       headers: { 'Authorization': `Bearer ${token}` },
     }, dbEnv);
 
-    expect(decrementArg).toBe(fileBody.byteLength);
+    expect(decrementArg).toBe(-fileBody.byteLength);
   });
 });

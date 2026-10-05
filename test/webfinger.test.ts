@@ -59,7 +59,7 @@ describe('WebFinger endpoint', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('application/jrd+json');
 
-    const json = await res.json();
+    const json = await res.json() as any;
     expect(json.subject).toBe('acct:alice@example.com');
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink).toBeDefined();
@@ -75,7 +75,7 @@ describe('WebFinger endpoint', () => {
     );
 
     expect(res.status).toBe(200);
-    const json = await res.json();
+    const json = await res.json() as any;
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink.properties).toBeDefined();
     expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toContain('/oauth/bob/authorize');

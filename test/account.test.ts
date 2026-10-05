@@ -5,7 +5,7 @@ import { hashPassword, signSessionToken } from '../src/services/auth';
 const SESSION_SECRET = 'test-session-secret';
 const SESSION_EXPIRY = 28800;
 
-const storage = new Map<string, { body: ArrayBuffer; contentType: string; etag: string }>();
+const storage = new Map<string, { body: ArrayBufferLike; contentType: string; etag: string }>();
 
 const mockStorage = {
   async get(key: string) {
@@ -90,6 +90,33 @@ describe('Files — login', () => {
     expect(res.headers.get('Set-Cookie')).toContain('rsilo_session=');
   });
 
+  it('rejects a forged fallback-secret cookie when SESSION_SECRET is missing', async () => {
+    const token = await signSessionToken('alice', 'dev-session-secret-change-in-production', SESSION_EXPIRY);
+    const env = { STORAGE: mockStorage, DB: makeDb(), RSILO_DEV_MODE: 'false' } as any;
+    const res = await app.request('http://localhost/account/browse', {
+      method: 'GET',
+      headers: { Cookie: `rsilo_session=${token}` },
+    }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/account/');
+  });
+
+  it('returns 503 for a valid login when SESSION_SECRET is missing', async () => {
+    const env = {
+      STORAGE: mockStorage,
+      DB: makeDb({ username: 'alice', password_hash: passwordHash }),
+      RSILO_DEV_MODE: 'false',
+    } as any;
+    const body = new URLSearchParams({ username: 'alice', password: 'correctpass' });
+    const res = await app.request('http://localhost/account/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }, env);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
   it('POST /account/login redirects with error on wrong password', async () => {
     const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET } as any;
     const body = new URLSearchParams({ username: 'alice', password: 'wrongpass' });
@@ -112,6 +139,33 @@ describe('Files — login', () => {
     }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toContain('error=1');
+  });
+
+  it('temporarily locks out repeated login attempts', async () => {
+    let stored: { count: number; windowStart: number } | null = null;
+    const env = {
+      STORAGE: mockStorage,
+      DB: makeDb(null),
+      SESSION_SECRET,
+      RSILO_DEV_MODE: 'false',
+      RATE_LIMIT_KV: {
+        get: async () => stored,
+        put: async (_key: string, value: string) => { stored = JSON.parse(value); },
+      },
+    } as any;
+    const request = () => app.request('http://localhost/account/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'CF-Connecting-IP': '203.0.113.10',
+      },
+      body: new URLSearchParams({ username: 'alice', password: 'wrong' }).toString(),
+    }, env);
+
+    for (let attempt = 0; attempt < 10; attempt++) expect((await request()).status).toBe(302);
+    const blocked = await request();
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBeTruthy();
   });
 
   it('POST /account/logout clears session cookie', async () => {
@@ -188,6 +242,23 @@ describe('Files — browse', () => {
     const html = await res.text();
     expect(html).toContain('notes.txt');
     expect(html).toContain('documents');
+  });
+
+  it('renders quote-bearing filenames without executable attributes', async () => {
+    const filename = `quote'\"><img src=x onerror=alert(1)>.txt`;
+    storage.set(`users/alice/storage/documents/${filename}`, {
+      body: new TextEncoder().encode('safe').buffer,
+      contentType: 'text/plain',
+      etag: '"quoted"',
+    });
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const res = await app.request('http://localhost/account/browse/documents', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('onsubmit=');
+    expect(html).toContain('quote\'&quot;&gt;&lt;img src=x onerror=alert(1)&gt;.txt');
   });
 
   it('breadcrumb shows correct path segments', async () => {
@@ -269,6 +340,11 @@ describe('Files — view', () => {
       contentType: 'application/octet-stream',
       etag: '"etag-bin"',
     });
+    storage.set('users/alice/storage/documents/malicious.txt', {
+      body: new TextEncoder().encode('</script><script>alert("stored-xss")</script>').buffer,
+      contentType: 'text/plain',
+      etag: '"etag-malicious"',
+    });
   });
 
   it('GET /account/view renders text file as HTML', async () => {
@@ -278,6 +354,28 @@ describe('Files — view', () => {
     const html = await res.text();
     expect(html).toContain('# Hello World');
     expect(html).toContain('readme.md');
+  });
+
+  it('renders script terminators as inert text under a restrictive CSP', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const res = await app.request('http://localhost/account/view/documents/malicious.txt', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Security-Policy')).toContain("default-src 'none'; script-src 'self'");
+    expect(res.headers.get('Content-Security-Policy')).not.toContain("script-src 'unsafe-inline'");
+    expect(html).not.toContain('</script><script>');
+    expect(html).toContain('&lt;/script&gt;&lt;script&gt;alert(&quot;stored-xss&quot;)&lt;/script&gt;');
+    expect(html).not.toContain('onclick=');
+    expect(html).toContain('<script src="/account/client.js" defer></script>');
+  });
+
+  it('serves account behavior as same-origin JavaScript', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const res = await app.request('http://localhost/account/client.js', { method: 'GET' }, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/javascript');
+    expect(await res.text()).toContain("addEventListener('click'");
   });
 
   it('GET /account/view redirects binary file to download', async () => {
@@ -373,7 +471,7 @@ describe('Files — tokens', () => {
 
   it('POST /account/tokens/:id/revoke redirects to tokens page', async () => {
     const revokeDb = {
-      prepare: (sql: string) => ({
+      prepare: (_sql: string) => ({
         bind: (..._args: any[]) => ({ run: async () => ({}) }),
       }),
     } as any;
@@ -491,7 +589,7 @@ describe('Files — save (edit)', () => {
     }, env);
     expect(res.status).toBe(204);
     const stored = storage.get('users/alice/storage/documents/note.txt');
-    expect(new TextDecoder().decode(stored?.body)).toBe('updated content');
+    expect(new TextDecoder().decode(stored?.body as ArrayBuffer)).toBe('updated content');
   });
 
   it('POST /account/save preserves content type', async () => {

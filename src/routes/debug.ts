@@ -247,7 +247,11 @@ debugRouter.get('/health/deep', async (c) => {
     const payload = new TextEncoder().encode('ok').buffer as ArrayBuffer;
     await storage.put(key, payload, 'text/plain');
     const got = await storage.get(key);
-    const ok = !!got && new TextDecoder().decode(got.body) === 'ok';
+    const body = got?.body;
+    const buffer = body instanceof ArrayBuffer
+      ? body
+      : body ? await new Response(body).arrayBuffer() : null;
+    const ok = buffer !== null && new TextDecoder().decode(buffer) === 'ok';
     await storage.delete(key);
     checks.storage = {
       ok,

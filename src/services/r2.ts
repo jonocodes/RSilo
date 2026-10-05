@@ -22,20 +22,14 @@ export interface BlobMetadata {
 export class R2Storage {
   constructor(private bucket: R2Bucket) {}
 
-  async get(key: string): Promise<{ body: ArrayBuffer; metadata: BlobMetadata } | null> {
+  async get(key: string): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: BlobMetadata } | null> {
     const object = await this.bucket.get(key);
     if (!object) return null;
 
-    let body: ArrayBuffer;
-    if (typeof object.arrayBuffer === 'function') {
-      body = await object.arrayBuffer();
-    } else {
-      body = (object as any).body;
-    }
-
+    const body = object.body || await object.arrayBuffer();
     const metadata: BlobMetadata = {
       contentType: (object as any).contentType || (object as any).metadata?.contentType || (object as any).httpMetadata?.contentType || 'application/octet-stream',
-      contentLength: object.size ?? (object as any).metadata?.contentLength ?? body.byteLength,
+      contentLength: object.size ?? (object as any).metadata?.contentLength ?? (body instanceof ArrayBuffer ? body.byteLength : 0),
       etag: (object as any).etag ?? (object as any).metadata?.etag ?? null,
       lastModified: (object as any).uploaded?.toISOString?.() ?? (object as any).lastModified,
     };
@@ -67,16 +61,25 @@ export class R2Storage {
   }
 
   async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
-    const listed = await this.bucket.list({ prefix });
-    return {
-      objects: listed.objects.map(obj => ({
+    const objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const listed = await this.bucket.list({ prefix, cursor });
+      objects.push(...listed.objects.map(obj => ({
         key: obj.key,
         size: obj.size,
         etag: obj.etag,
         contentType: obj.httpMetadata?.contentType,
         lastModified: (obj as any).uploaded?.toISOString?.(),
-      })),
-    };
+      })));
+
+      if (!listed.truncated) break;
+      if (!listed.cursor) throw new Error('R2 returned a truncated listing without a cursor');
+      cursor = listed.cursor;
+    } while (cursor);
+
+    return { objects };
   }
 }
 

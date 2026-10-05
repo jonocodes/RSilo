@@ -9,6 +9,7 @@ function makeMockDb() {
     updateUserQuota: vi.fn().mockResolvedValue(undefined),
     updatePasswordHash: vi.fn().mockResolvedValue(undefined),
     updateStorageUsage: vi.fn().mockResolvedValue(undefined),
+    adjustStorageUsage: vi.fn().mockResolvedValue(true),
     getStorageUsage: vi.fn().mockResolvedValue(0),
     getUserCount: vi.fn().mockResolvedValue(0),
     getTotalStorage: vi.fn().mockResolvedValue(0),
@@ -173,6 +174,13 @@ describe('D1Adapter — storage usage', () => {
   beforeEach(() => {
     mockDb = makeMockDb();
     adapter = new D1Adapter(mockDb as any);
+  });
+
+  it('adjustStorageUsage delegates username, delta, and quota policy explicitly', async () => {
+    mockDb.adjustStorageUsage.mockResolvedValue(true);
+    const result = await adapter.adjustStorageUsage('alice', -512, false);
+    expect(result).toBe(true);
+    expect(mockDb.adjustStorageUsage).toHaveBeenCalledWith('alice', -512, false);
   });
 
   it('UPDATE users SET used_storage_bytes calls updateStorageUsage', async () => {

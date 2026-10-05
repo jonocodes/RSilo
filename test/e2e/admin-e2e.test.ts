@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
+import { waitForServer } from './helpers';
 
 const SERVER_URL = 'http://localhost:8789';
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-admin');
@@ -31,14 +32,7 @@ describe('Admin E2E', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    await new Promise<void>((resolve) => {
-      server.stdout?.on('data', (data: Buffer) => {
-        if (data.toString().includes('Listening')) {
-          resolve();
-        }
-      });
-      setTimeout(resolve, 2000);
-    });
+    await waitForServer(SERVER_URL);
   });
 
   afterAll(async () => {
@@ -121,7 +115,7 @@ describe('Admin E2E', () => {
     });
 
     expect(res.status).toBe(200);
-    const json = await res.json();
+    const json = await res.json() as { status: string };
     expect(json.status).toBe('ok');
   });
 
@@ -158,7 +152,7 @@ describe('Admin E2E', () => {
       headers: { Authorization: `Bearer ${ADMIN_SECRET}` },
     });
     expect(res.status).toBe(200);
-    const json = await res.json();
+    const json = await res.json() as { summary: unknown };
     expect(json.summary).toBeDefined();
   });
 });

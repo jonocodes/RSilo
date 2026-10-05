@@ -1,13 +1,19 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
 import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
+import { getSessionSecret } from '../config';
+import { enforceRateLimit } from '../services/rate-limit';
 
 export const oauthRouter = new Hono();
 
-const DEFAULT_SESSION_SECRET = 'dev-session-secret-change-in-production';
+function getPublicBaseUrl(c: any): string {
+  const configured = c.env?.PUBLIC_BASE_URL;
+  if (configured) return new URL(configured).origin;
 
-function getSessionSecret(env: any): string {
-  return env?.SESSION_SECRET || DEFAULT_SESSION_SECRET;
+  const url = new URL(c.req.url);
+  const forwardedProtocol = c.req.header('X-Forwarded-Proto')?.split(',')[0].trim().toLowerCase();
+  if (url.protocol === 'http:' && forwardedProtocol === 'https') url.protocol = 'https:';
+  return url.origin;
 }
 
 oauthRouter.get('/:user/authorize', async (c) => {
@@ -61,6 +67,8 @@ oauthRouter.post('/:user/authorize', async (c) => {
   const db = (c.env as any).DB;
 
   if (action === 'login') {
+    const rateLimited = await enforceRateLimit(c, { namespace: 'oauth-login', account: user });
+    if (rateLimited) return rateLimited;
     if (!password) {
       return new Response(renderLoginForm({ user, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, error: 'Password is required' }), {
         status: 400,
@@ -85,8 +93,11 @@ oauthRouter.post('/:user/authorize', async (c) => {
       });
     }
 
+    const secret = getSessionSecret(c.env);
+    if (!secret) return c.json({ error: 'server_error', error_description: 'Server authentication is not configured' }, 503);
+
     const client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(client_id)?.first?.();
-    const token = await signSessionToken(user, getSessionSecret(c.env));
+    const token = await signSessionToken(user, secret);
 
     return new Response(renderConsentForm({ user, client, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, sessionToken: token }), {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -98,7 +109,10 @@ oauthRouter.post('/:user/authorize', async (c) => {
       return c.json({ error: 'invalid_request', error_description: 'Missing session token' }, 400);
     }
 
-    const authedUser = await verifySessionToken(session_token, getSessionSecret(c.env));
+    const secret = getSessionSecret(c.env);
+    if (!secret) return c.json({ error: 'server_error', error_description: 'Server authentication is not configured' }, 503);
+
+    const authedUser = await verifySessionToken(session_token, secret);
     if (!authedUser || authedUser !== user) {
       return c.json({ error: 'access_denied', error_description: 'Session expired, please log in again' }, 401);
     }
@@ -250,7 +264,7 @@ oauthRouter.post('/:user/token', async (c) => {
 oauthRouter.get('/:user', async (c) => {
   const user = c.req.param('user');
   const origin = c.req.header('Origin') || '*';
-  const baseUrl = `http://${c.req.header('Host') || 'localhost'}`;
+  const baseUrl = getPublicBaseUrl(c);
 
   return c.json({
     needs_grant: false,

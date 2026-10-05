@@ -104,7 +104,7 @@ describe('Admin endpoints', () => {
 
   it('GET /admin/users/:username returns 404 for unknown user', async () => {
     const nonexistentDb = {
-      prepare: (query: string) => {
+      prepare: (_query: string) => {
         let boundValues: string[] = [];
         const stmt = {
           bind: (...values: string[]) => {
@@ -393,8 +393,18 @@ describe('Admin auth middleware', () => {
     expect(res.status).toBe(200);
   });
 
-  it('allows access without auth header when ADMIN_SECRET is not set', async () => {
-    const env = { STORAGE: {} as any, DB: db };
+  it('returns 503 when ADMIN_SECRET is missing in production mode', async () => {
+    const env = { STORAGE: {} as any, DB: db, RSILO_DEV_MODE: 'false' };
+    const res = await app.request(
+      'http://localhost/admin/health',
+      { method: 'GET' },
+      env
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it('allows missing ADMIN_SECRET only in explicit local development', async () => {
+    const env = { STORAGE: {} as any, DB: db, RSILO_DEV_MODE: 'true' };
     const res = await app.request(
       'http://localhost/admin/health',
       { method: 'GET' },
@@ -451,8 +461,8 @@ describe('Admin login', () => {
     expect(html).toContain('Admin secret');
   });
 
-  it('GET /admin/login redirects to dashboard when ADMIN_SECRET is not set', async () => {
-    const env = { STORAGE: {} as any, DB: db };
+  it('GET /admin/login redirects to dashboard when local development explicitly allows no ADMIN_SECRET', async () => {
+    const env = { STORAGE: {} as any, DB: db, RSILO_DEV_MODE: 'true' };
     const res = await app.request('http://localhost/admin/login', { method: 'GET' }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/admin');
@@ -500,41 +510,119 @@ describe('Admin login', () => {
 describe('DELETE /admin/users/:username', () => {
   let app: ReturnType<typeof createServer>;
 
-  function makeDb(existingUser: any = { id: 'user-1' }) {
-    return {
-      prepare: (sql: string) => ({
-        bind: (..._args: any[]) => ({
-          first: async () => sql.includes('SELECT id FROM users') ? existingUser : null,
-          run: async () => ({}),
-          all: async () => ({ results: [] }),
-        }),
-        first: async () => null,
-        run: async () => ({}),
+  function makeDb(existingUser: any = { id: 'user-1' }, executed: string[] = []) {
+    const prepare = (sql: string) => {
+      const statement = {
+        bind: (..._args: any[]) => statement,
+        first: async () => sql.includes('SELECT id FROM users') ? existingUser : null,
+        run: async () => { executed.push(sql); return {}; },
         all: async () => ({ results: [] }),
-      }),
+      };
+      return statement;
+    };
+    return {
+      prepare,
+      batch: async (statements: { run(): Promise<unknown> }[]) => {
+        for (const statement of statements) await statement.run();
+        return [];
+      },
+    } as any;
+  }
+
+  function makeStorage(keys: string[] = []) {
+    const deleted: string[] = [];
+    return {
+      deleted,
+      list: async () => ({ objects: keys.map((key) => ({ key, size: 1, etag: 'etag' })) }),
+      delete: async (key: string) => { deleted.push(key); },
     } as any;
   }
 
   beforeAll(() => {
-    app = createServer({ STORAGE: {} as any, DB: makeDb() });
+    app = createServer({ STORAGE: makeStorage(), DB: makeDb() });
   });
 
-  it('DELETE /admin/users/:username returns 200', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb() };
+  it('purges every stored object and revokes OAuth state before deleting the user', async () => {
+    const executed: string[] = [];
+    const storage = makeStorage([
+      'users/alice/storage/documents/a.txt',
+      'users/alice/storage/pictures/b.jpg',
+      'users/alice/storage/documents/',
+    ]);
+    const env = { STORAGE: storage, DB: makeDb({ id: 'user-1' }, executed) };
     const res = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
+
     expect(res.status).toBe(200);
-    const json = await res.json() as any;
-    expect(json.success).toBe(true);
+    expect(await res.json()).toEqual({ success: true, deleted_objects: 2 });
+    expect(storage.deleted).toEqual([
+      'users/alice/storage/documents/a.txt',
+      'users/alice/storage/pictures/b.jpg',
+    ]);
+    expect(executed).toEqual([
+      'DELETE FROM oauth_tokens WHERE user_id = ?',
+      'DELETE FROM oauth_codes WHERE user_id = ?',
+      'DELETE FROM oauth_clients WHERE user_id = ?',
+      'DELETE FROM users WHERE username = ?',
+    ]);
   });
 
-  it('DELETE /admin/users/:username returns 404 for unknown user', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(null) };
+  it('keeps the user row when storage cleanup fails', async () => {
+    const executed: string[] = [];
+    const storage = {
+      list: async () => ({ objects: [{ key: 'users/alice/storage/a.txt', size: 1, etag: 'etag' }] }),
+      delete: async () => { throw new Error('R2 unavailable'); },
+    } as any;
+    const env = { STORAGE: storage, DB: makeDb({ id: 'user-1' }, executed) };
+    const res = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
+
+    expect(res.status).toBe(502);
+    expect(executed).toEqual([]);
+  });
+
+  it('allows username recreation only after cleanup completes', async () => {
+    let exists = true;
+    const prepare = (sql: string) => {
+      const statement = {
+        bind: (..._args: any[]) => statement,
+        first: async () => sql.includes('SELECT id FROM users') && exists ? { id: 'user-1' } : null,
+        run: async () => {
+          if (sql.includes('DELETE FROM users')) exists = false;
+          if (sql.includes('INSERT INTO users')) exists = true;
+          return {};
+        },
+      };
+      return statement;
+    };
+    const db = {
+      prepare,
+      batch: async (statements: { run(): Promise<unknown> }[]) => {
+        for (const statement of statements) await statement.run();
+        return [];
+      },
+    } as any;
+    const env = { STORAGE: makeStorage(), DB: db };
+
+    const deletion = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
+    expect(deletion.status).toBe(200);
+    expect(exists).toBe(false);
+
+    const recreation = await app.request('http://localhost/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'alice', password: 'new-password' }),
+    }, env);
+    expect(recreation.status).toBe(201);
+    expect(exists).toBe(true);
+  });
+
+  it('returns 404 for an unknown user', async () => {
+    const env = { STORAGE: makeStorage(), DB: makeDb(null) };
     const res = await app.request('http://localhost/admin/users/nobody', { method: 'DELETE' }, env);
     expect(res.status).toBe(404);
   });
 
-  it('DELETE /admin/users/:username returns 503 when DB unavailable', async () => {
-    const env = { STORAGE: {} as any, DB: null };
+  it('returns 503 when DB is unavailable', async () => {
+    const env = { STORAGE: makeStorage(), DB: null };
     const res = await app.request('http://localhost/admin/users/alice', { method: 'DELETE' }, env);
     expect(res.status).toBe(503);
   });
