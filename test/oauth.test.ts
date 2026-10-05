@@ -619,7 +619,7 @@ describe('OAuth login flow', () => {
     expect(json.error).toBe('unsupported_response_type');
   });
 
-  it('GET /authorize with unknown client_id returns 400', async () => {
+  it('GET /authorize auto-accepts an unknown client_id (no pre-registration)', async () => {
     const noClientDb = {
       prepare: (sql: string) => ({
         bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}) }),
@@ -631,15 +631,15 @@ describe('OAuth login flow', () => {
       { method: 'GET' },
       env
     );
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_client');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/html');
+    expect(await res.text()).toContain('unknown');
   });
 
-  it('GET /authorize with invalid redirect_uri returns 400', async () => {
+  it('GET /authorize with an invalid redirect_uri returns 400', async () => {
     const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
     const res = await app.request(
-      'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=https://evil.com/steal&response_type=code',
+      'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=not-a-url&response_type=code',
       { method: 'GET' },
       env
     );

@@ -150,6 +150,19 @@ export class LocalDatabase {
     stmt.run(client.id, client.name, client.redirect_uris, client.created_at, client.user_id);
   }
 
+  async getAllClients(): Promise<OAuthClient[]> {
+    const stmt = this.db.prepare('SELECT id, name, redirect_uris, created_at, user_id FROM oauth_clients ORDER BY created_at DESC');
+    return stmt.all() as OAuthClient[];
+  }
+
+  async deleteClient(clientId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_clients WHERE id = ?').run(clientId);
+  }
+
+  async deleteTokensByClient(clientId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_tokens WHERE client_id = ?').run(clientId);
+  }
+
   async createCode(code: OAuthCode): Promise<void> {
     const stmt = this.db.prepare(
       'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'

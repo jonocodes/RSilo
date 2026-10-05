@@ -155,6 +155,7 @@ adminRouter.get('/', async (c) => {
   const userCountResult = await db?.prepare?.('SELECT COUNT(*) as count FROM users')?.first?.() || { count: 0 };
   const totalStorageResult = await db?.prepare?.('SELECT SUM(used_storage_bytes) as total FROM users')?.first?.() || { total: 0 };
   const tokenCountResult = await db?.prepare?.('SELECT COUNT(*) as count FROM oauth_tokens')?.first?.() || { count: 0 };
+  const clientsResult = await db?.prepare?.('SELECT id, name, redirect_uris, user_id, created_at FROM oauth_clients ORDER BY created_at DESC LIMIT 100')?.all?.() || { results: [] };
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -274,6 +275,34 @@ adminRouter.get('/', async (c) => {
         `).join('')}
       </tbody>
     </table>
+
+    <h2 style="margin:2rem 0 1rem">OAuth clients</h2>
+    <p style="color:#666;font-size:.875rem;margin-bottom:1rem">Apps are registered automatically the first time someone authorizes them. Revoking a client deletes all of its tokens.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>App</th>
+          <th>Redirect URI</th>
+          <th>User</th>
+          <th>Added</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(clientsResult.results || []).length === 0 ? '<tr><td colspan="5" style="color:#666">No apps authorized yet.</td></tr>' : ''}
+        ${(clientsResult.results || []).map((client: any) => `
+        <tr>
+          <td><strong>${escapeHtml(client.name || client.id)}</strong><br><span style="color:#888;font-size:.75rem">${escapeHtml(client.id)}</span></td>
+          <td style="font-size:.8rem;word-break:break-all">${escapeHtml(client.redirect_uris || '')}</td>
+          <td>${escapeHtml(client.user_id || '')}</td>
+          <td style="color:#666;font-size:.875rem">${client.created_at ? new Date(client.created_at * 1000).toLocaleDateString() : ''}</td>
+          <td class="actions">
+            <button class="btn btn-danger" onclick="revokeClient('${escapeHtml(client.id)}')">Revoke</button>
+          </td>
+        </tr>
+        `).join('')}
+      </tbody>
+    </table>
   </div>
 
   <script>
@@ -311,6 +340,18 @@ adminRouter.get('/', async (c) => {
       if (!confirm('Delete user "' + username + '"? This cannot be undone.')) return;
       try {
         const res = await fetch('/admin/users/' + username, { method: 'DELETE' });
+        if (res.ok) { location.reload(); }
+        else {
+          const data = await res.json();
+          alert('Error: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function revokeClient(clientId) {
+      if (!confirm('Revoke "' + clientId + '" and delete all of its tokens?')) return;
+      try {
+        const res = await fetch('/admin/clients/' + encodeURIComponent(clientId), { method: 'DELETE' });
         if (res.ok) { location.reload(); }
         else {
           const data = await res.json();
@@ -412,6 +453,17 @@ adminRouter.delete('/users/:username', async (c) => {
   const existing = await db.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
   if (!existing) return c.json({ error: 'User not found' }, 404);
   await db.prepare('DELETE FROM users WHERE username = ?').bind(username).run();
+  return c.json({ success: true });
+});
+
+adminRouter.delete('/clients/:id', async (c) => {
+  const id = c.req.param('id');
+  const db = (c.env as any).DB;
+  if (!db || typeof db.prepare !== 'function') {
+    return c.json({ error: 'Database not available' }, 503);
+  }
+  await db.prepare('DELETE FROM oauth_tokens WHERE client_id = ?').bind(id).run();
+  await db.prepare('DELETE FROM oauth_clients WHERE id = ?').bind(id).run();
   return c.json({ success: true });
 });
 

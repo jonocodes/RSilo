@@ -77,6 +77,10 @@ export class D1Adapter {
             });
           } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('user_id')) {
             await self.db.deleteTokenByIdAndUser(values[0], values[1]);
+          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('client_id')) {
+            await self.db.deleteTokensByClient(values[0]);
+          } else if (sql.includes('DELETE FROM oauth_clients')) {
+            await self.db.deleteClient(values[0]);
           } else if (sql.includes('DELETE FROM oauth_codes')) {
             await self.db.deleteCode(values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('storage_quota_bytes')) {
@@ -113,6 +117,10 @@ export class D1Adapter {
           if (sql.includes('FROM users') && !sql.includes('WHERE')) {
             const users = await self.db.getAllUsers();
             return { results: users };
+          }
+          if (sql.includes('FROM oauth_clients')) {
+            const clients = await self.db.getAllClients();
+            return { results: clients };
           }
           return { results: [] };
         },

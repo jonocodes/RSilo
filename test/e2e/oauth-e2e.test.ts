@@ -87,10 +87,9 @@ describe('OAuth E2E', () => {
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
   });
 
-  it('GET /oauth/:user/authorize with invalid client returns error', async () => {
-    const res = await fetch(`${SERVER_URL}/oauth/alice/authorize?client_id=invalid&redirect_uri=http://invalid.com/callback&response_type=code`);
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.error).toBe('invalid_client');
+  it('GET /oauth/:user/authorize auto-accepts an unknown client', async () => {
+    const res = await fetch(`${SERVER_URL}/oauth/alice/authorize?client_id=some-new-app&redirect_uri=http://localhost/callback&response_type=code`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
   });
 });

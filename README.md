@@ -102,12 +102,14 @@ Generate any of them with `bun run secret`.
 
 ## Connect a RemoteStorage app
 
+Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears in the admin dashboard.
+
 1. In the app, enter your server address (e.g. `https://<your-worker>.workers.dev`).
 2. The app discovers your endpoints via WebFinger and sends you to the OAuth consent page.
-3. Sign in, review the requested module permissions, and approve.
+3. Sign in, check the app name and **where it redirects to**, and approve the requested module permissions.
 4. The app gets a token and starts syncing into that module.
 
-You can review and revoke granted tokens any time under `/account/tokens`.
+You can review and revoke an app's access from `/admin` (OAuth clients) or `/account/tokens`.
 
 ## Share a file publicly
 

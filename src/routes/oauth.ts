@@ -26,19 +26,22 @@ oauthRouter.get('/:user/authorize', async (c) => {
     return c.json({ error: 'unsupported_response_type' }, 400);
   }
 
+  try {
+    new URL(redirectUri);
+  } catch {
+    return c.json({ error: 'invalid_request', error_description: 'redirect_uri must be a valid URL' }, 400);
+  }
+
+  // Clients are not pre-registered (matching Armadietto and the remoteStorage
+  // ecosystem): any client_id is accepted. We look one up only for a friendly
+  // name; the consent screen shows the redirect target as the safety cue.
   const db = (c.env as any).DB;
-  const client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(clientId)?.first?.();
+  let client: any = null;
+  try {
+    client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(clientId)?.first?.();
+  } catch { /* best effort */ }
 
-  if (!client) {
-    return c.json({ error: 'invalid_client', error_description: 'Unknown client_id' }, 400);
-  }
-
-  const redirectUris = (client.redirect_uris || '').split(',');
-  if (!redirectUris.includes(redirectUri)) {
-    return c.json({ error: 'invalid_request', error_description: 'Invalid redirect_uri' }, 400);
-  }
-
-  return new Response(renderLoginForm({ user, clientId, redirectUri, responseType, scope, state }), {
+  return new Response(renderLoginForm({ user, clientId, redirectUri, responseType, scope, state, clientName: client?.name }), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 });
@@ -103,6 +106,15 @@ oauthRouter.post('/:user/authorize', async (c) => {
     if (!client_id || !redirect_uri) {
       return c.json({ error: 'invalid_request' }, 400);
     }
+
+    // Record the client on first approval so it can be listed and revoked.
+    try {
+      const known = await db?.prepare?.('SELECT id FROM oauth_clients WHERE id = ?')?.bind?.(client_id)?.first?.();
+      if (!known) {
+        await db?.prepare?.('INSERT INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
+          ?.bind?.(client_id, client_id, redirect_uri, Math.floor(Date.now() / 1000), user)?.run?.();
+      }
+    } catch { /* best effort */ }
 
     if (response_type === 'token') {
       const accessToken = generateToken();
@@ -367,10 +379,13 @@ interface LoginFormParams {
   responseType: string;
   scope: string;
   state: string;
+  clientName?: string;
   error?: string;
 }
 
-function renderLoginForm({ user, clientId, redirectUri, responseType, scope, state, error }: LoginFormParams): string {
+function renderLoginForm({ user, clientId, redirectUri, responseType, scope, state, clientName, error }: LoginFormParams): string {
+  let clientHost = redirectUri;
+  try { clientHost = new URL(redirectUri).host; } catch { /* keep raw */ }
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -381,8 +396,13 @@ function renderLoginForm({ user, clientId, redirectUri, responseType, scope, sta
 </head>
 <body>
   <div class="container">
-    <h1>Sign in</h1>
+    <h1>Authorize Access</h1>
     <p class="user-badge">Signing in as <strong>${escapeHtml(user)}</strong></p>
+    <div class="client-info">
+      <p class="client-name">${escapeHtml(clientName || clientId)}</p>
+      <p>is requesting access to your storage.</p>
+      <p><strong>Redirects to:</strong> ${escapeHtml(clientHost)}</p>
+    </div>
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <form method="POST" action="/oauth/${escapeHtml(user)}/authorize">
       <input type="hidden" name="action" value="login">
