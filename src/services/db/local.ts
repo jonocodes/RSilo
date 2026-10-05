@@ -194,16 +194,16 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   name TEXT NOT NULL,
   redirect_uris TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  user_id TEXT NOT NULL REFERENCES users(id)
-);
+      user_id TEXT NOT NULL REFERENCES users(username)
+    );
 
-CREATE TABLE IF NOT EXISTS oauth_tokens (
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
   id TEXT PRIMARY KEY,
   access_token TEXT UNIQUE NOT NULL,
   refresh_token TEXT UNIQUE,
   expires_at INTEGER NOT NULL,
   scopes TEXT NOT NULL,
-  user_id TEXT NOT NULL REFERENCES users(id),
+  user_id TEXT NOT NULL REFERENCES users(username),
   client_id TEXT NOT NULL REFERENCES oauth_clients(id),
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
