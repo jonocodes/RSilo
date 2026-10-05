@@ -194,6 +194,8 @@ adminRouter.get('/', async (c) => {
     .form-field { display: flex; flex-direction: column; gap: 0.25rem; }
     .form-field label { font-size: 0.875rem; font-weight: 500; }
     .form-field input { padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem; }
+    .welcome { background: #e7f3ff; border: 1px solid #b6d7ff; padding: 1.25rem 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; }
+    .welcome h2 { margin-bottom: 0.25rem; }
   </style>
 </head>
 <body>
@@ -204,6 +206,11 @@ adminRouter.get('/', async (c) => {
         <button type="submit" class="btn btn-subtle">Sign out</button>
       </form>
     </div>
+
+    ${(userCountResult?.count || 0) === 0 ? `<div class="welcome">
+      <h2>Welcome to RSilo</h2>
+      <p>No users yet. Create your first account in the <strong>Create User</strong> section below, then sign in at <a href="/account">/account</a>.</p>
+    </div>` : ''}
 
     <div class="stats">
       <div class="stat-card">

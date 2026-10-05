@@ -39,11 +39,7 @@ The service runs as a single Cloudflare Worker with three bindings: **R2** (file
 
 ### Option A — Deploy to Cloudflare button (no CLI)
 
-> Requires the source to live in a **public GitHub or GitLab** repository. This project's canonical repo is on Codeberg, so you would mirror it to GitHub first.
-
-```md
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=<YOUR_REPO_URL>)
-```
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jonocodes/RSilo)
 
 Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2/D1/KV automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
 
@@ -51,46 +47,50 @@ Clicking the button clones the repo into your account, asks you to name the Work
 
 Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file), plus `bun` and `wrangler`.
 
+The easiest way is the bundled setup script, which logs in, creates the resources, patches `wrangler.toml`, runs migrations, generates secrets, and deploys:
+
+```bash
+bun install
+wrangler login
+bun run setup
+```
+
+It prints your server URL and the generated admin secret at the end. Prefer to drive it yourself? See the manual steps below.
+
+<details>
+<summary>Manual CLI steps</summary>
+
 ```bash
 bun install
 wrangler login          # or export CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
-```
 
-Then either let wrangler create the resources for you, or create them yourself.
-
-**B1 — Let wrangler provision.** Delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` (keep the `binding` lines), then:
-
-```bash
-bun run deploy
-wrangler d1 migrations apply DB --remote   # run after the first deploy
-```
-
-Wrangler creates the resources, writes their IDs back into `wrangler.toml`, and deploys.
-
-**B2 — Create the resources explicitly.**
-
-```bash
+# Create the resources
 wrangler r2 bucket create remotestorage
 wrangler d1 create remotestorage-db
 wrangler kv namespace create RATE_LIMIT_KV
 # put the printed IDs into wrangler.toml (database_id, kv id)
+
+# Migrate and deploy
 wrangler d1 migrations apply remotestorage-db --remote
 bun run deploy
+
+# Secrets
+wrangler secret put SESSION_SECRET   # bun run secret
+wrangler secret put ADMIN_SECRET     # bun run secret
+wrangler secret put JWT_SECRET       # bun run secret
 ```
 
-### Set secrets (both options)
+Alternatively, delete the `database_id`, `bucket_name` and KV `id` lines from `wrangler.toml` and run `bun run deploy` — wrangler will provision the resources and write their IDs back.
 
-```bash
-wrangler secret put SESSION_SECRET   # random string, required
-wrangler secret put ADMIN_SECRET     # protects /admin/*, recommended
-wrangler secret put JWT_SECRET       # disables unsigned dev tokens, recommended in production
-```
+</details>
 
 | Secret | Purpose |
 |--------|---------|
 | `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
 | `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
 | `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
+
+Generate any of them with `bun run secret`.
 
 ## Create your account and sign in
 

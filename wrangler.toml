@@ -15,7 +15,7 @@ migrations_dir = "drizzle/migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "b2b4623307d545fa8d24b407812204bb"
+id = "e977c15659514ce19d92b2a5f355d912"
 
 [observability]
 enabled = true

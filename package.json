@@ -7,6 +7,8 @@
     "dev": "wrangler dev",
     "dev:offline": "bun --watch src/server-offline.ts",
     "dev-token": "bun run src/scripts/dev-token.ts",
+    "secret": "bun run src/scripts/secret.ts",
+    "setup": "bun run src/scripts/setup.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
     "deploy": "wrangler deploy",
     "test": "vitest run",
@@ -14,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings=0",
     "lint:fix": "eslint src --fix",
-    "db:migrate": "wrangler d1 migrations apply"
+    "db:migrate": "wrangler d1 migrations apply",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.15.1",
@@ -31,5 +34,18 @@
     "@hono/node-server": "^2.0.1",
     "@types/node": "^25.6.0",
     "hono": "^4.7.5"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SESSION_SECRET": {
+        "description": "Signs session cookies. Generate one with `bun run secret`."
+      },
+      "ADMIN_SECRET": {
+        "description": "Protects the /admin/* dashboard. Generate one with `bun run secret`."
+      },
+      "JWT_SECRET": {
+        "description": "Disables unsigned dev tokens in production. Generate one with `bun run secret`."
+      }
+    }
   }
 }
