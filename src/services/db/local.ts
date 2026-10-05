@@ -183,6 +183,11 @@ export class LocalDatabase {
     return result || null;
   }
 
+  async getAllCodes(): Promise<OAuthCode[]> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_codes ORDER BY created_at DESC');
+    return stmt.all() as OAuthCode[];
+  }
+
   async deleteCode(code: string): Promise<void> {
     this.db.prepare('DELETE FROM oauth_codes WHERE code = ?').run(code);
   }

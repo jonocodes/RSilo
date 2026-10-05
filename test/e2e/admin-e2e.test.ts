@@ -152,4 +152,13 @@ describe('Admin E2E', () => {
     const logoutCookie = logoutRes.headers.get('Set-Cookie') || '';
     expect(logoutCookie).toContain('Max-Age=0');
   });
+
+  it('debug oauth endpoint reads the OAuth tables', async () => {
+    const res = await fetch(`${SERVER_URL}/admin/debug/oauth`, {
+      headers: { Authorization: `Bearer ${ADMIN_SECRET}` },
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.summary).toBeDefined();
+  });
 });
