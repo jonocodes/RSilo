@@ -1,4 +1,16 @@
 import type { R2Bucket } from '@cloudflare/workers-types';
+import type { StorageInterface } from '../types';
+
+// Normalises the storage binding to the StorageInterface the routes expect.
+// In the Worker runtime STORAGE is a raw R2Bucket; offline it is a LocalStorage
+// instance (or a test double) that already implements the interface.
+export function getStorage(c: any): StorageInterface {
+  const raw = c.env.STORAGE;
+  if (raw && typeof raw.createMultipartUpload === 'function') {
+    return new R2Storage(raw as R2Bucket);
+  }
+  return raw as StorageInterface;
+}
 
 export interface BlobMetadata {
   contentType: string;

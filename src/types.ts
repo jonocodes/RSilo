@@ -9,6 +9,14 @@ export interface AppEnv {
   SESSION_SECRET?: string;
 }
 
+export interface StorageInterface {
+  get(key: string): Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
+  put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
+  delete(key: string): Promise<void>;
+  head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
+  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }>;
+}
+
 export interface StorageContext {
   username: string;
   path: string;

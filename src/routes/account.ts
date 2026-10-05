@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
-import { buildKey } from '../services/r2';
+import { buildKey, getStorage } from '../services/r2';
 
 export const accountRouter = new Hono();
 
@@ -31,10 +31,6 @@ async function getSessionUser(c: any): Promise<string | null> {
 
 function sessionCookieHeader(token: string, maxAge: number): string {
   return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/account; Max-Age=${maxAge}`;
-}
-
-function getStorage(c: any) {
-  return c.env.STORAGE;
 }
 
 function getDb(c: any) {

@@ -1,21 +1,9 @@
 import { Hono } from 'hono';
 import { authMiddleware, requireScope } from '../middleware/auth';
-import { buildKey } from '../services/r2';
+import { buildKey, getStorage } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { TokenPayload } from '../services/auth';
-import type { AppEnv } from '../types';
-
-type StorageInterface = {
-  get(key: string): Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
-  put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
-  delete(key: string): Promise<void>;
-  head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
-  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string }[] }>;
-};
-
-function getStorage(c: any): StorageInterface {
-  return c.env.STORAGE as StorageInterface;
-}
+import type { AppEnv, StorageInterface } from '../types';
 
 export const storageRouter = new Hono();
 

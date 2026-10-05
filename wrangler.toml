@@ -10,11 +10,12 @@ bucket_name = "remotestorage"
 [[d1_databases]]
 binding = "DB"
 database_name = "remotestorage-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "4952ded9-7a41-41bf-97fd-7348ba1d47bd"
+migrations_dir = "drizzle/migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "b2b4623307d545fa8d24b407812204bb"
 
 [observability]
 enabled = true
