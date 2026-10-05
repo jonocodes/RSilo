@@ -4,7 +4,7 @@
 
 A [RemoteStorage.io](https://remotestorage.io)-compatible personal storage server that runs on Cloudflare Workers, with a built-in web file manager and OAuth server.
 
-**Typical use case:** one person runs their own storage area, so their apps — notes, todos, editors, photos — sync to infrastructure they control instead of a vendor's cloud. Multi-user works too, but a single-user setup is the default happy path.
+**Why this exists:** to give anyone — especially people who aren't technical — their own free, self-hosted place to back up and sync app data. One person, a small amount of data, no monthly bill, no vendor lock-in. Multi-user is supported, but a personal single-user setup is the intended path.
 
 ## What is RemoteStorage?
 
@@ -25,7 +25,7 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 
 # For admins: run your own server
 
-You own the server. You deploy it once, create your account, then connect apps. You do not need to understand Cloudflare internals — this section walks through it.
+This is for the person who owns the server. You deploy it once, create your account, then connect apps. You do not need to be technical or understand Cloudflare internals — the sections below walk you through it, and `bun run setup` does most of the work.
 
 ## What you get
 
@@ -124,36 +124,20 @@ Single-user is the common case. If you want more, create users from the dashboar
 
 ## Running on the Cloudflare free tier
 
-RSilo is sized to fit inside Cloudflare's free allowances with room to spare. The one thing to understand: **R2 is the only product here that can bill you on overage.** Workers, D1, and KV simply stop working when their free limits are reached, but R2 charges per GB-month and per operation once you pass its free tier — and R2 requires a payment method on file to enable, so overage is charged automatically.
+RSilo is built for a *small personal backup*, not a business service — and it fits comfortably inside Cloudflare's free tier.
 
-### Free allowances
+**The one thing to watch: R2 is the only part that can ever cost money.** Workers, D1, and KV simply stop working once their free limits are reached. R2 instead bills overage once you pass its free allowance — and because Cloudflare requires a payment method to enable R2, that overage is charged automatically.
 
-| Product | Free allowance | When exceeded |
-|---------|----------------|---------------|
-| Workers | 100,000 requests/day, 10 ms CPU/invocation | Hard stop (errors), no charge |
-| R2 storage | 10 GB-month (Standard class only) | $0.015 / GB-month |
-| R2 Class A operations | 1,000,000 / month | $4.50 / million |
-| R2 Class B operations | 10,000,000 / month | $0.36 / million |
-| R2 egress | Unlimited | Free |
-| D1 | 5 GB storage, 5M rows read/day, 100k rows written/day | Errors on the Free plan |
-| KV | 100k reads/day, 1k writes/day, 1 GB | Errors on the Free plan |
+As of **October 2026**, R2's free tier covers roughly **10 GB of storage**, **1 million writes/listings**, and **10 million reads** per month, with free egress. Cloudflare changes these numbers and prices over time, so treat them as a rough guide and check the current values on the [R2 pricing page](https://developers.cloudflare.com/r2/pricing/). For a personal notes/todos/photos backup this allowance is far more than you will use.
 
-### How RSilo maps to R2 operation classes
+Roughly, uploads and folder listings count as "writes" (Class A), downloads and metadata as "reads" (Class B), and deletes are free.
 
-| Client action | R2 call | Class |
-|---------------|---------|-------|
-| Upload a file (`PUT /storage/...`) | `PutObject` | A |
-| List a folder (`GET /storage/.../`) | `ListObjects` | A |
-| Download a file (`GET /storage/...`) | `GetObject` | B |
-| Read metadata (`HEAD /storage/...`) | `HeadObject` | B |
-| Delete a file (`DELETE /storage/...`) | `DeleteObject` | free |
+### Staying free
 
-### Keeping the bill at $0
-
-1. **Stay on the Workers Free plan.** Free Workers hard-stop at 100k requests/day; the Paid plan auto-bills overages with no hard switch.
+1. **Stay on the Workers Free plan.** Free Workers hard-stop at their daily request limit; the Paid plan auto-bills overages with no hard switch.
 2. **Keep the bucket private.** Do not enable the r2.dev public URL or attach a custom domain to the bucket. RSilo serves everything through the Worker (including the `public` module), and R2 does not bill unauthorized requests. A public bucket would also let callers bypass the Worker entirely.
-3. **Use Standard storage only.** Infrequent Access has **no free tier** and bills from the first operation — even from viewing the bucket in the dashboard.
-4. **Set a budget alert as an early warning.** Manage Account → Billing → Billable Usage → Create budget alert (or Notifications → Add → Budget Alert). It is **informational only** — Cloudflare offers no native hard spend cap for R2, and per-product billing notifications are only available on Professional plans or higher.
+3. **Use Standard storage only.** Infrequent Access has no free tier and bills from the first operation — even from viewing the bucket in the dashboard.
+4. **Set a budget alert as an early warning.** In the Cloudflare dashboard go to **Manage Account → Billing → Billable Usage → Create budget alert** (or **Notifications → Add → Budget Alert**) and set a low threshold. You'll get an email if spend starts to rise. It is only a warning — Cloudflare has no built-in hard spending cap for R2, and per-product billing notifications require a Professional plan or higher.
 5. **For a hard guarantee, cap usage in the Worker.** Since every write goes through `PUT /storage/...`, a global storage ceiling plus a monthly Class A operation counter is the only way to make $0 a certainty. Not implemented yet.
 
 > RemoteStorage clients never talk to R2 directly — they speak HTTP to the Worker, which reaches R2 through the binding. "Private bucket" and working RemoteStorage clients are not in conflict.
