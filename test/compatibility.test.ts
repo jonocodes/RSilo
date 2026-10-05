@@ -533,18 +533,18 @@ describe('Error handling compatibility', () => {
   });
 
   it('PUT exceeds quota returns 413', async () => {
-    const token = createTestToken('quotauser');
-
-    const dbStorage = new Map<string, any>();
-    dbStorage.get = async (key) => {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    };
-    dbStorage.put = async (key, body, options) => {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
+    const dbStorage = {
+      async get(key: string) {
+        const item = storage.get(key);
+        if (!item) return null;
+        return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
+      },
+      async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+        const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
+        storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
+        return etag;
+      },
+      async head() { return null; },
     };
 
     const quotaEnv = {
@@ -554,9 +554,9 @@ describe('Error handling compatibility', () => {
           bind: () => ({
             first: async () => {
               if (sql.includes('oauth_tokens')) return null;
-              if (sql.includes('users')) return { storage_quota_bytes: 10, used_storage_bytes: 9 };
               return null;
-            }
+            },
+            run: async () => ({ meta: { changes: 0 } }),
           })
         })
       } as any,
@@ -604,7 +604,7 @@ describe('Error handling compatibility', () => {
       },
       quotaEnv
     );
-    expect([200, 201]).toContain(res.status);
+    expect(res.status).toBe(201);
   });
 
 it('rate limited request returns 429', async () => {
@@ -635,7 +635,7 @@ it('rate limited request returns 429', async () => {
       DB: {} as any,
       RATE_LIMIT_KV: {
         async get(key: string, type?: string) {
-          if (key === 'ratelimit:ip:203.0.113.1') {
+          if (key === 'ratelimit:storage:ip:203.0.113.1:account:testuser') {
             if (type === 'json') {
               return { count: 100, windowStart: Date.now() };
             }
@@ -643,7 +643,7 @@ it('rate limited request returns 429', async () => {
           }
           return null;
         },
-        async put(key: string, value: string | object, options?: { expirationTtl?: number }) { },
+        async put(_key: string, _value: string | object, _options?: { expirationTtl?: number }) { },
       },
     };
 
@@ -657,7 +657,7 @@ it('rate limited request returns 429', async () => {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'text/plain',
-          'X-Forwarded-For': '203.0.113.1',
+          'CF-Connecting-IP': '203.0.113.1',
         },
         body: 'test',
       },

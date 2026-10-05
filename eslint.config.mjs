@@ -6,7 +6,7 @@ export default [
     ignores: ['node_modules/**', 'data/**', 'drizzle/**', 'dist/**'],
   },
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'test/**/*.ts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer, createTestToken } from '../src/index';
 import { hashPassword, signSessionToken } from '../src/services/auth';
 
@@ -60,6 +60,23 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     expect(json.auth).toContain('/oauth/alice/authorize');
     expect(json.token_endpoint).toContain('/oauth/alice/token');
     expect(json.storageapi).toContain('/storage/alice');
+  });
+
+  it('advertises HTTPS endpoints for HTTPS requests', async () => {
+    const res = await app.request('https://storage.example/oauth/alice', { method: 'GET' }, TEST_ENV);
+    const json = await res.json() as any;
+    expect(json.auth).toBe('https://storage.example/oauth/alice/authorize');
+    expect(json.token_endpoint).toBe('https://storage.example/oauth/alice/token');
+    expect(json.storageapi).toBe('https://storage.example/storage/alice');
+  });
+
+  it('honors a secure forwarded protocol without allowing an HTTPS downgrade', async () => {
+    const res = await app.request('http://storage.example/oauth/alice', {
+      method: 'GET',
+      headers: { 'X-Forwarded-Proto': 'https' },
+    }, TEST_ENV);
+    const json = await res.json() as any;
+    expect(json.auth).toMatch(/^https:\/\//);
   });
 
   it('POST /oauth/:user/token with authorization_code returns access_token', async () => {
@@ -224,12 +241,15 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   it('OPTIONS /oauth/:user/token returns CORS headers', async () => {
     const res = await app.request(
       'http://localhost/oauth/alice/token',
-      { method: 'OPTIONS' },
+      {
+        method: 'OPTIONS',
+        headers: { 'Access-Control-Request-Method': 'POST' },
+      },
       TEST_ENV
     );
 
     expect(res.status).toBe(204);
-    expect(res.headers.get('Access-Control-Allow-Methods')).toContain('OPTIONS');
+    expect(res.headers.get('Access-Control-Allow-Methods')).toContain('POST');
   });
 
   it('OAuth endpoint works with dev token for storage', async () => {
@@ -251,7 +271,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     const oauthEnv = {
       ...TEST_ENV,
       DB: {
-        prepare: (sql: string) => ({
+        prepare: (_sql: string) => ({
           bind: (..._args: any[]) => ({
             first: async () => null,
             run: async () => {},
@@ -335,7 +355,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
       ...TEST_ENV,
       DB: {
         prepare: (sql: string) => ({
-          bind: (codeVal: string, ...rest: any[]) => ({
+          bind: (codeVal: string, ..._rest: any[]) => ({
             first: async () => sql.includes('oauth_codes') ? codes.get(codeVal) ?? null : null,
             run: async () => {
               if (sql.includes('DELETE FROM oauth_codes')) codes.delete(codeVal);
@@ -441,6 +461,30 @@ describe('OAuth login flow', () => {
     expect(html).toContain('Authorize Access');
     expect(html).toContain('documents:rw');
     expect(html).toContain('session_token');
+  });
+
+  it('POST login returns 503 when SESSION_SECRET is missing in production mode', async () => {
+    const env = {
+      STORAGE: {} as any,
+      DB: makeDb({ username: 'alice', password_hash: passwordHash }),
+      RSILO_DEV_MODE: 'false',
+    };
+    const body = new URLSearchParams({
+      action: 'login',
+      password: 'correctpassword',
+      client_id: 'test-client',
+      redirect_uri: 'https://example.com/callback',
+      response_type: 'code',
+      scope: 'documents:rw',
+      state: '',
+    });
+    const res = await app.request(
+      'http://localhost/oauth/alice/authorize',
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+      env
+    );
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain('session_token');
   });
 
   it('POST login with wrong password returns 401 login form', async () => {
@@ -621,7 +665,7 @@ describe('OAuth login flow', () => {
 
   it('GET /authorize auto-accepts an unknown client_id (no pre-registration)', async () => {
     const noClientDb = {
-      prepare: (sql: string) => ({
+      prepare: (_sql: string) => ({
         bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}) }),
       }),
     } as any;

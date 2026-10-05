@@ -34,6 +34,7 @@ const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
 const DB_PATH = process.env.DB_PATH || 'data/remotestorage.db';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-session-secret-change-in-production';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const localStorage = new LocalStorage(STORAGE_DIR);
 const localDb = new LocalDatabase(DB_PATH);
@@ -48,6 +49,8 @@ app.use('*', async (c, next) => {
   (c.env as any).DB = d1Adapter;
   (c.env as any).SESSION_SECRET = SESSION_SECRET;
   (c.env as any).ADMIN_SECRET = ADMIN_SECRET;
+  (c.env as any).JWT_SECRET = JWT_SECRET;
+  (c.env as any).RSILO_DEV_MODE = 'true';
   await next();
 });
 

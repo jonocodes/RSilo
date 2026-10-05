@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
+import { waitForServer } from './helpers';
 
 const SERVER_URL = 'http://localhost:8791';
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-oauth');
@@ -31,14 +32,7 @@ describe('OAuth E2E', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    await new Promise<void>((resolve) => {
-      server.stdout?.on('data', (data: Buffer) => {
-        if (data.toString().includes('Listening')) {
-          resolve();
-        }
-      });
-      setTimeout(resolve, 2000);
-    });
+    await waitForServer(SERVER_URL);
   });
 
   afterAll(async () => {
@@ -49,22 +43,10 @@ describe('OAuth E2E', () => {
     }
   });
 
-  async function createUser(username: string, password: string) {
-    const res = await fetch(`${SERVER_URL}/admin/users`, {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer admin',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username, password }),
-    });
-    return res.json();
-  }
-
   it('GET /oauth/:user returns discovery document', async () => {
     const res = await fetch(`${SERVER_URL}/oauth/alice`);
     expect(res.status).toBe(200);
-    const json = await res.json();
+    const json = await res.json() as any;
     expect(json.owner).toBe('alice');
     expect(json.auth).toContain('/oauth/alice/authorize');
     expect(json.token_endpoint).toContain('/oauth/alice/token');
@@ -74,7 +56,7 @@ describe('OAuth E2E', () => {
   it('GET /oauth/:user/authorize requires client_id and redirect_uri', async () => {
     const res = await fetch(`${SERVER_URL}/oauth/alice/authorize`);
     expect(res.status).toBe(400);
-    const json = await res.json();
+    const json = await res.json() as any;
     expect(json.error).toBe('invalid_request');
   });
 

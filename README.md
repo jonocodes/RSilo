@@ -91,10 +91,12 @@ Alternatively, let wrangler provision the resources: delete the `database_id` an
 | Secret | Purpose |
 |--------|---------|
 | `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
-| `ADMIN_SECRET` | Protects `/admin/*` endpoints — leave unset to allow open access |
-| `JWT_SECRET` | If set, disables unsigned dev tokens and enables signed JWT verification |
+| `ADMIN_SECRET` | Protects `/admin/*` endpoints — required |
+| `JWT_SECRET` | Verifies signed JWT access tokens — required |
 
-Generate any of them with `bun run secret`.
+Generate each secret with `bun run secret`. Production requests fail with `503` when the relevant secret is missing; unsigned tokens and other insecure bypasses are available only when `RSILO_DEV_MODE=true` is explicitly set for local development.
+
+`MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
 
 ### Deploying updates to your own instance
 
@@ -205,7 +207,7 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`ADMIN_SECRET` defaults to `admin` offline; set it in `.dev.vars` or the environment to change it. `bun run dev` runs `wrangler dev` instead, which emulates R2/D1/KV locally.
+`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin`, the session secret has a local-only fallback, and unsigned test tokens are accepted when `JWT_SECRET` is unset. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
 
 ## API reference
 
@@ -219,6 +221,8 @@ HEAD   /storage/:username/*        Get metadata only
 ```
 
 Requires `Authorization: Bearer <token>` with appropriate scope. Paths ending in `/` are folders.
+
+Downloads stream from object storage. Upload request bodies are read with a hard size bound and then buffered so RSilo can reserve the exact size delta before writing; the default limit is 10 MiB. PUT, account upload/save, and delete operations update per-user usage through the same quota-aware path. Reservations are atomic and are rolled back if object storage fails.
 
 ### WebFinger (discovery)
 
@@ -255,7 +259,9 @@ POST   /admin/login                 Sign in (sets session cookie)
 POST   /admin/logout                Sign out
 ```
 
-Optionally requires `Authorization: Bearer <ADMIN_SECRET>`. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
+Requires `Authorization: Bearer <ADMIN_SECRET>`. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
+
+User deletion is an immediate purge: RSilo deletes every stored object, then transactionally revokes OAuth codes, tokens, and clients and removes the user. If storage cleanup fails, the user row is retained and the username cannot be reused until a retry succeeds.
 
 ### Debug (observability)
 
@@ -401,18 +407,19 @@ test/                 unit, compliance and E2E suites
 ```bash
 bun run test             # all tests (fast, mocked + offline server E2E)
 bun run test:watch       # watch mode
-bun run typecheck        # tsc --noEmit
-bun run lint             # eslint src
-bun test test/e2e/storage-e2e.test.ts  # E2E against real server
+bun run typecheck        # source tsc --noEmit
+bun run typecheck:test   # test-suite tsc --noEmit
+bun run lint             # eslint src and test
+bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**364 tests** across 21 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, debug/observability, wrangler config, file manager, D1 adapter, migration/schema checks, and E2E against the offline server.
+**364 tests** across 21 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
 - **No self-registration** — users are created via admin API or dashboard
-- **Rate limiting** — requires a KV namespace binding; silently skipped without one
-- **Single-tenant quota** — storage quota is tracked per user but not enforced on concurrent writes
+- **Rate-limit storage** — production requires the `RATE_LIMIT_KV` binding and fails closed with `503` when it is absent; explicit local-development mode skips limiting without KV
+- **Buffered uploads** — upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately; downloads stream
 
 ## References
 

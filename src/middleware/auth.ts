@@ -1,6 +1,7 @@
 import type { Context, Next } from '../types';
 import { parseAuthHeader, verifyToken, hasScope, scopeFromPath } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
+import { getJwtSecret, isLocalDevelopment } from '../config';
 
 async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayload | null> {
   const db = (c.env as any)?.DB;
@@ -19,12 +20,17 @@ async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayl
     }
   }
 
-  const jwtSecret = (c.env as any)?.JWT_SECRET;
-  return jwtSecret ? verifyToken(token, jwtSecret) : verifyToken(token);
+  const jwtSecret = getJwtSecret(c.env);
+  if (jwtSecret) return verifyToken(token, jwtSecret);
+  return isLocalDevelopment(c.env) ? verifyToken(token) : null;
 }
 
 export function authMiddleware() {
   return async (c: Context, next: Next) => {
+    if (!getJwtSecret(c.env) && !isLocalDevelopment(c.env)) {
+      return c.text('Server authentication is not configured', 503);
+    }
+
     const path = c.req.path;
     const method = c.req.method;
 

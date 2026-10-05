@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, unlinkSync, readdirSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
+import { waitForServer } from './helpers';
 
 const SERVER_URL = 'http://localhost:8788';
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-storage');
@@ -21,7 +22,6 @@ function createTestToken(): string {
 
 describe('Storage E2E', () => {
   let server: ReturnType<typeof spawn>;
-  let serverReady = false;
 
   beforeAll(async () => {
     if (existsSync(DATA_DIR)) {
@@ -41,21 +41,19 @@ describe('Storage E2E', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    await new Promise<void>((resolve) => {
-      server.stdout?.on('data', (data: Buffer) => {
-        const line = data.toString();
-        if (line.includes('Listening')) {
-          resolve();
-        }
-      });
-      setTimeout(() => {
-        if (!serverReady) {
-          serverReady = true;
-          resolve();
-        }
-      }, 2000);
+    await waitForServer(SERVER_URL);
+
+    const createUserResponse = await fetch(`${SERVER_URL}/admin/users`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer admin',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ username: 'alice', password: 'password123' }),
     });
-    serverReady = true;
+    if (createUserResponse.status !== 201) {
+      throw new Error(`Failed to create E2E user: ${createUserResponse.status} ${await createUserResponse.text()}`);
+    }
   });
 
   afterAll(async () => {
@@ -64,10 +62,6 @@ describe('Storage E2E', () => {
     if (existsSync(DATA_DIR)) {
       rmSync(DATA_DIR, { recursive: true, force: true });
     }
-  });
-
-  beforeEach(() => {
-    const token = createTestToken();
   });
 
   it('PUT a file and GET it back', async () => {
@@ -155,7 +149,7 @@ describe('Storage E2E', () => {
     });
 
     expect(listRes.status).toBe(200);
-    const json = await listRes.json();
+    const json: any = await listRes.json();
     expect(json.items).toBeDefined();
     expect(json.items['file1.txt']).toBeDefined();
     expect(json.items['file2.txt']).toBeDefined();
@@ -192,7 +186,7 @@ describe('Storage E2E', () => {
   it('health endpoint works', async () => {
     const res = await fetch(`${SERVER_URL}/health`);
     expect(res.status).toBe(200);
-    const json = await res.json();
+    const json: any = await res.json();
     expect(json.status).toBe('ok');
     expect(json.mode).toBe('offline');
   });

@@ -3,6 +3,20 @@ import { LocalDatabase } from './local';
 export class D1Adapter {
   constructor(private db: LocalDatabase) {}
 
+  async batch<T>(statements: { run(): Promise<T> }[]): Promise<T[]> {
+    const results: T[] = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+
+  async deleteUserData(username: string): Promise<void> {
+    await this.db.deleteUserData(username);
+  }
+
+  async adjustStorageUsage(username: string, delta: number, enforceQuota = true): Promise<boolean> {
+    return this.db.adjustStorageUsage(username, delta, enforceQuota);
+  }
+
   prepare(sql: string) {
     const self = this;
 
@@ -75,14 +89,20 @@ export class D1Adapter {
               expires_at: values[5],
               created_at: Math.floor(Date.now() / 1000),
             });
-          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('user_id')) {
+          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('id = ?') && sql.includes('user_id')) {
             await self.db.deleteTokenByIdAndUser(values[0], values[1]);
+          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('user_id')) {
+            await self.db.deleteTokensByUser(values[0]);
           } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('client_id')) {
             await self.db.deleteTokensByClient(values[0]);
           } else if (sql.includes('DELETE FROM oauth_tokens')) {
             await self.db.deleteToken(values[0]);
+          } else if (sql.includes('DELETE FROM oauth_clients') && sql.includes('user_id')) {
+            await self.db.deleteClientsByUser(values[0]);
           } else if (sql.includes('DELETE FROM oauth_clients')) {
             await self.db.deleteClient(values[0]);
+          } else if (sql.includes('DELETE FROM oauth_codes') && sql.includes('user_id')) {
+            await self.db.deleteCodesByUser(values[0]);
           } else if (sql.includes('DELETE FROM oauth_codes')) {
             await self.db.deleteCode(values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('storage_quota_bytes')) {

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createServer, createTestToken } from '../../src/index';
 
 interface StorageMock {
   get: (key: string) => Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string } } | null>;
-  put: (key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) => Promise<{ etag: string }>;
+  put: (key: string, body: ArrayBuffer | ArrayBufferView, options?: { httpMetadata?: { contentType?: string } }) => Promise<string>;
   delete: (key: string) => Promise<void>;
   head: (key: string) => Promise<{ etag: string; contentType: string; contentLength: number } | null>;
   list: (options: { prefix?: string }) => Promise<{ objects: { key: string; etag: string }[] }>;
@@ -18,9 +18,12 @@ function createTestStorage(): StorageMock {
       if (!item) return null;
       return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
     },
-    put: async (key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) => {
+    put: async (key: string, body: ArrayBuffer | ArrayBufferView, options?: { httpMetadata?: { contentType?: string } }) => {
       const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
+      const storedBody = body instanceof ArrayBuffer
+        ? body
+        : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
+      storage.set(key, { body: storedBody, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
       return etag;
     },
     delete: async (key: string) => { storage.delete(key); },
@@ -67,6 +70,21 @@ describe('RemoteStorage Protocol Compliance', () => {
 
         expect(res.status).toBe(200);
         expect(await res.text()).toBe('hello');
+      });
+
+      it('rejects unsigned tokens when JWT_SECRET is missing in production mode', async () => {
+        const storage = createTestStorage();
+        const env = { ...createEnv(storage), RSILO_DEV_MODE: 'false' };
+        const app = createServer(env as any);
+        const token = createTestToken('alice');
+
+        const res = await app.request(
+          'http://localhost/storage/alice/documents/test.txt',
+          { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+          env as any
+        );
+
+        expect(res.status).toBe(503);
       });
 
       it('returns 404 for non-existent file', async () => {
@@ -620,7 +638,6 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const aliceToken = createTestToken('alice');
       const bobToken = createTestToken('bob');
 
       await storage.put('users/alice/storage/documents/private.txt', new TextEncoder().encode('alice secret'), { httpMetadata: { contentType: 'text/plain' } });
@@ -639,7 +656,6 @@ describe('RemoteStorage Protocol Compliance', () => {
       const env = createEnv(storage);
       const app = createServer(env);
       const aliceToken = createTestToken('alice');
-      const bobToken = createTestToken('bob');
 
       const res = await app.request(
         'http://localhost/storage/bob/documents/alice-writing.txt',

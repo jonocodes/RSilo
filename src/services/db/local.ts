@@ -55,6 +55,21 @@ export class LocalDatabase {
     stmt.run(bytes, userId);
   }
 
+  async adjustStorageUsage(username: string, delta: number, enforceQuota = true): Promise<boolean> {
+    const adjust = this.db.transaction((user: string, change: number, enforce: boolean) => {
+      const current = this.db.prepare(
+        'SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?'
+      ).get(user) as { storage_quota_bytes: number; used_storage_bytes: number } | undefined;
+      if (!current) return false;
+
+      const next = Math.max(0, current.used_storage_bytes + change);
+      if (enforce && change > 0 && next > current.storage_quota_bytes) return false;
+      this.db.prepare('UPDATE users SET used_storage_bytes = ? WHERE username = ?').run(next, user);
+      return true;
+    });
+    return adjust(username, delta, enforceQuota);
+  }
+
   async getClient(clientId: string): Promise<OAuthClient | null> {
     const stmt = this.db.prepare('SELECT * FROM oauth_clients WHERE id = ?');
     const result = stmt.get(clientId) as OAuthClient | undefined;
@@ -138,6 +153,28 @@ export class LocalDatabase {
 
   async deleteTokenByIdAndUser(tokenId: string, userId: string): Promise<void> {
     this.db.prepare('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?').run(tokenId, userId);
+  }
+
+  async deleteTokensByUser(userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_tokens WHERE user_id = ?').run(userId);
+  }
+
+  async deleteCodesByUser(userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_codes WHERE user_id = ?').run(userId);
+  }
+
+  async deleteClientsByUser(userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_clients WHERE user_id = ?').run(userId);
+  }
+
+  async deleteUserData(username: string): Promise<void> {
+    const purge = this.db.transaction((user: string) => {
+      this.db.prepare('DELETE FROM oauth_tokens WHERE user_id = ?').run(user);
+      this.db.prepare('DELETE FROM oauth_codes WHERE user_id = ?').run(user);
+      this.db.prepare('DELETE FROM oauth_clients WHERE user_id = ?').run(user);
+      this.db.prepare('DELETE FROM users WHERE username = ?').run(user);
+    });
+    purge(username);
   }
 
   async deleteUser(username: string): Promise<void> {

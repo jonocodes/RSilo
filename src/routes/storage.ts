@@ -3,7 +3,11 @@ import { authMiddleware, requireScope } from '../middleware/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { TokenPayload } from '../services/auth';
-import type { AppEnv, StorageInterface } from '../types';
+import type { StorageInterface } from '../types';
+import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { isLocalDevelopment } from '../config';
+import { enforceRateLimit } from '../services/rate-limit';
+import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
 
 export const storageRouter = new Hono();
 
@@ -26,30 +30,13 @@ storageRouter.use('/*', async (c, next) => {
     return c.text('Invalid path', 400);
   }
 
-  const kv = (c.env as AppEnv).RATE_LIMIT_KV;
-  if (kv && typeof kv.get === 'function') {
-    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
-    const identifier = `ip:${ip}`;
-
-    const now = Date.now();
-    const windowMs = 60000;
-    const maxRequests = 100;
-    const key = `ratelimit:${identifier}`;
-
-    const current = await kv.get(key, 'json') as { count: number; windowStart: number } | null;
-
-    if (current && current.windowStart > now - windowMs && current.count >= maxRequests) {
-      return c.text('Rate limit exceeded', 429, {
-        'Retry-After': Math.ceil((current.windowStart + windowMs - now) / 1000).toString(),
-        'X-RateLimit-Limit': maxRequests.toString(),
-        'X-RateLimit-Remaining': '0',
-      });
-    }
-
-    const newCount = current && current.windowStart > now - windowMs ? current.count + 1 : 1;
-    const windowStart = current && current.windowStart > now - windowMs ? current.windowStart : now;
-    await kv.put(key, JSON.stringify({ count: newCount, windowStart }), { expirationTtl: Math.ceil(windowMs / 1000) });
-  }
+  const rateLimited = await enforceRateLimit(c, {
+    namespace: 'storage',
+    account: usernameFromPath,
+    maxAttempts: 100,
+    windowSeconds: 60,
+  });
+  if (rateLimited) return rateLimited;
 
   await next();
 });
@@ -284,23 +271,13 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   const key = buildKey(username, path);
   const storage = getStorage(c);
 
-  const body = await c.req.arrayBuffer();
-  const bodySize = body.byteLength;
-
-  const db = (c.env as AppEnv).DB;
-  if (db && typeof db.prepare === 'function') {
-    const userResult = await db.prepare(
-      'SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?'
-    ).bind(username).first<{ storage_quota_bytes: number; used_storage_bytes: number }>();
-
-    if (userResult) {
-      const availableQuota = userResult.storage_quota_bytes - userResult.used_storage_bytes;
-      if (bodySize > availableQuota) {
-        return c.text('Storage quota exceeded', 413);
-      }
-    }
+  let body: ArrayBuffer;
+  try {
+    body = await readRequestBody(c.req.raw, maxObjectSize(c.env));
+  } catch (error) {
+    if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
+    throw error;
   }
-
   const existing = await storage.head(key);
   const currentEtag = existing ? normalizeETag(existing.etag) : null;
 
@@ -320,12 +297,22 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   }
 
   const contentType = c.req.header('Content-Type') || 'application/octet-stream';
-  const newEtag = await storage.put(key, body, contentType);
-
-  if (db && typeof db.prepare === 'function') {
-    await db.prepare(
-      'UPDATE users SET used_storage_bytes = used_storage_bytes + ? WHERE username = ?'
-    ).bind(bodySize, username).run();
+  let newEtag: string;
+  try {
+    newEtag = await putUserObject({
+      storage,
+      db: (c.env as any).DB,
+      allowUnaccounted: isLocalDevelopment(c.env),
+      username,
+      key,
+      body,
+      contentType,
+      existing,
+    });
+  } catch (error) {
+    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
+    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+    throw error;
   }
 
   return c.text('', existing ? 200 : 201, {
@@ -369,13 +356,18 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
     return c.text('Not Found', 404);
   }
 
-  await storage.delete(key);
-
-  const db = (c.env as AppEnv).DB;
-  if (db && typeof db.prepare === 'function') {
-    await db.prepare(
-      'UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes - ?) WHERE username = ?'
-    ).bind(existing.contentLength || 0, username).run();
+  try {
+    await deleteUserObject({
+      storage,
+      db: (c.env as any).DB,
+      allowUnaccounted: isLocalDevelopment(c.env),
+      username,
+      key,
+      existing,
+    });
+  } catch (error) {
+    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+    throw error;
   }
 
   return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(existing.etag) || '' } });

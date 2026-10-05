@@ -14,8 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --max-warnings=0",
-    "lint:fix": "eslint src --fix",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint src test --max-warnings=0",
+    "lint:fix": "eslint src test --fix",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "bun run src/scripts/deploy.ts --migrate-only"
   },
@@ -38,13 +39,13 @@
   "cloudflare": {
     "bindings": {
       "SESSION_SECRET": {
-        "description": "Signs session cookies. Generate one with `bun run secret`."
+        "description": "Required in production. Signs session cookies. Generate one with `bun run secret`."
       },
       "ADMIN_SECRET": {
-        "description": "Protects the /admin/* dashboard. Generate one with `bun run secret`."
+        "description": "Required in production. Protects the /admin/* dashboard. Generate one with `bun run secret`."
       },
       "JWT_SECRET": {
-        "description": "Disables unsigned dev tokens in production. Generate one with `bun run secret`."
+        "description": "Required in production. Verifies signed JWT access tokens. Generate one with `bun run secret`."
       }
     }
   }

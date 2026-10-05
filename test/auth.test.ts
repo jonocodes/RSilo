@@ -49,7 +49,7 @@ describe('signSessionToken / verifySessionToken', () => {
 
   it('returns null for tampered payload', async () => {
     const token = await signSessionToken('alice', secret);
-    const [data, sig] = token.split('.');
+    const [_data, sig] = token.split('.');
     // Change the username in the payload
     const tampered = btoa(JSON.stringify({ username: 'mallory', exp: 9999999999 }));
     const result = await verifySessionToken(`${tampered}.${sig}`, secret);

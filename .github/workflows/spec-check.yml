@@ -35,6 +35,11 @@ jobs:
           done
           curl -sf http://localhost:8788/health
 
+          curl -sf -X POST http://localhost:8788/admin/users \
+            -H "Authorization: Bearer ci-admin" \
+            -H "Content-Type: application/json" \
+            --data '{"username":"alice","password":"ci-password"}'
+
           RW=$(bun run dev-token alice 'api-test-suite:rw' | tail -1)
           RO=$(bun run dev-token alice 'api-test-suite:r' | tail -1)
           GL=$(bun run dev-token alice '*:rw' | tail -1)
