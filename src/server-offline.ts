@@ -6,6 +6,7 @@ import { oauthRouter } from './routes/oauth';
 import { adminRouter } from './routes/admin';
 import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
+import { mountDocs } from './routes/docs';
 import { LocalStorage } from './services/local-storage';
 import { LocalDatabase } from './services/db/local';
 import { D1Adapter } from './services/db/d1-mock';
@@ -63,6 +64,8 @@ app.route('/account', accountRouter);
 app.route('/', webfingerRouter);
 
 app.get('/health', (c) => c.json({ status: 'ok', mode: 'offline' }));
+
+mountDocs(app);
 
 const port = parseInt(process.env.PORT || '8787');
 

@@ -11,6 +11,8 @@
     "setup": "bun run src/scripts/setup.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
     "deploy": "bun run src/scripts/deploy.ts",
+    "docs:api": "bun run src/scripts/render-api-docs.ts",
+    "docs:api:check": "bun run src/scripts/render-api-docs.ts --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

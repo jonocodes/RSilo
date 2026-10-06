@@ -5,6 +5,7 @@ import { oauthRouter } from './routes/oauth';
 import { adminRouter } from './routes/admin';
 import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
+import { mountDocs } from './routes/docs';
 export { buildKey, R2Storage } from './services/r2';
 export { createTestToken, verifyToken } from './services/auth';
 export type { AppEnv } from './types';
@@ -22,6 +23,8 @@ app.route('/account', accountRouter);
 app.route('/', webfingerRouter);
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+mountDocs(app);
 
 export function createServer(_env: unknown) {
   return app;
