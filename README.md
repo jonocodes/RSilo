@@ -211,108 +211,14 @@ bun run dev:offline      # http://localhost:8787 with live reload
 
 ## API reference
 
-### Storage
+The server exposes one OpenAPI surface:
 
 ```
-GET    /storage/:username/*        Get file or folder listing
-PUT    /storage/:username/*        Create or update a file
-DELETE /storage/:username/*        Delete a file
-HEAD   /storage/:username/*        Get metadata only
+GET    /api              Scalar UI (documentation only — no request console)
+GET    /openapi.json     The OpenAPI 3.1 spec
 ```
 
-Requires `Authorization: Bearer <token>` with appropriate scope. Paths ending in `/` are folders.
-
-Downloads stream from object storage. Upload request bodies are read with a hard size bound and then buffered so RSilo can reserve the exact size delta before writing; the default limit is 10 MiB. PUT, account upload/save, and delete operations update per-user usage through the same quota-aware path. Reservations are atomic and are rolled back if object storage fails.
-
-### WebFinger (discovery)
-
-```
-GET    /.well-known/webfinger?resource=acct:alice@example.com
-GET    /.well-known/host-meta
-GET    /webfinger/jrd
-GET    /webfinger/xrd
-```
-
-### OAuth
-
-```
-GET    /oauth/:user                 OAuth discovery document
-GET    /oauth/:user/authorize       Login and consent form
-POST   /oauth/:user/authorize       Submit login or consent
-POST   /oauth/:user/token           Exchange code or refresh token
-```
-
-### Admin
-
-```
-GET    /admin/                      Dashboard (HTML)
-GET    /admin/health                Health check
-GET    /admin/stats                 Usage statistics
-GET    /admin/users                 List all users
-GET    /admin/users/:username       Get user details
-POST   /admin/users                 Create a user
-DELETE /admin/users/:username       Delete a user
-PATCH  /admin/users/:username/quota Update storage quota
-PATCH  /admin/users/:username/password Change password
-GET    /admin/login                 Admin login page
-POST   /admin/login                 Sign in (sets session cookie)
-POST   /admin/logout                Sign out
-```
-
-Requires `Authorization: Bearer <ADMIN_SECRET>`. The dashboard uses a session cookie (8-hour expiry, HttpOnly, SameSite=Strict) after login.
-
-User deletion is an immediate purge: RSilo deletes every stored object, then transactionally revokes OAuth codes, tokens, and clients and removes the user. If storage cleanup fails, the user row is retained and the username cannot be reused until a retry succeeds.
-
-### Debug (observability)
-
-Read-only endpoints for diagnosing a running instance. They live under `/admin`, so they inherit the same `ADMIN_SECRET` gate; secret values are never returned (booleans only).
-
-```
-GET    /admin/debug/token           Introspect a storage/OAuth token (whoami, scopes)
-POST   /admin/debug/token           Same, with the token in the JSON body
-GET    /admin/debug/storage/:user   Actual storage vs the DB counter, plus drift
-GET    /admin/debug/health/deep     Live round-trip check of each binding
-GET    /admin/debug/env             Redacted runtime, bindings and secret presence
-GET    /admin/debug/oauth           OAuth clients, tokens and pending codes
-GET    /admin/debug/echo            Echo a request; parse a storage path's scope
-```
-
-```bash
-# Who is this token, and what can it do?
-TOKEN="$(bun run dev-token alice 'documents:rw')"
-curl "http://localhost:8787/admin/debug/token?token=$TOKEN&scope=documents:rw&scope=pictures:r"
-
-# Does the DB usage counter match what is actually in storage?
-curl http://localhost:8787/admin/debug/storage/alice
-
-# Are R2, D1 and KV actually reachable?
-curl http://localhost:8787/admin/debug/health/deep
-
-# What scope would a request to this URL need?
-curl "http://localhost:8787/admin/debug/echo?path=/storage/alice/documents/note.txt&method=PUT"
-```
-
-`/admin/debug/storage/:user` recomputes usage by listing objects, which is an R2 **Class A** operation — call it on demand, not on a timer. `drift_bytes = actual_bytes - db_used_storage_bytes`; a positive value means the denormalised counter under-reports (quota is being under-enforced).
-
-`/admin/debug/echo` redacts `Authorization`, `Cookie` and `X-RS-Token`; to introspect a storage token pass it as `?token=` (or the `X-RS-Token` header), not as `Authorization`, which the admin gate consumes.
-
-### Account
-
-```
-GET    /account                       Login page
-POST   /account/login                 Sign in with username/password
-POST   /account/logout                Sign out
-GET    /account/browse                Browse root storage
-GET    /account/browse/*              Browse a subfolder
-GET    /account/view/*                View a text file in browser
-GET    /account/download/*            Download a file
-POST   /account/upload/*              Upload files to a folder
-POST   /account/delete/*              Delete a file
-GET    /account/tokens                View OAuth tokens
-POST   /account/tokens/:id/revoke     Revoke a token
-```
-
-Cookie-based session (8-hour expiry, HttpOnly, SameSite=Lax).
+A static, always-current list of every endpoint lives in **[docs/api.md](docs/api.md)**. The spec is derived from `app.routes` and a metadata registry, so it cannot drift: `bun run docs:api` regenerates the static list, `bun run docs:api:check` verifies it without writing, and a test (run in CI) fails if it is stale.
 
 ## Authentication
 
