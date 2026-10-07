@@ -9,17 +9,25 @@ webfingerRouter.get('/', (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RemoteStorage</title>
+  <title>RSilo</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; color: #333; }
     h1 { color: #1a1a1a; margin-bottom: 1rem; }
     .info { background: #f5f5f5; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
     code { background: #e8e8e8; padding: 0.2rem 0.4rem; border-radius: 4px; }
     a { color: #0066cc; }
+    .tagline { color: #666; margin-top: -0.5rem; }
+    nav a { margin-right: 1rem; }
   </style>
 </head>
 <body>
-  <h1>RemoteStorage Server</h1>
+  <h1>RSilo</h1>
+  <p class="tagline">A RemoteStorage server on Cloudflare Workers.</p>
+  <nav>
+    <a href="/admin">Admin</a>
+    <a href="/api">API reference</a>
+    <a href="https://github.com/jonocodes/RSilo">Source on GitHub</a>
+  </nav>
   <div class="info">
     <p><strong>Storage API:</strong> <code>/storage/:username/*</code></p>
     <p><strong>WebFinger:</strong> <code>/.well-known/webfinger?resource=acct:user@example.com</code></p>
