@@ -335,7 +335,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**403 tests** across 25 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**404 tests** across 25 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 

@@ -173,6 +173,16 @@ describe('host-meta and server info', () => {
     expect(html).toContain('RemoteStorage');
   });
 
+  it('GET / names RSilo and links to admin, API reference and source', async () => {
+    const res = await app.request('http://localhost/', { method: 'GET' }, TEST_ENV);
+    const html = await res.text();
+    expect(html).toContain('<title>RSilo</title>');
+    expect(html).toMatch(/<h1>RSilo<\/h1>/);
+    expect(html).toContain('href="/admin"');
+    expect(html).toContain('href="/api"');
+    expect(html).toContain('href="https://github.com/jonocodes/RSilo"');
+  });
+
   it('GET /health returns ok', async () => {
     const res = await app.request('http://localhost/health', { method: 'GET' }, TEST_ENV);
     expect(res.status).toBe(200);
