@@ -122,7 +122,7 @@ To release on every push to `main`, connect the repository to your Worker using 
    bun run deploy
    ```
 
-4. Under **Build variables**, add `D1_DATABASE_ID` (the value from your `wrangler.prod.toml`), marked as a secret. This is the only thing not in git; `bun run deploy` materialises `wrangler.prod.toml` from them, applies D1 migrations, and deploys.
+4. Under **Build variables**, add `D1_DATABASE_ID` (the value from your `wrangler.prod.toml`), marked as a secret. This is the only thing not in git; `bun run deploy` materialises `wrangler.prod.toml` from it, applies D1 migrations, and deploys.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
