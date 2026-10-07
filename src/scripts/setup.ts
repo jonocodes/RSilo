@@ -9,7 +9,6 @@ const PROD_CONFIG = join(ROOT, 'wrangler.prod.toml');
 
 const BUCKET = process.env.RSILO_BUCKET ?? 'remotestorage';
 const DB_NAME = process.env.RSILO_DB ?? 'remotestorage-db';
-const KV_TITLE = process.env.RSILO_KV ?? 'RATE_LIMIT_KV';
 
 function fail(msg: string): never {
   console.error(`\n✘ ${msg}\n`);
@@ -77,19 +76,8 @@ if (dbId) {
   console.log(`• D1 database '${DB_NAME}' already exists`);
 }
 
-let kvId = wrangler(['kv', 'namespace', 'create', KV_TITLE], true).out.match(/\[\[kv_namespaces\]\][\s\S]*?id\s*=\s*"([0-9a-fA-F]+)"/)?.[1];
-if (kvId) {
-  console.log(`✓ KV namespace '${KV_TITLE}' ready`);
-} else {
-  const list = wrangler(['kv', 'namespace', 'list'], true);
-  kvId = parseJsonArray(list.out).find((n) => n.title === KV_TITLE)?.id;
-  if (!kvId) fail(`Could not create or find KV namespace '${KV_TITLE}'.`);
-  console.log(`• KV namespace '${KV_TITLE}' already exists`);
-}
-
 let toml = readFileSync(CONFIG, 'utf8');
 toml = toml.replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
-toml = toml.replace(/(\[\[kv_namespaces\]\][\s\S]*?\bid\s*=\s*)"[^"]*"/, `$1"${kvId}"`);
 writeFileSync(PROD_CONFIG, toml);
 console.log('✓ wrangler.prod.toml written with resource IDs (gitignored)');
 

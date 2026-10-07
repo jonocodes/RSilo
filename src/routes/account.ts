@@ -4,7 +4,7 @@ import { getSessionSecret, isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
-import { enforceRateLimit } from '../services/rate-limit';
+import { loginRateLimit } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 
 export const accountRouter = new Hono();
@@ -226,7 +226,7 @@ accountRouter.post('/login', async (c) => {
   const username = (body.username || '').trim().toLowerCase();
   const password = body.password || '';
 
-  const rateLimited = await enforceRateLimit(c, { namespace: 'account-login', account: username });
+  const rateLimited = await loginRateLimit(c, 'account-login', username);
   if (rateLimited) return rateLimited;
   if (!username || !password) return c.redirect('/account/?error=1', 302);
 

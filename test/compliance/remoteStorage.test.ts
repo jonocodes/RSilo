@@ -44,10 +44,6 @@ function createEnv(storage: StorageMock) {
   return {
     STORAGE: storage,
     DB: {} as any,
-    RATE_LIMIT_KV: {
-      async get() { return null; },
-      async put() {},
-    } as any,
   };
 }
 

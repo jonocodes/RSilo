@@ -46,10 +46,6 @@ function createTestEnv() {
         all: async () => ({ results: [] }),
       }),
     } as any,
-    RATE_LIMIT_KV: {
-      async get() { return null; },
-      async put() {},
-    } as any,
   };
 }
 
@@ -260,10 +256,6 @@ describe('Database Error Handling', () => {
           throw new Error('Database connection failed');
         },
       } as any,
-      RATE_LIMIT_KV: {
-        async get() { return null; },
-        async put() {},
-      } as any,
     };
     const app = createServer(env);
     const token = createTestToken('alice', '*:rw');
@@ -289,10 +281,6 @@ describe('Storage Error Handling', () => {
         async list() { return { objects: [] }; },
       } as any,
       DB: {} as any,
-      RATE_LIMIT_KV: {
-        async get() { return null; },
-        async put() {},
-      } as any,
     };
     const app = createServer(env);
     const token = createTestToken('alice', '*:rw');

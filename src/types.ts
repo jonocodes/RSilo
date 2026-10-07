@@ -1,10 +1,11 @@
-import type { R2Bucket, KVNamespace } from '@cloudflare/workers-types';
+import type { R2Bucket, RateLimit } from '@cloudflare/workers-types';
 import type { TokenPayload } from './services/auth';
 
 export interface AppEnv {
   STORAGE: R2Bucket;
   DB: D1Database;
-  RATE_LIMIT_KV?: KVNamespace;
+  LOGIN_LIMITER?: RateLimit;
+  STORAGE_LIMITER?: RateLimit;
   ADMIN_SECRET?: string;
   SESSION_SECRET?: string;
   JWT_SECRET?: string;

@@ -607,64 +607,39 @@ describe('Error handling compatibility', () => {
     expect(res.status).toBe(201);
   });
 
-it('rate limited request returns 429', async () => {
+it('repeated invalid-token requests are rate limited with 429', async () => {
     const rateLimitEnv = {
-      STORAGE: {
-        async get(key: string) {
-          const item = storage.get(key);
-          if (!item) return null;
-          return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-        },
-        async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-          const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-          storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-          return etag;
-        },
-        async delete(key: string) { storage.delete(key); },
-        async head(key: string) {
-          const item = storage.get(key);
-          if (!item) return null;
-          return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-        },
-        async list(options: { prefix?: string; delimiter?: string }) {
-          const prefix = options.prefix || '';
-          const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-          return { objects: keys.map(k => ({ key: k, size: storage.get(k)!.body.byteLength, etag: storage.get(k)!.etag })) };
-        },
-      } as any,
-      DB: {} as any,
-      RATE_LIMIT_KV: {
-        async get(key: string, type?: string) {
-          if (key === 'ratelimit:storage:ip:203.0.113.1:account:testuser') {
-            if (type === 'json') {
-              return { count: 100, windowStart: Date.now() };
-            }
-            return JSON.stringify({ count: 100, windowStart: Date.now() });
-          }
-          return null;
-        },
-        async put(_key: string, _value: string | object, _options?: { expirationTtl?: number }) { },
-      },
+      ...TEST_ENV,
+      STORAGE_LIMITER: { limit: async () => ({ success: false }) },
     };
-
     const rateApp = createServer(rateLimitEnv);
-    const token = createTestToken('testuser');
 
     const res = await rateApp.request(
       'http://localhost/storage/testuser/documents/rate-test.txt',
       {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'text/plain',
-          'CF-Connecting-IP': '203.0.113.1',
-        },
-        body: 'test',
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer not-a-token', 'CF-Connecting-IP': '203.0.113.1' },
       },
       rateLimitEnv
     );
 
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBeTruthy();
+  });
+
+  it('valid-token requests are never rate limited', async () => {
+    const rateLimitEnv = {
+      ...TEST_ENV,
+      STORAGE_LIMITER: { limit: async () => ({ success: false }) },
+    };
+    const rateApp = createServer(rateLimitEnv);
+
+    const res = await rateApp.request(
+      'http://localhost/storage/testuser/documents/',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${createTestToken('testuser')}` } },
+      rateLimitEnv
+    );
+
+    expect(res.status).toBe(200);
   });
 });

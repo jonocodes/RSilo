@@ -1,7 +1,11 @@
 import { Hono } from 'hono';
 import { verifyToken, hasScope, scopeFromPath } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
+import { RATE_LIMITS } from '../services/rate-limit';
+import { isLocalDevelopment } from '../config';
 import pkg from '../../package.json';
+
+const RATE_LIMITER_NAMES = Object.keys(RATE_LIMITS);
 
 export const debugRouter = new Hono();
 
@@ -282,24 +286,19 @@ debugRouter.get('/health/deep', async (c) => {
     }
   }
 
-  const kv = env?.RATE_LIMIT_KV;
-  if (!kv || typeof kv.get !== 'function') {
-    checks.rate_limit_kv = { ok: true, skipped: true, reason: 'KV binding not configured' };
-  } else {
-    const kvStart = Date.now();
-    const kvKey = `healthcheck:${crypto.randomUUID()}`;
-    try {
-      await kv.put(kvKey, 'ok', { expirationTtl: 60 });
-      const value = await kv.get(kvKey);
-      await kv.delete(kvKey);
-      checks.rate_limit_kv = { ok: value === 'ok', latency_ms: Date.now() - kvStart };
-    } catch (e: any) {
-      checks.rate_limit_kv = { ok: false, latency_ms: Date.now() - kvStart, error: String(e?.message || e) };
-    }
-  }
+  // Presence check only: calling limit() would spend real rate-limit budget.
+  const limiters = Object.fromEntries(
+    RATE_LIMITER_NAMES.map((name) => [name, typeof env?.[name]?.limit === 'function']),
+  ) as Record<string, boolean>;
+  const allLimiters = Object.values(limiters).every(Boolean);
+  checks.rate_limiters = {
+    ok: allLimiters || isLocalDevelopment(env),
+    bindings: limiters,
+    ...(allLimiters ? {} : { skipped: isLocalDevelopment(env), reason: 'rate-limit binding not configured' }),
+  };
 
   const criticalFailed = !checks.storage.ok || !checks.database.ok;
-  const optionalFailed = !checks.rate_limit_kv.ok;
+  const optionalFailed = !checks.rate_limiters.ok;
   const status = criticalFailed ? 'error' : optionalFailed ? 'degraded' : 'ok';
 
   return c.json({ status, checks, timestamp: new Date().toISOString() }, criticalFailed ? 503 : 200);
@@ -319,7 +318,8 @@ debugRouter.get('/env', (c) => {
     bindings: {
       STORAGE: !!env?.STORAGE,
       DB: !!(env?.DB && typeof env.DB.prepare === 'function'),
-      RATE_LIMIT_KV: !!(env?.RATE_LIMIT_KV && typeof env.RATE_LIMIT_KV.get === 'function'),
+      LOGIN_LIMITER: typeof env?.LOGIN_LIMITER?.limit === 'function',
+      STORAGE_LIMITER: typeof env?.STORAGE_LIMITER?.limit === 'function',
     },
     secrets_set: {
       ADMIN_SECRET: secretSet('ADMIN_SECRET'),

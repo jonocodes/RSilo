@@ -142,16 +142,13 @@ describe('Files — login', () => {
   });
 
   it('temporarily locks out repeated login attempts', async () => {
-    let stored: { count: number; windowStart: number } | null = null;
+    let attempts = 0;
     const env = {
       STORAGE: mockStorage,
       DB: makeDb(null),
       SESSION_SECRET,
       RSILO_DEV_MODE: 'false',
-      RATE_LIMIT_KV: {
-        get: async () => stored,
-        put: async (_key: string, value: string) => { stored = JSON.parse(value); },
-      },
+      LOGIN_LIMITER: { limit: async () => ({ success: ++attempts <= 5 }) },
     } as any;
     const request = () => app.request('http://localhost/account/login', {
       method: 'POST',
@@ -162,7 +159,7 @@ describe('Files — login', () => {
       body: new URLSearchParams({ username: 'alice', password: 'wrong' }).toString(),
     }, env);
 
-    for (let attempt = 0; attempt < 10; attempt++) expect((await request()).status).toBe(302);
+    for (let attempt = 0; attempt < 5; attempt++) expect((await request()).status).toBe(302);
     const blocked = await request();
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get('Retry-After')).toBeTruthy();
