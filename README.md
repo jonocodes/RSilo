@@ -31,6 +31,7 @@ This is for the person who owns the server. You deploy it once, create your acco
 
 - **Web file manager** at `/account` — browse, upload, download, delete, and view files
 - **Admin dashboard** at `/admin` — create users, set storage quotas, and review/revoke app access
+- **API reference** at `/api` — a generated page listing every endpoint the server exposes
 - **OAuth + WebFinger** so RemoteStorage apps can connect
 - **Public sharing** through the `public` module
 - Everything fits inside Cloudflare's **free tier** (see [Running on the Cloudflare free tier](#running-on-the-cloudflare-free-tier))
