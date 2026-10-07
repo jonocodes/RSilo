@@ -11,7 +11,6 @@ function createTestEnv() {
       async list() { return { objects: [] }; },
     } as any,
     DB: {} as any,
-    RATE_LIMIT_KV: { async get() { return null; }, async put() {} } as any,
   };
 }
 
@@ -227,7 +226,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: 'abc123', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -251,7 +250,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -274,7 +273,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -297,7 +296,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -322,7 +321,7 @@ describe('Content-Type Compliance', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -345,7 +344,7 @@ describe('Content-Type Compliance', () => {
       async head() { return { etag: '"test"', contentType: 'application/json', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -368,7 +367,7 @@ describe('Content-Type Compliance', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -393,7 +392,7 @@ describe('Folder Listing Compliance', () => {
         return { objects: [] };
       },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -420,7 +419,7 @@ describe('Folder Listing Compliance', () => {
         ] };
       },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -448,7 +447,7 @@ describe('Folder Listing Compliance', () => {
         ] };
       },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -472,7 +471,7 @@ describe('Folder Listing Compliance', () => {
         return { objects: [] };
       },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 

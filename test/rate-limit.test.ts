@@ -1,0 +1,150 @@
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { createServer, createTestToken } from '../src/index';
+import { RATE_LIMITS, RATE_LIMIT_PERIOD_SECONDS } from '../src/services/rate-limit';
+
+// Mirrors the native Workers rate-limit binding: limit() counts the call and
+// reports whether the key is still within its budget.
+function fakeLimiter(max: number) {
+  const counts = new Map<string, number>();
+  return {
+    keys: counts,
+    async limit({ key }: { key: string }) {
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { success: count <= max };
+    },
+  };
+}
+
+const storage = new Map<string, { body: ArrayBuffer; etag: string }>();
+const mockStorage = {
+  async get(key: string) {
+    const item = storage.get(key);
+    return item ? { body: item.body, metadata: { contentType: 'text/plain', contentLength: item.body.byteLength, etag: item.etag } } : null;
+  },
+  async put(key: string, body: ArrayBuffer) {
+    const etag = `"etag-${storage.size}"`;
+    storage.set(key, { body, etag });
+    return etag;
+  },
+  async delete(key: string) { storage.delete(key); },
+  async head(key: string) {
+    const item = storage.get(key);
+    return item ? { contentType: 'text/plain', contentLength: item.body.byteLength, etag: item.etag } : null;
+  },
+  async list() { return { objects: [] }; },
+} as any;
+
+const db = {
+  prepare: () => ({
+    bind: () => ({ first: async () => null, run: async () => ({}), all: async () => ({ results: [] }) }),
+  }),
+} as any;
+
+function makeEnv(overrides: Record<string, unknown> = {}) {
+  return {
+    STORAGE: mockStorage,
+    DB: db,
+    LOGIN_LIMITER: fakeLimiter(RATE_LIMITS.LOGIN_LIMITER),
+    STORAGE_LIMITER: fakeLimiter(RATE_LIMITS.STORAGE_LIMITER),
+    ...overrides,
+  } as any;
+}
+
+function login(env: any, ip = '203.0.113.10') {
+  return createServer(env).request('http://localhost/account/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'CF-Connecting-IP': ip },
+    body: new URLSearchParams({ username: 'alice', password: 'wrong' }).toString(),
+  }, env);
+}
+
+function storageGet(env: any, token: string, user = 'alice', ip = '203.0.113.20') {
+  return createServer(env).request(`http://localhost/storage/${user}/documents/`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}`, 'CF-Connecting-IP': ip },
+  }, env);
+}
+
+describe('login rate limiting', () => {
+  it('blocks after the login budget with 429 and rate-limit headers', async () => {
+    const env = makeEnv();
+    for (let i = 0; i < RATE_LIMITS.LOGIN_LIMITER; i++) {
+      expect((await login(env)).status).toBe(302);
+    }
+    const blocked = await login(env);
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBe(String(RATE_LIMIT_PERIOD_SECONDS));
+    expect(blocked.headers.get('X-RateLimit-Limit')).toBe(String(RATE_LIMITS.LOGIN_LIMITER));
+    expect(blocked.headers.get('X-RateLimit-Remaining')).toBe('0');
+  });
+
+  it('keys login attempts by namespace, IP and account', async () => {
+    const env = makeEnv();
+    await login(env);
+    expect([...env.LOGIN_LIMITER.keys.keys()]).toEqual(['account-login:ip:203.0.113.10:account:alice']);
+  });
+
+  it('fails closed in production when the login limiter is missing', async () => {
+    const env = makeEnv({ RSILO_DEV_MODE: 'false', SESSION_SECRET: 's', LOGIN_LIMITER: undefined });
+    expect((await login(env)).status).toBe(503);
+  });
+
+  it('skips limiting in local development when the binding is missing', async () => {
+    const env = makeEnv({ RSILO_DEV_MODE: 'true', LOGIN_LIMITER: undefined });
+    expect((await login(env)).status).toBe(302);
+  });
+});
+
+describe('storage rate limiting', () => {
+  it('never throttles requests with a valid token, however many', async () => {
+    const env = makeEnv();
+    const token = createTestToken('alice', '*:rw');
+    for (let i = 0; i < RATE_LIMITS.STORAGE_LIMITER * 5; i++) {
+      expect((await storageGet(env, token)).status).toBe(200);
+    }
+    expect(env.STORAGE_LIMITER.keys.size).toBe(0);
+  });
+
+  it('counts failed authentication and returns 429 once over budget', async () => {
+    const env = makeEnv();
+    for (let i = 0; i < RATE_LIMITS.STORAGE_LIMITER; i++) {
+      expect((await storageGet(env, 'not-a-token')).status).toBe(401);
+    }
+    const blocked = await storageGet(env, 'not-a-token');
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBe(String(RATE_LIMIT_PERIOD_SECONDS));
+    expect(blocked.headers.get('X-RateLimit-Limit')).toBe(String(RATE_LIMITS.STORAGE_LIMITER));
+  });
+
+  it('keys failed storage auth by IP only, so varying the path user does not reset it', async () => {
+    const env = makeEnv();
+    await storageGet(env, 'not-a-token', 'alice');
+    await storageGet(env, 'not-a-token', 'bob');
+    expect([...env.STORAGE_LIMITER.keys.entries()]).toEqual([['storage-auth:ip:203.0.113.20', 2]]);
+  });
+
+  it('fails closed in production when the storage limiter is missing', async () => {
+    const env = makeEnv({ RSILO_DEV_MODE: 'false', JWT_SECRET: 'j', STORAGE_LIMITER: undefined });
+    expect((await storageGet(env, 'not-a-token')).status).toBe(503);
+  });
+});
+
+describe('wrangler.toml rate-limit bindings', () => {
+  const toml = readFileSync('wrangler.toml', 'utf8');
+
+  it('declares no KV namespace', () => {
+    expect(toml).not.toContain('kv_namespaces');
+    expect(toml).not.toContain('RATE_LIMIT_KV');
+  });
+
+  for (const [name, limit] of Object.entries(RATE_LIMITS)) {
+    it(`declares ${name} matching the limit used in response headers`, () => {
+      const block = toml.match(new RegExp(`\\[\\[ratelimits\\]\\]\\s*name\\s*=\\s*"${name}"[\\s\\S]*?simple\\s*=\\s*\\{([^}]*)\\}`));
+      expect(block, `${name} binding missing from wrangler.toml`).toBeTruthy();
+      expect(block![1]).toMatch(new RegExp(`limit\\s*=\\s*${limit}\\b`));
+      expect(block![1]).toMatch(new RegExp(`period\\s*=\\s*${RATE_LIMIT_PERIOD_SECONDS}\\b`));
+    });
+  }
+});

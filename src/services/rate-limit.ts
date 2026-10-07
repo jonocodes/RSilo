@@ -1,14 +1,25 @@
 import type { Context } from '../types';
 import { isLocalDevelopment } from '../config';
 
+// Native Workers rate-limit bindings (see [[ratelimits]] in wrangler.toml).
+// Counters are kept by Cloudflare per location — no KV reads or writes.
+// These limits must match wrangler.toml; a test enforces it. They are
+// duplicated here only because the binding does not expose its own limit,
+// and X-RateLimit-Limit needs it.
+export const RATE_LIMIT_PERIOD_SECONDS = 60;
+export const RATE_LIMITS = {
+  LOGIN_LIMITER: 5,
+  STORAGE_LIMITER: 20,
+} as const;
+
+export type RateLimiterName = keyof typeof RATE_LIMITS;
+
 interface RateLimitOptions {
-  namespace: string;
-  account?: string;
-  maxAttempts?: number;
-  windowSeconds?: number;
+  limiter: RateLimiterName;
+  key: string;
 }
 
-function trustedClientIp(c: Context): string {
+export function trustedClientIp(c: Context): string {
   const cloudflareIp = c.req.header('CF-Connecting-IP');
   if (cloudflareIp) return cloudflareIp;
   if (isLocalDevelopment(c.env)) {
@@ -17,33 +28,38 @@ function trustedClientIp(c: Context): string {
   return 'unknown';
 }
 
+function getLimiter(c: Context, name: RateLimiterName): RateLimit | null {
+  const binding = (c.env as any)?.[name];
+  return binding && typeof binding.limit === 'function' ? binding : null;
+}
+
+// Returns a 503 when the limiter is missing in production (fail closed), and
+// null when it is present or local development may run without it.
+export function rateLimiterUnavailable(c: Context, name: RateLimiterName): Response | null {
+  if (getLimiter(c, name) || isLocalDevelopment(c.env)) return null;
+  return c.text('Rate limiting is not configured', 503);
+}
+
+// Counts one attempt against `key`. Returns a 429 once over budget, a 503 when
+// the limiter is missing in production, and null when the request may proceed.
 export async function enforceRateLimit(c: Context, options: RateLimitOptions): Promise<Response | null> {
-  const kv = (c.env as any)?.RATE_LIMIT_KV;
-  if (!kv || typeof kv.get !== 'function' || typeof kv.put !== 'function') {
-    return isLocalDevelopment(c.env)
-      ? null
-      : c.text('Rate limiting is not configured', 503);
-  }
+  const limiter = getLimiter(c, options.limiter);
+  if (!limiter) return rateLimiterUnavailable(c, options.limiter);
 
-  const maxAttempts = options.maxAttempts ?? 10;
-  const windowSeconds = options.windowSeconds ?? 300;
-  const now = Date.now();
-  const windowMs = windowSeconds * 1000;
-  const account = options.account?.trim().toLowerCase() || '-';
-  const key = `ratelimit:${options.namespace}:ip:${trustedClientIp(c)}:account:${account}`;
-  const current = await kv.get(key, 'json') as { count: number; windowStart: number } | null;
-  const inWindow = Boolean(current && current.windowStart > now - windowMs);
+  const { success } = await limiter.limit({ key: options.key });
+  if (success) return null;
 
-  if (inWindow && current!.count >= maxAttempts) {
-    return c.text('Rate limit exceeded', 429, {
-      'Retry-After': Math.max(1, Math.ceil((current!.windowStart + windowMs - now) / 1000)).toString(),
-      'X-RateLimit-Limit': maxAttempts.toString(),
-      'X-RateLimit-Remaining': '0',
-    });
-  }
+  return c.text('Rate limit exceeded', 429, {
+    'Retry-After': RATE_LIMIT_PERIOD_SECONDS.toString(),
+    'X-RateLimit-Limit': RATE_LIMITS[options.limiter].toString(),
+    'X-RateLimit-Remaining': '0',
+  });
+}
 
-  const count = inWindow ? current!.count + 1 : 1;
-  const windowStart = inWindow ? current!.windowStart : now;
-  await kv.put(key, JSON.stringify({ count, windowStart }), { expirationTtl: windowSeconds });
-  return null;
+export function loginRateLimit(c: Context, namespace: string, account: string): Promise<Response | null> {
+  const normalized = account.trim().toLowerCase() || '-';
+  return enforceRateLimit(c, {
+    limiter: 'LOGIN_LIMITER',
+    key: `${namespace}:ip:${trustedClientIp(c)}:account:${normalized}`,
+  });
 }

@@ -11,7 +11,6 @@ function createTestEnv() {
       async list() { return { objects: [] }; },
     } as any,
     DB: {} as any,
-    RATE_LIMIT_KV: { async get() { return null; }, async put() {} } as any,
   };
 }
 
@@ -109,7 +108,7 @@ describe('Authentication Edge Cases', () => {
         async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 4 }; },
         async list() { return { objects: [] }; },
       };
-      const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+      const env = { STORAGE: storage, DB: {} } as any;
       const app = createServer(env);
       const token = createTestToken('alice');
 
@@ -298,7 +297,7 @@ describe('Path Validation Edge Cases', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -321,7 +320,7 @@ describe('Content Negotiation', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -344,7 +343,7 @@ describe('Content Negotiation', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -368,7 +367,7 @@ describe('Content Negotiation', () => {
       async head() { return { etag: '"binary"', contentType: 'application/octet-stream', contentLength: 10 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -393,7 +392,7 @@ describe('Response Headers', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -414,7 +413,7 @@ describe('Response Headers', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 
@@ -437,7 +436,7 @@ describe('Response Headers', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {}, RATE_LIMIT_KV: {} } as any;
+    const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
     const token = createTestToken('alice');
 

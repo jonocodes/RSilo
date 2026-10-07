@@ -46,10 +46,6 @@ function createTestEnv() {
         all: async () => ({ results: [] }),
       }),
     } as any,
-    RATE_LIMIT_KV: {
-      async get() { return null; },
-      async put() {},
-    } as any,
   };
 }
 
@@ -143,7 +139,6 @@ describe('Security Tests', () => {
             })
           })
         } as any,
-        RATE_LIMIT_KV: { async get() { return null; }, async put() {} } as any,
       };
       const app = createServer(env);
       const token = createTestToken('quotauser', 'documents:rw');

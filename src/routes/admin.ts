@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { hashPassword, signSessionToken, verifySessionToken } from '../services/auth';
 import { getAdminSecret, isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
-import { enforceRateLimit } from '../services/rate-limit';
+import { loginRateLimit } from '../services/rate-limit';
 import { debugRouter } from './debug';
 
 export const adminRouter = new Hono();
@@ -123,7 +123,7 @@ adminRouter.post('/login', async (c) => {
   const secret = getAdminSecret(c.env);
   if (!secret) return c.redirect('/admin', 302);
 
-  const rateLimited = await enforceRateLimit(c, { namespace: 'admin-login', account: 'admin' });
+  const rateLimited = await loginRateLimit(c, 'admin-login', 'admin');
   if (rateLimited) return rateLimited;
   const body = await c.req.parseBody() as any;
   const submitted = (body.secret || '').trim();

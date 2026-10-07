@@ -6,7 +6,7 @@ import type { TokenPayload } from '../services/auth';
 import type { StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { isLocalDevelopment } from '../config';
-import { enforceRateLimit } from '../services/rate-limit';
+import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
 
 export const storageRouter = new Hono();
@@ -30,15 +30,21 @@ storageRouter.use('/*', async (c, next) => {
     return c.text('Invalid path', 400);
   }
 
-  const rateLimited = await enforceRateLimit(c, {
-    namespace: 'storage',
-    account: usernameFromPath,
-    maxAttempts: 100,
-    windowSeconds: 60,
-  });
-  if (rateLimited) return rateLimited;
+  const unavailable = rateLimiterUnavailable(c, 'STORAGE_LIMITER');
+  if (unavailable) return unavailable;
 
   await next();
+
+  // Only failed authentication is counted: a valid token's damage is bounded
+  // by its quota, while a sync legitimately fetches thousands of documents.
+  // Keyed by IP alone so varying the username in the path does not reset it.
+  if (c.res.status === 401) {
+    const rateLimited = await enforceRateLimit(c, {
+      limiter: 'STORAGE_LIMITER',
+      key: `storage-auth:ip:${trustedClientIp(c)}`,
+    });
+    if (rateLimited) c.res = rateLimited;
+  }
 });
 
 storageRouter.use('/*', authMiddleware());

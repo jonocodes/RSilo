@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
 import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
 import { getSessionSecret } from '../config';
-import { enforceRateLimit } from '../services/rate-limit';
+import { loginRateLimit } from '../services/rate-limit';
 
 export const oauthRouter = new Hono();
 
@@ -67,7 +67,7 @@ oauthRouter.post('/:user/authorize', async (c) => {
   const db = (c.env as any).DB;
 
   if (action === 'login') {
-    const rateLimited = await enforceRateLimit(c, { namespace: 'oauth-login', account: user });
+    const rateLimited = await loginRateLimit(c, 'oauth-login', user);
     if (rateLimited) return rateLimited;
     if (!password) {
       return new Response(renderLoginForm({ user, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, error: 'Password is required' }), {

@@ -38,13 +38,13 @@ This is for the person who owns the server. You deploy it once, create your acco
 
 ## Deploy it
 
-The service runs as a single Cloudflare Worker with three bindings: **R2** (file storage), **D1** (users and tokens) and **KV** (rate limiting).
+The service runs as a single Cloudflare Worker with two provisioned resources: **R2** (file storage) and **D1** (users and tokens). Rate limiting uses Cloudflare's native rate-limit bindings, which are declared in `wrangler.toml` and need no setup.
 
 ### Option A — Deploy to Cloudflare button (no CLI)
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jonocodes/RSilo)
 
-Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2/D1/KV automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
+Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2 and D1 automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
 
 The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance).
 
@@ -72,9 +72,8 @@ wrangler login          # or export CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
 # Create the resources
 wrangler r2 bucket create remotestorage
 wrangler d1 create remotestorage-db
-wrangler kv namespace create RATE_LIMIT_KV
 # copy wrangler.toml to wrangler.prod.toml (gitignored) and put the
-# printed IDs there (database_id, kv id)
+# printed database_id there
 
 # Migrate and deploy (bun run deploy auto-detects wrangler.prod.toml)
 bun run deploy
@@ -85,7 +84,7 @@ wrangler secret put ADMIN_SECRET     # bun run secret
 wrangler secret put JWT_SECRET       # bun run secret
 ```
 
-Alternatively, let wrangler provision the resources: delete the `database_id` and KV `id` lines from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy them from `wrangler d1 list` / `wrangler kv namespace list` if you need them later.
+Alternatively, let wrangler provision the resources: delete the `database_id` line from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy it from `wrangler d1 list` if you need them later.
 
 </details>
 
@@ -123,7 +122,7 @@ To release on every push to `main`, connect the repository to your Worker using 
    bun run deploy
    ```
 
-4. Under **Build variables**, add `D1_DATABASE_ID` and `KV_NAMESPACE_ID` (the values from your `wrangler.prod.toml`), marked as secrets. These are the only things not in git; `bun run deploy` materialises `wrangler.prod.toml` from them, applies D1 migrations, and deploys.
+4. Under **Build variables**, add `D1_DATABASE_ID` (the value from your `wrangler.prod.toml`), marked as a secret. This is the only thing not in git; `bun run deploy` materialises `wrangler.prod.toml` from them, applies D1 migrations, and deploys.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
@@ -174,7 +173,7 @@ Single-user is the common case. If you want more, create users from the dashboar
 
 RSilo is built for a *small personal backup*, not a business service — and it fits comfortably inside Cloudflare's free tier.
 
-**The one thing to watch: R2 is the only part that can ever cost money.** Workers, D1, and KV simply stop working once their free limits are reached. R2 instead bills overage once you pass its free allowance — and because Cloudflare requires a payment method to enable R2, that overage is charged automatically.
+**The one thing to watch: R2 is the only part that can ever cost money.** Workers and D1 simply stop working once their free limits are reached. R2 instead bills overage once you pass its free allowance — and because Cloudflare requires a payment method to enable R2, that overage is charged automatically.
 
 As of **October 2026**, R2's free tier covers roughly **10 GB of storage**, **1 million writes/listings**, and **10 million reads** per month, with free egress. Cloudflare changes these numbers and prices over time, so treat them as a rough guide and check the current values on the [R2 pricing page](https://developers.cloudflare.com/r2/pricing/). For a personal notes/todos/photos backup this allowance is far more than you will use.
 
@@ -206,11 +205,11 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
 └──────────────────────────────────────────────────────────┘
          │                    │                │
     ┌────▼────┐          ┌────▼────┐    ┌──────▼──────┐
-    │   R2    │          │   D1    │    │  KV (rate)  │
+    │   R2    │          │   D1    │    │ Rate limits │
     └─────────┘          └─────────┘    └─────────────┘
 ```
 
-For offline development: R2 → local filesystem, D1 → SQLite (via a D1-compatible adapter), KV → absent.
+For offline development: R2 → local filesystem, D1 → SQLite (via a D1-compatible adapter), rate limiting → skipped.
 
 The routes talk to storage through a small `StorageInterface`. In production `getStorage()` wraps the raw R2 binding in `R2Storage`; offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`.
 
@@ -336,12 +335,12 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**364 tests** across 21 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**403 tests** across 25 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
 - **No self-registration** — users are created via admin API or dashboard
-- **Rate-limit storage** — production requires the `RATE_LIMIT_KV` binding and fails closed with `503` when it is absent; explicit local-development mode skips limiting without KV
+- **Rate limiting is per Cloudflare location** — the native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Logins (account, OAuth, admin) allow 5 attempts per 60s per IP and account; storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7)
 - **Buffered uploads** — upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately; downloads stream
 
 ## References

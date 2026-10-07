@@ -198,7 +198,8 @@ describe('GET /admin/debug/health/deep', () => {
     expect(json.checks.storage.ok).toBe(true);
     expect(json.checks.storage.backend).toBe('local');
     expect(json.checks.database.ok).toBe(true);
-    expect(json.checks.rate_limit_kv.skipped).toBe(true);
+    expect(json.checks.rate_limiters.ok).toBe(true);
+    expect(json.checks.rate_limiters.skipped).toBe(true);
   });
 
   it('does not leave health-check objects behind', async () => {
@@ -245,7 +246,8 @@ describe('GET /admin/debug/env', () => {
     const json = await res.json() as any;
     expect(json.bindings.STORAGE).toBe(true);
     expect(json.bindings.DB).toBe(true);
-    expect(json.bindings.RATE_LIMIT_KV).toBe(false);
+    expect(json.bindings.LOGIN_LIMITER).toBe(false);
+    expect(json.bindings.STORAGE_LIMITER).toBe(false);
     expect(json.storage_backend).toBe('local');
     expect(json.secrets_set.ADMIN_SECRET).toBe(true);
     expect(json.secrets_set.JWT_SECRET).toBe(false);

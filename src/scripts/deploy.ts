@@ -11,25 +11,23 @@ const migrateOnly = process.argv.includes('--migrate-only');
 
 // On CI (Cloudflare Workers Builds) there is no local, gitignored prod config.
 // Materialise one from build variables so account-specific resource IDs stay
-// out of git while the deploy still targets the right D1 database and KV namespace.
+// out of git while the deploy still targets the right D1 database.
 if (!existsSync(prodConfigPath)) {
   const dbId = process.env.D1_DATABASE_ID;
-  const kvId = process.env.KV_NAMESPACE_ID;
 
-  if (process.env.WORKERS_CI === '1' && (!dbId || !kvId)) {
+  if (process.env.WORKERS_CI === '1' && !dbId) {
     console.error(
-      'Workers Builds: set build variables D1_DATABASE_ID and KV_NAMESPACE_ID ' +
+      'Workers Builds: set build variable D1_DATABASE_ID ' +
         '(Worker → Settings → Builds → Build variables), or provide a wrangler.prod.toml.'
     );
     process.exit(1);
   }
 
-  if (dbId && kvId) {
+  if (dbId) {
     const toml = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8')
-      .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`)
-      .replace(/(\[\[kv_namespaces\]\][\s\S]*?\bid\s*=\s*)"[^"]*"/, `$1"${kvId}"`);
+      .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
     writeFileSync(prodConfigPath, toml);
-    console.log('Materialised wrangler.prod.toml from D1_DATABASE_ID / KV_NAMESPACE_ID');
+    console.log('Materialised wrangler.prod.toml from D1_DATABASE_ID');
   }
 }
 
