@@ -110,6 +110,22 @@ bun run deploy
 
 If `wrangler.prod.toml` is missing, it falls back to the committed `wrangler.toml` — the path Cloudflare's button uses, where the IDs are injected for you. To rebuild the prod config after provisioning new resources, re-run `bun run setup` (or copy `wrangler.toml` and paste in the IDs by hand).
 
+### Automatic deploys (Cloudflare Workers Builds)
+
+To release on every push to `main`, connect the repository to your Worker using Cloudflare's native Git integration — Cloudflare then owns the deploy token, so nothing needs to live in GitHub.
+
+1. Cloudflare dashboard → **Workers & Pages** → your Worker → **Settings → Builds** → connect the Git repository.
+2. Set the **production branch** to `main`, and leave preview builds off (or on) as you prefer.
+3. Set the **deploy command** to:
+
+   ```bash
+   bun run deploy
+   ```
+
+4. Under **Build variables**, add `D1_DATABASE_ID` and `KV_NAMESPACE_ID` (the values from your `wrangler.prod.toml`), marked as secrets. These are the only things not in git; `bun run deploy` materialises `wrangler.prod.toml` from them, applies D1 migrations, and deploys.
+
+`bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
+
 ## Create your account and sign in
 
 1. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
