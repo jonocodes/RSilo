@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -46,7 +47,7 @@ describe('Scope-based access control', () => {
   });
 
   it('read-only token can GET but not PUT', async () => {
-    const readOnlyToken = createTestToken('alice', 'documents:r');
+    const readOnlyToken = seedToken(TEST_ENV, 'alice', 'documents:r');
 
     const getRes = await app.request(
       'http://localhost/storage/alice/documents/read-test',
@@ -73,7 +74,7 @@ describe('Scope-based access control', () => {
   });
 
   it('read-write token can PUT and GET', async () => {
-    const rwToken = createTestToken('alice', 'documents:rw');
+    const rwToken = seedToken(TEST_ENV, 'alice', 'documents:rw');
 
     const putRes = await app.request(
       'http://localhost/storage/alice/documents/rw-test',
@@ -100,7 +101,7 @@ describe('Scope-based access control', () => {
   });
 
   it('token for documents scope cannot access pictures module', async () => {
-    const docToken = createTestToken('alice', 'documents:rw');
+    const docToken = seedToken(TEST_ENV, 'alice', 'documents:rw');
 
     const getRes = await app.request(
       'http://localhost/storage/alice/pictures/some-file.jpg',
@@ -115,7 +116,7 @@ describe('Scope-based access control', () => {
   });
 
   it('wildcard scope can access any module', async () => {
-    const adminToken = createTestToken('alice', '*');
+    const adminToken = seedToken(TEST_ENV, 'alice', '*');
 
     const putRes1 = await app.request(
       'http://localhost/storage/alice/documents/wildcard-test',
@@ -164,12 +165,9 @@ describe('Token validation', () => {
   });
 
   it('expired token returns 401', async () => {
-    const expiredToken = createTestToken('alice');
-    const parts = expiredToken.split('.');
-    const payload = JSON.parse(atob(parts[1]));
-    payload.exp = Math.floor(Date.now() / 1000) - 3600;
-    parts[1] = btoa(JSON.stringify(payload));
-    const expired = parts.join('.');
+    const expired = seedToken(TEST_ENV, 'alice', 'documents:rw pictures:rw', {
+      expiresAt: Math.floor(Date.now() / 1000) - 3600,
+    });
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test',

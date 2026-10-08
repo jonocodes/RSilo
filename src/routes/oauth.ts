@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
-import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
+import { generateToken, verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
 import { getSessionSecret } from '../config';
 import { loginRateLimit } from '../services/rate-limit';
 
@@ -322,13 +322,6 @@ oauthRouter.options('/:user/token', (c) => {
 function generateAuthCode(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => chars[b % chars.length]).join('');
-}
-
-function generateToken(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const array = new Uint8Array(48);
   crypto.getRandomValues(array);
   return Array.from(array).map(b => chars[b % chars.length]).join('');
 }

@@ -156,6 +156,14 @@ describe('parseAuthHeader', () => {
     expect(parseAuthHeader('Bearer mytoken123')).toBe('mytoken123');
   });
 
+  it('trims whitespace around the token', () => {
+    expect(parseAuthHeader('Bearer  mytoken123 ')).toBe('mytoken123');
+  });
+
+  it('returns null for an empty Bearer token', () => {
+    expect(parseAuthHeader('Bearer   ')).toBeNull();
+  });
+
   it('returns null for null input', () => {
     expect(parseAuthHeader(null)).toBeNull();
   });

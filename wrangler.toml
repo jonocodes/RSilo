@@ -36,5 +36,4 @@ enabled = true
 # Required production secrets — set each with `wrangler secret put`:
 #   SESSION_SECRET   — signs file manager and OAuth session cookies
 #   ADMIN_SECRET     — protects /admin/* endpoints
-#   JWT_SECRET       — verifies signed JWT access tokens
 # RSILO_DEV_MODE is only for local development and must never be deployed.

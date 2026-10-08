@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createServer, createTestToken } from '../../src/index';
+import { createServer } from '../../src/index';
+import { seedToken } from '../helpers/tokens';
 
 function createTestEnv() {
   return {
@@ -89,7 +90,7 @@ describe('Authentication Edge Cases', () => {
     it('rejects Authorization header without Bearer prefix', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -110,7 +111,7 @@ describe('Authentication Edge Cases', () => {
       };
       const env = { STORAGE: storage, DB: {} } as any;
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -143,7 +144,7 @@ describe('Authentication Edge Cases', () => {
     it('token with documents:r cannot PUT to documents', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:r');
+      const token = seedToken(env, 'alice', 'documents:r');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -157,7 +158,7 @@ describe('Authentication Edge Cases', () => {
     it('token with documents:rw cannot access pictures module', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/alice/pictures/test.jpg',
@@ -171,7 +172,7 @@ describe('Authentication Edge Cases', () => {
     it('partial scope match is not enough (documents:rw vs documents:r required)', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:r');
+      const token = seedToken(env, 'alice', 'documents:r');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -187,7 +188,7 @@ describe('Authentication Edge Cases', () => {
     it('token sub must match storage username', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const bobToken = createTestToken('bob');
+      const bobToken = seedToken(env, 'bob');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -221,7 +222,7 @@ describe('Path Validation Edge Cases', () => {
   it('rejects path with null byte', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/file\u0000.txt',
@@ -235,7 +236,7 @@ describe('Path Validation Edge Cases', () => {
   it('rejects path with control characters', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/file\x1b.txt',
@@ -249,7 +250,7 @@ describe('Path Validation Edge Cases', () => {
   it('rejects path with encoded forward slash in module name', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents%2Fsubdir/file.txt',
@@ -263,7 +264,7 @@ describe('Path Validation Edge Cases', () => {
   it('handles path with dot segment appropriately', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/.hidden/file.txt',
@@ -277,7 +278,7 @@ describe('Path Validation Edge Cases', () => {
   it('rejects extremely long path', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
     const longPath = 'a'.repeat(500);
 
     const res = await app.request(
@@ -299,7 +300,7 @@ describe('Path Validation Edge Cases', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/my-file_v2.txt',
@@ -322,7 +323,7 @@ describe('Content Negotiation', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',
@@ -345,7 +346,7 @@ describe('Content Negotiation', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -369,7 +370,7 @@ describe('Content Negotiation', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/data.bin',
@@ -394,7 +395,7 @@ describe('Response Headers', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -415,7 +416,7 @@ describe('Response Headers', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',
@@ -438,7 +439,7 @@ describe('Response Headers', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -454,7 +455,7 @@ describe('HTTP Method Handling', () => {
   it('PATCH is not supported (returns 404)', async () => {
     const env = createTestEnv();
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',

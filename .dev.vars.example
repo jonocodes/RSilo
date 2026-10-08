@@ -7,12 +7,9 @@ SESSION_SECRET=change-me-to-a-random-string
 # Required in production: protects /admin/* endpoints.
 ADMIN_SECRET=change-me-to-a-different-random-string
 
-# Required in production: verifies signed JWT access tokens.
-JWT_SECRET=change-me-to-another-random-string
-
 # Optional maximum object size in bytes (defaults to 10 MiB).
 MAX_OBJECT_SIZE_BYTES=10485760
 
-# Local development only. Allows fallback sessions, open admin access when
-# ADMIN_SECRET is blank, and unsigned test tokens when JWT_SECRET is blank.
+# Local development only. Allows fallback sessions and open admin access when
+# ADMIN_SECRET is blank.
 RSILO_DEV_MODE=true

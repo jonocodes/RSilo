@@ -89,7 +89,6 @@ if (wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', PROD_CO
 console.log('\nSetting secrets…');
 const adminSecret = randomHex(24);
 setSecret('SESSION_SECRET', randomHex(32));
-setSecret('JWT_SECRET', randomHex(32));
 setSecret('ADMIN_SECRET', adminSecret);
 
 console.log('\nDeploying…');

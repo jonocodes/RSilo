@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 function createTestEnv() {
   return {
@@ -258,7 +259,8 @@ describe('Database Error Handling', () => {
       } as any,
     };
     const app = createServer(env);
-    const token = createTestToken('alice', '*:rw');
+    // The token lookup itself hits the failing DB, so no row can be seeded.
+    const token = 'opaque-token';
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -283,7 +285,7 @@ describe('Storage Error Handling', () => {
       DB: {} as any,
     };
     const app = createServer(env);
-    const token = createTestToken('alice', '*:rw');
+    const token = seedToken(env, 'alice', '*:rw');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',

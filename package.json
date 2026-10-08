@@ -45,9 +45,6 @@
       },
       "ADMIN_SECRET": {
         "description": "Required in production. Protects the /admin/* dashboard. Generate one with `bun run secret`."
-      },
-      "JWT_SECRET": {
-        "description": "Required in production. Verifies signed JWT access tokens. Generate one with `bun run secret`."
       }
     }
   }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string; lastModified?: string }>();
 
@@ -116,7 +117,7 @@ describe('Content-Type preservation', () => {
   });
 
   it('PUT stores and GET returns correct Content-Type', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/custom-type',
@@ -203,7 +204,7 @@ describe('ETag behavior', () => {
   });
 
   it('PUT creates new ETag', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const putRes = await app.request(
       'http://localhost/storage/alice/documents/etag-create',
@@ -221,7 +222,7 @@ describe('ETag behavior', () => {
   });
 
   it('PUT updates ETag when content changes', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const putRes1 = await app.request(
       'http://localhost/storage/alice/documents/etag-update',

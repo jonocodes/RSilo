@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 import { RATE_LIMITS, RATE_LIMIT_PERIOD_SECONDS } from '../src/services/rate-limit';
 
 // Mirrors the native Workers rate-limit binding: limit() counts the call and
@@ -100,7 +101,7 @@ describe('login rate limiting', () => {
 describe('storage rate limiting', () => {
   it('never throttles requests with a valid token, however many', async () => {
     const env = makeEnv();
-    const token = createTestToken('alice', '*:rw');
+    const token = seedToken(env, 'alice', '*:rw');
     for (let i = 0; i < RATE_LIMITS.STORAGE_LIMITER * 5; i++) {
       expect((await storageGet(env, token)).status).toBe(200);
     }
@@ -126,7 +127,7 @@ describe('storage rate limiting', () => {
   });
 
   it('fails closed in production when the storage limiter is missing', async () => {
-    const env = makeEnv({ RSILO_DEV_MODE: 'false', JWT_SECRET: 'j', STORAGE_LIMITER: undefined });
+    const env = makeEnv({ RSILO_DEV_MODE: 'false', STORAGE_LIMITER: undefined });
     expect((await storageGet(env, 'not-a-token')).status).toBe(503);
   });
 });

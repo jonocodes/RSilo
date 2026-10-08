@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { verifyToken, hasScope, scopeFromPath } from '../services/auth';
+import { hasScope, scopeFromPath } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { RATE_LIMITS } from '../services/rate-limit';
 import { isLocalDevelopment } from '../config';
@@ -22,16 +22,6 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-function isUnsignedToken(token: string): boolean {
-  try {
-    const [headerB64] = token.split('.');
-    const header = JSON.parse(atob(headerB64));
-    return header?.alg === 'none';
-  } catch {
-    return false;
-  }
-}
-
 function parseScopes(scopes: string): { raw: string; module: string; permissions: string }[] {
   return scopes
     .split(/\s+/)
@@ -46,7 +36,7 @@ function parseScopes(scopes: string): { raw: string; module: string; permissions
 
 interface Introspection {
   valid: boolean;
-  source: 'oauth_token' | 'jwt' | 'dev_token' | null;
+  source: 'oauth_token' | null;
   sub?: string;
   scopes?: string;
   parsed_scopes?: { raw: string; module: string; permissions: string }[];
@@ -54,82 +44,38 @@ interface Introspection {
   exp?: number;
   expires_in?: number;
   expired?: boolean;
-  jwt_secret_set: boolean;
   scope_checks?: Record<string, boolean>;
   reason?: string;
 }
 
-function buildIntrospection(
-  source: 'oauth_token' | 'jwt' | 'dev_token',
-  sub: string,
-  scopes: string,
-  iat: number | undefined,
-  exp: number | undefined,
-  jwtSecretSet: boolean,
-  valid: boolean,
-): Introspection {
+// Mirrors the storage auth middleware: a token is valid only while its
+// unexpired row exists in oauth_tokens. Expired rows are still reported so the
+// expiry is visible.
+async function introspectToken(c: any, token: string): Promise<Introspection> {
+  const db = c.env?.DB;
+  if (!db || typeof db.prepare !== 'function') {
+    return { valid: false, source: null, reason: 'DB binding not available' };
+  }
+
+  const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token = ?').bind(token).first() as any;
+  if (!row) {
+    return { valid: false, source: null, reason: 'unknown or revoked token' };
+  }
+
+  const valid = row.expires_at > nowSeconds();
   const result: Introspection = {
     valid,
-    source,
-    sub,
-    scopes,
-    parsed_scopes: parseScopes(scopes),
-    iat,
-    exp,
-    jwt_secret_set: jwtSecretSet,
+    source: 'oauth_token',
+    sub: row.user_id,
+    scopes: row.scopes,
+    parsed_scopes: parseScopes(row.scopes),
+    iat: row.created_at,
+    exp: row.expires_at,
+    expired: !valid,
+    expires_in: row.expires_at - nowSeconds(),
   };
-  if (typeof exp === 'number') {
-    result.expired = exp <= nowSeconds();
-    result.expires_in = exp - nowSeconds();
-  }
   if (!valid) result.reason = 'token expired';
   return result;
-}
-
-// Mirrors the resolution order of the storage auth middleware so the report
-// reflects exactly what a storage request would see.
-async function introspectToken(c: any, token: string): Promise<Introspection> {
-  const env = c.env as any;
-  const jwtSecret = env?.JWT_SECRET as string | undefined;
-  const jwtSecretSet = typeof jwtSecret === 'string' && jwtSecret.length > 0;
-
-  const db = env?.DB;
-  if (db && typeof db.prepare === 'function') {
-    const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token = ?').bind(token).first() as any;
-    if (row) {
-      return buildIntrospection(
-        'oauth_token',
-        row.user_id,
-        row.scopes,
-        row.created_at,
-        row.expires_at,
-        jwtSecretSet,
-        row.expires_at > nowSeconds(),
-      );
-    }
-  }
-
-  const payload = jwtSecretSet ? await verifyToken(token, jwtSecret) : await verifyToken(token);
-  if (payload) {
-    return buildIntrospection(
-      isUnsignedToken(token) ? 'dev_token' : 'jwt',
-      payload.sub,
-      payload.scopes,
-      payload.iat,
-      payload.exp,
-      jwtSecretSet,
-      true,
-    );
-  }
-
-  return {
-    valid: false,
-    source: null,
-    jwt_secret_set: jwtSecretSet,
-    reason: jwtSecretSet
-      ? 'invalid or expired token'
-      : 'invalid, expired, or unsigned dev token (JWT_SECRET not set)',
-  };
 }
 
 async function tokenHandler(c: any) {
@@ -324,7 +270,6 @@ debugRouter.get('/env', (c) => {
     secrets_set: {
       ADMIN_SECRET: secretSet('ADMIN_SECRET'),
       SESSION_SECRET: secretSet('SESSION_SECRET'),
-      JWT_SECRET: secretSet('JWT_SECRET'),
     },
     timestamp: new Date().toISOString(),
   });
