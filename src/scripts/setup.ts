@@ -143,8 +143,13 @@ if (dbId) {
 // Rebuilt from wrangler.toml each run; vars already in wrangler.prod.toml
 // (including optional ones such as MAX_OBJECT_SIZE_BYTES) are carried over.
 // Empty entries are left out so a deploy never blanks a dashboard value.
+// The bucket and database names are written too, so RSILO_BUCKET / RSILO_DB
+// bind the Worker to the resources created above, not the committed defaults.
 function writeProdConfig(): void {
-  const template = readFileSync(CONFIG, 'utf8').replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
+  const template = readFileSync(CONFIG, 'utf8')
+    .replace(/(bucket_name\s*=\s*)"[^"]*"/, `$1"${BUCKET}"`)
+    .replace(/(database_name\s*=\s*)"[^"]*"/, `$1"${DB_NAME}"`)
+    .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
   const vars = Object.fromEntries(
     Object.entries({ ...existingVars, ...settings }).filter((entry): entry is [string, string] => Boolean(entry[1]))
   );

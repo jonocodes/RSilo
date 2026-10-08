@@ -101,6 +101,20 @@ describe('bun run setup (fake wrangler)', () => {
     expect(prodVars()).toMatchObject({ ACCOUNT_USERNAME: 'jono', OWNER_EMAIL: 'new@example.com' });
   });
 
+  it('binds the Worker to the bucket and database it created when RSILO_BUCKET / RSILO_DB are set', () => {
+    const res = setup(['--account-username=jono', '--owner-email=me@example.com'], {
+      RSILO_BUCKET: 'rsilo-other',
+      RSILO_DB: 'rsilo-other-db',
+    });
+    expect(res.status, res.out).toBe(0);
+
+    const prod = readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8');
+    expect(prod).toMatch(/^bucket_name = "rsilo-other"$/m);
+    expect(prod).toMatch(/^database_name = "rsilo-other-db"$/m);
+    expect(prod).not.toMatch(/"remotestorage"|"remotestorage-db"/);
+    expect(calls()).toContain('r2 bucket create rsilo-other');
+  });
+
   it('uses a given PUBLIC_BASE_URL and deploys once', () => {
     const res = setup(['--account-username=jono', '--owner-email=me@example.com', '--public-base-url=https://rsilo.test-sub.workers.dev/']);
     expect(res.status, res.out).toBe(0);
