@@ -9,15 +9,14 @@ const TAGS = [
   { name: 'Public files', description: "Unauthenticated access to a user's public folder." },
   { name: 'WebFinger', description: 'Discovery of the storage and auth endpoints.' },
   { name: 'OAuth', description: 'Authorization code, implicit and refresh flows.' },
-  { name: 'Account', description: 'Cookie-based self-service web UI.' },
-  { name: 'Admin', description: 'Operator dashboard. Requires the ADMIN_SECRET.' },
-  { name: 'Debug', description: 'Read-only observability under /admin. Requires the ADMIN_SECRET.' },
+  { name: 'Account', description: 'The Owner\'s web UI, behind Cloudflare Access. Only OWNER_EMAIL is admitted; state changes must be same-origin.' },
+  { name: 'Debug', description: 'Local-development observability. Answered only in dev mode on a local host; 404 everywhere else.' },
   { name: 'Meta', description: 'Health and service metadata.' },
 ];
 
 const SECURITY_SCHEMES = {
   bearerAuth: { type: 'http', scheme: 'bearer' },
-  adminSecret: { type: 'http', scheme: 'bearer', description: 'The ADMIN_SECRET value.' },
+  cloudflareAccess: { type: 'apiKey', in: 'cookie', name: 'CF_Authorization', description: 'A Cloudflare Access session for OWNER_EMAIL. The Worker reads the identity from the platform (ctx.access), never from this cookie.' },
 };
 
 function pathParameters(path: string) {
@@ -61,7 +60,7 @@ export function buildOpenApiDocument(app: { routes: readonly RouteLike[] }) {
       title: 'RSilo API',
       version: VERSION,
       description:
-        'The complete surface of this RemoteStorage-compatible server: storage, WebFinger, OAuth, account, admin and debug routes. ' +
+        'The complete surface of this RemoteStorage-compatible server: storage, WebFinger, OAuth, account and debug routes. ' +
         'Documentation only — the interactive request console is disabled. ' +
         'Protocol routes follow the RemoteStorage specification and the referenced RFCs. ' +
         'CORS preflight (OPTIONS) handlers are omitted.',

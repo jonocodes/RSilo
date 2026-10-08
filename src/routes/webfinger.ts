@@ -27,7 +27,7 @@ webfingerRouter.get('/', (c) => {
   <h1>RSilo</h1>
   <p class="tagline">A RemoteStorage server on Cloudflare Workers.</p>
   <nav>
-    <a href="/admin">Admin</a>
+    <a href="/account">Account</a>
     <a href="/api">API reference</a>
     <a href="https://github.com/jonocodes/RSilo">Source on GitHub</a>
   </nav>

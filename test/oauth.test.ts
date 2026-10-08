@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
-import { hashPassword, signSessionToken } from '../src/services/auth';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -394,10 +393,12 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   });
 });
 
-describe('OAuth login flow', () => {
+describe('OAuth consent flow', () => {
   let app: ReturnType<typeof createServer>;
-  let passwordHash: string;
-  const SESSION_SECRET = 'test-session-secret';
+  // Same-origin form posts from the consent page (CSRF check), and a
+  // non-local production request with no Cloudflare Access identity.
+  const SAME_ORIGIN = { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' };
+  const PRODUCTION = { RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
 
   const validClient = {
     id: 'test-client',
@@ -424,13 +425,35 @@ describe('OAuth login flow', () => {
     } as any;
   }
 
+  function recordingDb(table: string, inserts: any[]) {
+    return {
+      prepare: (sql: string) => ({
+        bind: (...args: any[]) => ({
+          first: async () => null,
+          run: async () => { if (sql.includes(`INSERT INTO ${table}`)) inserts.push(args); },
+        }),
+      }),
+    } as any;
+  }
+
+  function approveBody(extra: Record<string, string> = {}) {
+    return new URLSearchParams({
+      action: 'approve',
+      client_id: 'test-client',
+      redirect_uri: 'https://example.com/callback',
+      response_type: 'code',
+      scope: 'documents:rw',
+      state: 'xyz',
+      ...extra,
+    }).toString();
+  }
+
   beforeAll(async () => {
-    passwordHash = await hashPassword('correctpassword');
     app = createServer(TEST_ENV);
   });
 
-  it('GET /oauth/:user/authorize returns HTML login form', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
+  it('GET /oauth/:user/authorize renders the consent form, with no password step', async () => {
+    const env = { STORAGE: {} as any, DB: makeDb() };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=https://example.com/callback&response_type=code&scope=documents:rw',
       { method: 'GET' },
@@ -439,142 +462,20 @@ describe('OAuth login flow', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('text/html');
     const html = await res.text();
-    expect(html).toContain('Sign in');
-    expect(html).toContain('alice');
-    expect(html).toContain('type="password"');
-  });
-
-  it('POST login with correct password shows consent screen', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'login',
-      password: 'correctpassword',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: 'xyz',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(200);
-    const html = await res.text();
     expect(html).toContain('Authorize Access');
+    expect(html).toContain('alice');
     expect(html).toContain('documents:rw');
-    expect(html).toContain('session_token');
+    expect(html).toContain('name="action" value="approve"');
+    expect(html).not.toContain('type="password"');
+    expect(html).not.toContain('session_token');
   });
 
-  it('POST login returns 503 when SESSION_SECRET is missing in production mode', async () => {
-    const env = {
-      STORAGE: {} as any,
-      DB: makeDb({ username: 'alice', password_hash: passwordHash }),
-      RSILO_DEV_MODE: 'false',
-      ...PRODUCTION_INSTANCE,
-    };
-    const body = new URLSearchParams({
-      action: 'login',
-      password: 'correctpassword',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: '',
-    });
+  it('POST approve as the Owner redirects with code', async () => {
+    const codeInserts: any[] = [];
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts) };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(503);
-    expect(await res.text()).not.toContain('session_token');
-  });
-
-  it('POST login with wrong password returns 401 login form', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'login',
-      password: 'wrongpassword',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: '',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(401);
-    const html = await res.text();
-    expect(html).toContain('Invalid username or password');
-    expect(html).toContain('type="password"');
-  });
-
-  it('POST login with no password returns 400', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'login',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: '',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it('POST login for unknown user returns 401', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(null), SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'login',
-      password: 'anypassword',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: '',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(401);
-  });
-
-  it('POST approve with valid session_token redirects with code', async () => {
-    const sessionToken = await signSessionToken('alice', SESSION_SECRET);
-    const codeInserts: string[] = [];
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (...args: any[]) => ({
-          first: async () => null,
-          run: async () => { if (sql.includes('oauth_codes')) codeInserts.push(args[0]); },
-        }),
-      }),
-    } as any;
-    const env = { STORAGE: {} as any, DB: db, SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'approve',
-      session_token: sessionToken,
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: 'xyz',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
       env
     );
     expect(res.status).toBe(302);
@@ -582,29 +483,90 @@ describe('OAuth login flow', () => {
     expect(location).toContain('https://example.com/callback');
     expect(location).toContain('code=');
     expect(location).toContain('state=xyz');
+    expect(codeInserts.length).toBe(1);
   });
 
-  it('POST approve with invalid session_token returns 401', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'approve',
-      session_token: 'invalid.token',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: '',
-    });
+  it('POST approve with an Origin equal to PUBLIC_BASE_URL is accepted when Sec-Fetch-Site is absent', async () => {
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []) };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'http://localhost:8787' }, body: approveBody() },
       env
+    );
+    expect(res.status).toBe(302);
+  });
+
+  for (const [name, headers] of [
+    ['Sec-Fetch-Site: cross-site', { 'Sec-Fetch-Site': 'cross-site' }],
+    ['Sec-Fetch-Site: same-site', { 'Sec-Fetch-Site': 'same-site' }],
+    ['a foreign Origin', { Origin: 'https://evil.example' }],
+    ['neither header', {}],
+  ] as const) {
+    it(`POST approve with ${name} is refused with 403 and issues nothing`, async () => {
+      const codeInserts: any[] = [];
+      const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts) };
+      const res = await app.request(
+        'http://localhost/oauth/alice/authorize',
+        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: approveBody() },
+        env
+      );
+      expect(res.status).toBe(403);
+      expect(res.headers.get('Location')).toBeNull();
+      expect(codeInserts).toHaveLength(0);
+    });
+  }
+
+  it('POST approve without an Owner identity returns 401 (production, no Cloudflare Access)', async () => {
+    const codeInserts: any[] = [];
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts), ...PRODUCTION };
+    const res = await app.request(
+      'https://rsilo.example/oauth/alice/authorize',
+      {
+        method: 'POST',
+        headers: { ...SAME_ORIGIN, 'Cf-Access-Jwt-Assertion': 'forged.jwt.value' },
+        body: approveBody(),
+      },
+      env
+    );
+    expect(res.status).toBe(401);
+    expect(codeInserts).toHaveLength(0);
+  });
+
+  it('POST approve with an Access identity other than OWNER_EMAIL returns 401', async () => {
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []), ...PRODUCTION };
+    const ctx = {
+      waitUntil() {},
+      passThroughOnException() {},
+      access: { aud: 'aud', getIdentity: async () => ({ email: 'mallory@example.com' }) },
+    } as any;
+    const res = await app.request(
+      'https://rsilo.example/oauth/alice/authorize',
+      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
+      env,
+      ctx
     );
     expect(res.status).toBe(401);
   });
 
+  it('POST approve with the Owner\'s Access identity redirects with code (production)', async () => {
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []), ...PRODUCTION };
+    const ctx = {
+      waitUntil() {},
+      passThroughOnException() {},
+      access: { aud: 'aud', getIdentity: async () => ({ email: 'Owner@Example.com' }) },
+    } as any;
+    const res = await app.request(
+      'https://rsilo.example/oauth/alice/authorize',
+      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
+      env,
+      ctx
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toContain('code=');
+  });
+
   it('POST deny redirects with access_denied', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
+    const env = { STORAGE: {} as any, DB: makeDb() };
     const body = new URLSearchParams({
       action: 'deny',
       redirect_uri: 'https://example.com/callback',
@@ -612,7 +574,7 @@ describe('OAuth login flow', () => {
     });
     const res = await app.request(
       'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+      { method: 'POST', headers: SAME_ORIGIN, body: body.toString() },
       env
     );
     expect(res.status).toBe(302);
@@ -622,29 +584,11 @@ describe('OAuth login flow', () => {
   });
 
   it('POST approve with response_type=token redirects with access_token in hash', async () => {
-    const sessionToken = await signSessionToken('alice', SESSION_SECRET);
     const tokenInserts: any[] = [];
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (...args: any[]) => ({
-          first: async () => null,
-          run: async () => { if (sql.includes('oauth_tokens')) tokenInserts.push(args); },
-        }),
-      }),
-    } as any;
-    const env = { STORAGE: {} as any, DB: db, SESSION_SECRET };
-    const body = new URLSearchParams({
-      action: 'approve',
-      session_token: sessionToken,
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'token',
-      scope: 'documents:rw',
-      state: 'abc',
-    });
+    const env = { STORAGE: {} as any, DB: recordingDb('oauth_tokens', tokenInserts) };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+      { method: 'POST', headers: SAME_ORIGIN, body: approveBody({ response_type: 'token', state: 'abc' }) },
       env
     );
     expect(res.status).toBe(302);
@@ -657,7 +601,7 @@ describe('OAuth login flow', () => {
   });
 
   it('GET /authorize with unsupported response_type returns 400', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
+    const env = { STORAGE: {} as any, DB: makeDb() };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=https://example.com/callback&response_type=invalid',
       { method: 'GET' },
@@ -674,7 +618,7 @@ describe('OAuth login flow', () => {
         bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}) }),
       }),
     } as any;
-    const env = { STORAGE: {} as any, DB: noClientDb, SESSION_SECRET };
+    const env = { STORAGE: {} as any, DB: noClientDb };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize?client_id=unknown&redirect_uri=https://example.com/callback&response_type=code',
       { method: 'GET' },
@@ -686,7 +630,7 @@ describe('OAuth login flow', () => {
   });
 
   it('GET /authorize with an invalid redirect_uri returns 400', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb(), SESSION_SECRET };
+    const env = { STORAGE: {} as any, DB: makeDb() };
     const res = await app.request(
       'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=not-a-url&response_type=code',
       { method: 'GET' },

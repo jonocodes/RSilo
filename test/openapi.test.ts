@@ -34,8 +34,8 @@ describe('API docs', () => {
     expect(body.openapi).toBe('3.1.0');
     expect(body.paths['/storage/{username}/{path}']).toHaveProperty('get');
     expect(body.paths['/storage/{username}/{path}']).toHaveProperty('head');
-    expect(body.paths['/admin/debug/echo']).toHaveProperty('get');
-    expect(body.paths['/admin/debug/echo']).toHaveProperty('post');
+    expect(body.paths['/debug/echo']).toHaveProperty('get');
+    expect(body.paths['/debug/echo']).toHaveProperty('post');
   });
 
   it('documents exactly the terminal routes the app exposes', () => {

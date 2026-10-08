@@ -21,11 +21,6 @@ migrations_dir = "drizzle/migrations"
 # KV writes. namespace_id is an arbitrary label, not a provisioned resource.
 # Limits must match RATE_LIMITS in src/services/rate-limit.ts (test-enforced).
 [[ratelimits]]
-name = "LOGIN_LIMITER"
-namespace_id = "1001"
-simple = { limit = 5, period = 60 }
-
-[[ratelimits]]
 name = "STORAGE_LIMITER"
 namespace_id = "1002"
 simple = { limit = 20, period = 60 }
@@ -33,11 +28,10 @@ simple = { limit = 20, period = 60 }
 [observability]
 enabled = true
 
-# Required production secrets — set each with `wrangler secret put`:
-#   SESSION_SECRET   — signs file manager and OAuth session cookies
-#   ADMIN_SECRET     — protects /admin/* endpoints
 # Required production vars (plain text, not secrets) — set them in the Worker's
 # dashboard settings or under [vars] in wrangler.prod.toml:
 #   ACCOUNT_USERNAME — the one Account this Instance serves
+#   OWNER_EMAIL      — the Owner's email; only it may use /account
 #   PUBLIC_BASE_URL  — origin every advertised URL is built from
+# RSilo needs no secrets: Cloudflare Access signs the Owner in to /account.
 # RSILO_DEV_MODE is only for local development and must never be deployed.

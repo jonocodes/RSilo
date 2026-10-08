@@ -7,7 +7,6 @@
     "dev": "wrangler dev",
     "dev:offline": "bun --watch src/server-offline.ts",
     "dev-token": "bun run src/scripts/dev-token.ts",
-    "secret": "bun run src/scripts/secret.ts",
     "setup": "bun run src/scripts/setup.ts",
     "db:setup:local": "bun run src/scripts/setup-local-db.ts",
     "deploy": "bun run src/scripts/deploy.ts",
@@ -39,13 +38,6 @@
     "hono": "^4.7.5"
   },
   "cloudflare": {
-    "bindings": {
-      "SESSION_SECRET": {
-        "description": "Required in production. Signs session cookies. Generate one with `bun run secret`."
-      },
-      "ADMIN_SECRET": {
-        "description": "Required in production. Protects the /admin/* dashboard. Generate one with `bun run secret`."
-      }
-    }
+    "bindings": {}
   }
 }

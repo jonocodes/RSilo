@@ -1,17 +1,15 @@
 import { Hono } from 'hono';
-import { verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
-import { getSessionSecret, isLocalDevelopment } from '../config';
+import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
+import { setupMessagePage } from '../ui/setup-pages';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
-import { loginRateLimit } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
-import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
+import { requireAccountRow } from '../middleware/instance';
+import { requireOwner, requireSameOrigin } from '../middleware/owner';
 
 export const accountRouter = new Hono();
 
-const SESSION_COOKIE = 'rsilo_session';
-const SESSION_EXPIRY = 28800; // 8 hours
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
@@ -30,9 +28,11 @@ accountRouter.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
 });
 
-// Until the setup page lands (#17), an unconfigured Instance or a username
-// mismatch is reported here as a minimal text response.
-accountRouter.use('*', requireInstanceConfig(), requireAccountRow());
+// The whole surface is the Owner's (ADR-0001, ADR-0004): Cloudflare Access
+// signs them in, and requireOwner() checks the identity against OWNER_EMAIL on
+// every request, whatever paths the Access application covers. State changes
+// must also be same-origin.
+accountRouter.use('*', requireOwner(), requireSameOrigin(), requireAccountRow(setupMessagePage));
 
 accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
   headers: {
@@ -40,29 +40,6 @@ accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
     'Cache-Control': 'public, max-age=3600',
   },
 }));
-
-function getSessionFromRequest(req: Request): string | null {
-  const cookie = req.headers.get('Cookie') || '';
-  for (const part of cookie.split(';')) {
-    const eqIdx = part.indexOf('=');
-    if (eqIdx === -1) continue;
-    const k = part.slice(0, eqIdx).trim();
-    const v = part.slice(eqIdx + 1).trim();
-    if (k === SESSION_COOKIE) return v || null;
-  }
-  return null;
-}
-
-async function getSessionUser(c: any): Promise<string | null> {
-  const token = getSessionFromRequest(c.req.raw);
-  const secret = getSessionSecret(c.env);
-  if (!token || !secret) return null;
-  return verifySessionToken(token, secret);
-}
-
-function sessionCookieHeader(token: string, maxAge: number): string {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/account; Max-Age=${maxAge}`;
-}
 
 function getDb(c: any) {
   return c.env.DB;
@@ -150,9 +127,21 @@ tr:hover td { background: #fafafa; }
 input[type=file] { font-size: 0.875rem; }
 .empty { padding: 2.5rem; text-align: center; color: #aaa; font-size: 0.9rem; }
 .error { color: #dc3545; font-size: 0.875rem; padding: 0.5rem 0.75rem; background: #fff5f5; border-radius: 4px; margin-bottom: 1rem; }
+.section + .section { margin-top: 1.5rem; }
+.section h2 { font-size: 0.95rem; margin-bottom: 0.6rem; }
+.panel { padding: 1rem 1.25rem; font-size: 0.9rem; line-height: 1.5; }
+.panel p + p { margin-top: 0.5rem; }
+.address { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.address code { font-size: 1rem; background: #f0f0f0; padding: 0.3rem 0.6rem; border-radius: 4px; }
+.usage-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 0.5rem 0; }
+.usage-bar div { height: 100%; background: #0066cc; }
+.usage-bar div.full { background: #dc3545; }
+.quota-form { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
+.quota-form input { padding: .35rem .6rem; border: 1px solid #ddd; border-radius: 4px; font-size: .875rem; width: 110px; }
+.muted { color: #777; font-size: 0.8rem; }
 `;
 
-function renderPage(title: string, username: string, body: string, activePage = 'account'): string {
+function renderPage(title: string, ownerEmail: string, body: string, activePage = 'files'): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -163,15 +152,13 @@ function renderPage(title: string, username: string, body: string, activePage = 
 </head>
 <body>
   <header>
-    <h1><a href="/account/browse" style="color:white">RSilo Files</a></h1>
+    <h1><a href="/account" style="color:white">RSilo</a></h1>
     <nav>
-      <a href="/account/browse" class="${activePage === 'account' ? 'active' : ''}">Files</a>
-      <a href="/account/tokens" class="${activePage === 'tokens' ? 'active' : ''}">Tokens</a>
+      <a href="/account" class="${activePage === 'dashboard' ? 'active' : ''}">Dashboard</a>
+      <a href="/account/browse" class="${activePage === 'files' ? 'active' : ''}">Files</a>
     </nav>
-    <span class="user">${escapeHtml(username)}</span>
-    <form method="POST" action="/account/logout" style="margin:0">
-      <button class="btn" style="background:transparent;color:#aaa;font-size:0.8rem;padding:0.2rem 0.5rem">Sign out</button>
-    </form>
+    <span class="user">${escapeHtml(ownerEmail)}</span>
+    <nav><a href="/cdn-cgi/access/logout" title="Ends your RSilo sign-in (the Cloudflare Access session), not your email or identity-provider login">Sign out</a></nav>
   </header>
   ${body}
   <script src="/account/client.js" defer></script>
@@ -179,97 +166,186 @@ function renderPage(title: string, username: string, body: string, activePage = 
 </html>`;
 }
 
-// ── Login ────────────────────────────────────────────────────────────────────
+// ── Dashboard ────────────────────────────────────────────────────────────────
+
+const GIB = 1024 * 1024 * 1024;
+
+interface AppGrant {
+  clientId: string;
+  host: string;
+  scopes: string[];
+  firstGranted: number;
+  lastUsed: number;
+}
+
+// The protocol carries no app name, and oauth_clients.name is whatever the
+// client sent, so an app is shown by its client_id's origin host.
+function clientHost(clientId: string): string {
+  try {
+    return new URL(clientId).host || clientId;
+  } catch {
+    return clientId;
+  }
+}
+
+// One App authorization per client_id: all of that client's token rows. Token
+// rows do not record use, so "last used" is when the newest token was issued.
+function groupGrants(tokens: { client_id: string; scopes: string; created_at: number }[]): AppGrant[] {
+  const byClient = new Map<string, AppGrant & { scopeSet: Set<string> }>();
+  for (const token of tokens) {
+    let grant = byClient.get(token.client_id);
+    if (!grant) {
+      grant = {
+        clientId: token.client_id,
+        host: clientHost(token.client_id),
+        scopes: [],
+        scopeSet: new Set(),
+        firstGranted: token.created_at,
+        lastUsed: token.created_at,
+      };
+      byClient.set(token.client_id, grant);
+    }
+    for (const scope of String(token.scopes || '').split(/\s+/).filter(Boolean)) grant.scopeSet.add(scope);
+    grant.firstGranted = Math.min(grant.firstGranted, token.created_at);
+    grant.lastUsed = Math.max(grant.lastUsed, token.created_at);
+  }
+  return [...byClient.values()]
+    .map(({ scopeSet, ...grant }) => ({ ...grant, scopes: [...scopeSet].sort() }))
+    .sort((a, b) => b.lastUsed - a.lastUsed);
+}
+
+function formatDate(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().slice(0, 10);
+}
+
+function formatUsage(n: number): string {
+  return n === 0 ? '0 B' : formatBytes(n);
+}
 
 accountRouter.get('/', async (c) => {
-  const user = await getSessionUser(c);
-  if (user) return c.redirect('/account/browse', 302);
+  const instance = c.get('instance');
+  const username = instance.accountUsername;
+  const db = getDb(c);
 
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in — RSilo Files</title>
-  <style>
-    ${COMMON_CSS}
-    .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #f5f5f5; }
-    .login-box { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); width: 100%; max-width: 360px; }
-    .login-box h1 { font-size: 1.25rem; margin-bottom: 1.5rem; }
-    .field { margin-bottom: 1rem; }
-    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.3rem; }
-    input[type=text], input[type=password] { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
-    input:focus { outline: none; border-color: #0066cc; box-shadow: 0 0 0 2px rgba(0,102,204,.15); }
-    .btn-block { width: 100%; padding: 0.65rem; font-size: 1rem; margin-top: 0.5rem; }
-  </style>
-</head>
-<body>
-  <div class="login-wrap">
-    <div class="login-box">
-      <h1>RSilo Files</h1>
-      ${c.req.query('error') ? `<div class="error">Invalid username or password</div>` : ''}
-      <form method="POST" action="/account/login">
-        <div class="field">
-          <label for="username">Username</label>
-          <input type="text" id="username" name="username" autofocus autocomplete="username">
+  const usage = await db?.prepare?.('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
+    ?.bind?.(username)?.first?.() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
+  const quota = Number(usage?.storage_quota_bytes ?? 0);
+  const used = Number(usage?.used_storage_bytes ?? 0);
+  const percent = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
+
+  const tokensResult = await db?.prepare?.('SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ?')
+    ?.bind?.(username)?.all?.() || { results: [] };
+  const grants = groupGrants(tokensResult.results || []);
+
+  const address = `${username}@${instance.publicHost}`;
+  const appRows = grants.length
+    ? grants.map(grant => `
+      <tr>
+        <td><strong>${escapeHtml(grant.host)}</strong>${grant.host !== grant.clientId ? `<div class="muted">${escapeHtml(grant.clientId)}</div>` : ''}</td>
+        <td><span style="font-size:.8rem;color:#555">${grant.scopes.map(escapeHtml).join(' ')}</span></td>
+        <td class="size">${formatDate(grant.firstGranted)}</td>
+        <td class="size">${formatDate(grant.lastUsed)}</td>
+        <td class="actions">
+          <form method="POST" action="/account/apps/revoke" style="margin:0" data-confirm-message="Revoke ${escapeHtml(grant.host)}? It loses access immediately.">
+            <input type="hidden" name="client_id" value="${escapeHtml(grant.clientId)}">
+            <button class="btn btn-sm btn-danger">Revoke</button>
+          </form>
+        </td>
+      </tr>`).join('')
+    : `<tr><td colspan="5" class="empty">No apps have access yet.</td></tr>`;
+
+  const body = `
+  <div class="container">
+    <div class="section">
+      <h2>Storage address</h2>
+      <div class="card panel">
+        <div class="address">
+          <code id="storage-address">${escapeHtml(address)}</code>
+          <button class="btn btn-sm btn-primary" data-copy-target="storage-address">Copy</button>
         </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input type="password" id="password" name="password" autocomplete="current-password">
-        </div>
-        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
-      </form>
+        <p class="muted" style="margin-top:.5rem">Enter this in a remoteStorage app to connect it to your storage.</p>
+      </div>
     </div>
-  </div>
-</body>
-</html>`;
-  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    <div class="section">
+      <h2>Storage used</h2>
+      <div class="card panel">
+        <div>${formatUsage(used)} of ${formatUsage(quota)} used</div>
+        <div class="usage-bar"><div class="${used >= quota ? 'full' : ''}" style="width:${percent.toFixed(1)}%"></div></div>
+        <form method="POST" action="/account/quota" class="quota-form">
+          <label for="quota-gb">Quota (GB):</label>
+          <input type="number" id="quota-gb" name="quota_gb" min="0" step="any" value="${Number((quota / GIB).toFixed(3))}">
+          <button class="btn btn-sm btn-primary">Save</button>
+        </form>
+        <p class="muted" style="margin-top:.5rem">A limit you set for yourself, for example to stay within the R2 free tier. Setting it below what is already stored keeps your files but blocks new writes.</p>
+      </div>
+    </div>
+    <div class="section">
+      <h2>Apps with access</h2>
+      <div class="card">
+        <table>
+          <thead><tr><th>App</th><th>Access</th><th>First granted</th><th>Last used</th><th></th></tr></thead>
+          <tbody>${appRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="section">
+      <h2>Public files</h2>
+      <div class="card panel">
+        <p>Anything an app stores under a <code>public/</code> folder (for example <code>/storage/${escapeHtml(username)}/public/documents/…</code>) can be read by anyone who has the link, without signing in. Folder listings there stay private.</p>
+        <p>Everything else is readable only by you and the apps you have granted access.</p>
+      </div>
+    </div>
+    <div class="section">
+      <p class="muted"><a href="/cdn-cgi/access/logout">Sign out</a> ends your RSilo sign-in (the Cloudflare Access session). It does not sign you out of your email or identity provider.</p>
+    </div>
+  </div>`;
+
+  return new Response(renderPage('Dashboard', c.get('ownerEmail'), body, 'dashboard'), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
 });
 
-accountRouter.post('/login', async (c) => {
-  const body = await c.req.parseBody() as any;
-  const username = (body.username || '').trim().toLowerCase();
-  const password = body.password || '';
-
-  const rateLimited = await loginRateLimit(c, 'account-login', username);
-  if (rateLimited) return rateLimited;
-  if (!username || !password) return c.redirect('/account/?error=1', 302);
+// Lowering the quota below current usage is allowed: it blocks further writes.
+accountRouter.post('/quota', async (c) => {
+  const body = await c.req.parseBody() as Record<string, unknown>;
+  const raw = typeof body.quota_gb === 'string' ? body.quota_gb.trim() : '';
+  const gb = raw === '' ? NaN : Number(raw);
+  if (!Number.isFinite(gb) || gb < 0) return c.text('quota_gb must be a number of GB, 0 or more', 400);
 
   const db = getDb(c);
-  const user = await db?.prepare?.('SELECT * FROM users WHERE username = ?')?.bind?.(username)?.first?.();
-
-  if (!user || !user.password_hash || !(await verifyPassword(password, user.password_hash))) {
-    return c.redirect('/account/?error=1', 302);
-  }
-
-  const secret = getSessionSecret(c.env);
-  if (!secret) return c.text('Server authentication is not configured', 503);
-
-  const token = await signSessionToken(username, secret, SESSION_EXPIRY);
-  return new Response(null, {
-    status: 302,
-    headers: {
-      'Location': '/account/browse',
-      'Set-Cookie': sessionCookieHeader(token, SESSION_EXPIRY),
-    },
-  });
+  if (!db || typeof db.prepare !== 'function') return c.text('Server database is not configured', 503);
+  await db.prepare('UPDATE users SET storage_quota_bytes = ? WHERE username = ?')
+    .bind(Math.round(gb * GIB), c.get('instance').accountUsername)
+    .run();
+  return c.redirect('/account', 302);
 });
 
-accountRouter.post('/logout', async () => {
-  return new Response(null, {
-    status: 302,
-    headers: {
-      'Location': '/account/',
-      'Set-Cookie': sessionCookieHeader('', 0),
-    },
-  });
+// Revoking an app removes its whole App authorization: every token row and
+// pending code for the client, then the client row itself (kept only while a
+// pre-migration token row of another account still references it).
+accountRouter.post('/apps/revoke', async (c) => {
+  const body = await c.req.parseBody() as Record<string, unknown>;
+  const clientId = typeof body.client_id === 'string' ? body.client_id : '';
+  if (!clientId) return c.text('client_id is required', 400);
+
+  const db = getDb(c);
+  if (!db || typeof db.prepare !== 'function') return c.text('Server database is not configured', 503);
+  const username = c.get('instance').accountUsername;
+  await db.prepare('DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ?').bind(clientId, username).run();
+  await db.prepare('DELETE FROM oauth_codes WHERE client_id = ? AND user_id = ?').bind(clientId, username).run();
+  await db.prepare('DELETE FROM oauth_clients WHERE id = ? AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE client_id = ?)')
+    .bind(clientId, clientId)
+    .run();
+  return c.redirect('/account', 302);
 });
+
+// App authorizations used to have their own page.
+accountRouter.get('/tokens', (c) => c.redirect('/account', 302));
 
 // ── Browse ───────────────────────────────────────────────────────────────────
 
 accountRouter.get('/browse', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const storage = getStorage(c);
   const items = await listFolder(storage, username, '');
@@ -312,14 +388,13 @@ accountRouter.get('/browse', async (c) => {
     </div>
   </div>`;
 
-  return new Response(renderPage('Files', username, body), {
+  return new Response(renderPage('Files', c.get('ownerEmail'), body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 });
 
 accountRouter.get('/browse/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const browsePath = c.req.path.replace(/^\/account\/browse\/?/, '') || '';
   const storage = getStorage(c);
@@ -374,7 +449,7 @@ accountRouter.get('/browse/*', async (c) => {
     </div>
   </div>`;
 
-  return new Response(renderPage(browsePath || 'Files', username, body), {
+  return new Response(renderPage(browsePath || 'Files', c.get('ownerEmail'), body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 });
@@ -382,8 +457,7 @@ accountRouter.get('/browse/*', async (c) => {
 // ── Download ─────────────────────────────────────────────────────────────────
 
 accountRouter.get('/download/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const filePath = c.req.path.replace(/^\/account\/download\/?/, '');
   if (!filePath) return c.text('Not found', 404);
@@ -414,8 +488,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 accountRouter.get('/view/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const filePath = c.req.path.replace(/^\/account\/view\/?/, '');
   if (!filePath) return c.text('Not found', 404);
@@ -465,7 +538,7 @@ accountRouter.get('/view/*', async (c) => {
     </div>
   </div>`;
 
-  return new Response(renderPage(filename, username, body), {
+  return new Response(renderPage(filename, c.get('ownerEmail'), body), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 });
@@ -473,8 +546,7 @@ accountRouter.get('/view/*', async (c) => {
 // ── Save (edit) ──────────────────────────────────────────────────────────────
 
 accountRouter.post('/save/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const filePath = c.req.path.replace(/^\/account\/save\/?/, '');
   if (!filePath) return c.redirect('/account/browse', 302);
@@ -512,8 +584,7 @@ accountRouter.post('/save/*', async (c) => {
 // ── Upload ───────────────────────────────────────────────────────────────────
 
 accountRouter.post('/upload/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const maximum = maxObjectSize(c.env);
   try {
@@ -569,8 +640,7 @@ accountRouter.post('/upload/*', async (c) => {
 // ── Delete ───────────────────────────────────────────────────────────────────
 
 accountRouter.post('/delete/*', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
+  const username = c.get('instance').accountUsername;
 
   const filePath = c.req.path.replace(/^\/account\/delete\/?/, '');
   if (!filePath) return c.redirect('/account/browse', 302);
@@ -599,62 +669,3 @@ accountRouter.post('/delete/*', async (c) => {
   return c.redirect(`/account/browse${parentPath ? '/' + encodeURIComponent(parentPath) : ''}`, 302);
 });
 
-// ── Tokens ───────────────────────────────────────────────────────────────────
-
-accountRouter.get('/tokens', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
-
-  const db = getDb(c);
-  const tokensResult = await db?.prepare?.('SELECT * FROM oauth_tokens WHERE user_id = ? ORDER BY created_at DESC')
-    ?.bind?.(username)?.all?.() || { results: [] };
-  const tokens: any[] = tokensResult.results || [];
-
-  const rows = tokens.length
-    ? tokens.map(tok => {
-        const exp = new Date(tok.expires_at * 1000);
-        const expired = tok.expires_at < Math.floor(Date.now() / 1000);
-        return `
-        <tr>
-          <td><code style="font-size:.8rem">${escapeHtml(tok.client_id)}</code></td>
-          <td><span style="font-size:.8rem;color:#555">${escapeHtml(tok.scopes)}</span></td>
-          <td class="size">${expired ? '<span style="color:#dc3545">Expired</span>' : exp.toLocaleDateString()}</td>
-          <td class="actions">
-            <form method="POST" action="/account/tokens/${encodeURIComponent(tok.id)}/revoke" style="margin:0"
-              data-confirm-message="Revoke this token?">
-              <button class="btn btn-sm btn-danger">Revoke</button>
-            </form>
-          </td>
-        </tr>`;
-      }).join('')
-    : `<tr><td colspan="4" class="empty">No active tokens.</td></tr>`;
-
-  const body = `
-  <div class="container">
-    <div class="breadcrumb">OAuth Tokens</div>
-    <p style="font-size:.875rem;color:#666;margin-bottom:1rem">
-      These are apps that have been granted access to your storage. Revoke any you no longer use.
-    </p>
-    <div class="card">
-      <table>
-        <thead><tr><th>Application</th><th>Scopes</th><th>Expires</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  </div>`;
-
-  return new Response(renderPage('Tokens', username, body, 'tokens'), {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  });
-});
-
-accountRouter.post('/tokens/:id/revoke', async (c) => {
-  const username = await getSessionUser(c);
-  if (!username) return c.redirect('/account/', 302);
-
-  const tokenId = c.req.param('id');
-  const db = getDb(c);
-  await db?.prepare?.('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?')?.bind?.(tokenId, username)?.run?.();
-
-  return c.redirect('/account/tokens', 302);
-});

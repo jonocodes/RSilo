@@ -22,9 +22,10 @@ export class LocalDatabase {
 
   private initSchema() {
     this.db.exec(SCHEMA_SQL);
+    // Mirrors migration 0003 for databases created before passwords were removed.
     try {
-      this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
-    } catch { /* column already exists */ }
+      this.db.exec('ALTER TABLE users DROP COLUMN password_hash');
+    } catch { /* column already gone */ }
   }
 
   async getUserByUsername(username: string): Promise<User | null> {
@@ -39,9 +40,9 @@ export class LocalDatabase {
     return result || null;
   }
 
-  async createUser(id: string, username: string, passwordHash: string | null): Promise<void> {
-    const stmt = this.db.prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)');
-    stmt.run(id, username, passwordHash);
+  async createUser(id: string, username: string): Promise<void> {
+    const stmt = this.db.prepare('INSERT INTO users (id, username) VALUES (?, ?)');
+    stmt.run(id, username);
   }
 
   async createUserIfAbsent(id: string, username: string): Promise<void> {
@@ -171,24 +172,9 @@ export class LocalDatabase {
     this.db.prepare('DELETE FROM oauth_clients WHERE user_id = ?').run(userId);
   }
 
-  async deleteUserData(username: string): Promise<void> {
-    const purge = this.db.transaction((user: string) => {
-      this.db.prepare('DELETE FROM oauth_tokens WHERE user_id = ?').run(user);
-      this.db.prepare('DELETE FROM oauth_codes WHERE user_id = ?').run(user);
-      this.db.prepare('DELETE FROM oauth_clients WHERE user_id = ?').run(user);
-      this.db.prepare('DELETE FROM users WHERE username = ?').run(user);
-    });
-    purge(username);
-  }
-
   async deleteUser(username: string): Promise<void> {
     const stmt = this.db.prepare('DELETE FROM users WHERE username = ?');
     stmt.run(username);
-  }
-
-  async updatePasswordHash(username: string, passwordHash: string): Promise<void> {
-    const stmt = this.db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?');
-    stmt.run(passwordHash, Math.floor(Date.now() / 1000), username);
   }
 
   async createClient(client: OAuthClient): Promise<void> {
@@ -205,8 +191,12 @@ export class LocalDatabase {
     this.db.prepare('DELETE FROM oauth_clients WHERE id = ?').run(clientId);
   }
 
-  async deleteTokensByClient(clientId: string): Promise<void> {
-    this.db.prepare('DELETE FROM oauth_tokens WHERE client_id = ?').run(clientId);
+  async deleteTokensByClient(clientId: string, userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ?').run(clientId, userId);
+  }
+
+  async deleteCodesByClient(clientId: string, userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_codes WHERE client_id = ? AND user_id = ?').run(clientId, userId);
   }
 
   async createCode(code: OAuthCode): Promise<void> {
@@ -246,7 +236,6 @@ export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
-  password_hash TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   storage_quota_bytes INTEGER DEFAULT 10737418240,

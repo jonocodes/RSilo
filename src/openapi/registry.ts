@@ -16,7 +16,7 @@ export interface OperationMeta {
 }
 
 export const BEARER = [{ bearerAuth: [] }];
-export const ADMIN = [{ adminSecret: [] }];
+export const ACCESS = [{ cloudflareAccess: [] }];
 
 const ACCOUNT_RESOURCE = 'acct:<ACCOUNT_USERNAME>@<host>, or http(s)://<host> with or without a trailing slash, '
   + 'where <host> is the PUBLIC_BASE_URL host (including a non-default port; acct: may omit it). Case-insensitive.';
@@ -80,7 +80,7 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       + '404 unless {user} is ACCOUNT_USERNAME.',
   },
   'GET /oauth/{user}/authorize': {
-    summary: 'Login and consent form',
+    summary: 'Consent form',
     tags: ['OAuth'],
     description: '404 unless {user} is ACCOUNT_USERNAME.',
     parameters: [
@@ -91,10 +91,12 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     ],
   },
   'POST /oauth/{user}/authorize': {
-    summary: 'Submit login or consent',
+    summary: 'Approve or deny consent',
     tags: ['OAuth'],
     responses: {
       '302': { description: 'Redirect back to the client with a code or token.' },
+      '401': { description: 'Approval without the Owner\'s identity.' },
+      '403': { description: 'Cross-site request.' },
       '404': { description: '{user} is not ACCOUNT_USERNAME.' },
     },
   },
@@ -153,170 +155,125 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   },
 
   'GET /account': {
-    summary: 'Login page',
+    summary: 'Dashboard',
     tags: ['Account'],
+    security: ACCESS,
+    description: 'Storage address, quota usage and setting, apps with access, and sign-out. '
+      + 'Shows a finish-setup page (503) until config and Cloudflare Access are in place, '
+      + 'and a 403 page for a signed-in identity other than OWNER_EMAIL.',
   },
   'GET /account/client.js': {
     summary: 'Account UI script',
     tags: ['Account'],
+    security: ACCESS,
   },
-  'POST /account/login': {
-    summary: 'Sign in with username/password',
+  'POST /account/quota': {
+    summary: 'Set the storage quota',
     tags: ['Account'],
+    security: ACCESS,
+    description: 'Form field quota_gb. Lowering it below current usage is allowed and blocks further writes.',
     responses: {
-      '302': { description: 'Sets the session cookie and redirects.' },
-      '401': { description: 'Invalid credentials.' },
+      '302': { description: 'Back to the dashboard.' },
+      '400': { description: 'quota_gb is not a number of GB, 0 or more.' },
+      '403': { description: 'Cross-site request.' },
     },
   },
-  'POST /account/logout': {
-    summary: 'Sign out',
+  'POST /account/apps/revoke': {
+    summary: 'Revoke an app',
     tags: ['Account'],
-    responses: { '302': { description: 'Clears the session cookie.' } },
+    security: ACCESS,
+    description: 'Form field client_id. Deletes all of the client\'s tokens and pending codes, and its client record.',
+    responses: {
+      '302': { description: 'Back to the dashboard.' },
+      '403': { description: 'Cross-site request.' },
+    },
+  },
+  'GET /account/tokens': {
+    summary: 'Redirect to the dashboard',
+    tags: ['Account'],
+    responses: { '302': { description: 'App authorizations are listed on /account.' } },
   },
   'GET /account/browse': {
     summary: 'Browse the storage root',
     tags: ['Account'],
+    security: ACCESS,
   },
   'GET /account/browse/{path}': {
     summary: 'Browse a folder',
     tags: ['Account'],
+    security: ACCESS,
   },
   'GET /account/download/{path}': {
     summary: 'Download a file',
     tags: ['Account'],
+    security: ACCESS,
   },
   'GET /account/view/{path}': {
     summary: 'View a text file',
     tags: ['Account'],
+    security: ACCESS,
   },
   'POST /account/save/{path}': {
     summary: 'Save edits to a text file',
     tags: ['Account'],
+    security: ACCESS,
   },
   'POST /account/upload/{path}': {
     summary: 'Upload files to a folder',
     tags: ['Account'],
+    security: ACCESS,
   },
   'POST /account/delete/{path}': {
     summary: 'Delete a file',
     tags: ['Account'],
-  },
-  'GET /account/tokens': {
-    summary: 'View OAuth tokens',
-    tags: ['Account'],
-  },
-  'POST /account/tokens/{id}/revoke': {
-    summary: 'Revoke a token',
-    tags: ['Account'],
+    security: ACCESS,
   },
 
   'GET /admin': {
-    summary: 'Dashboard',
-    tags: ['Admin'],
-    security: ADMIN,
+    summary: 'Redirect to /account',
+    tags: ['Account'],
+    responses: { '301': { description: 'The admin console was merged into /account.' } },
   },
-  'GET /admin/login': {
-    summary: 'Admin login page',
-    tags: ['Admin'],
-  },
-  'POST /admin/login': {
-    summary: 'Sign in (sets session cookie)',
-    tags: ['Admin'],
-  },
-  'POST /admin/logout': {
-    summary: 'Sign out',
-    tags: ['Admin'],
-  },
-  'GET /admin/health': {
-    summary: 'Health check',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'GET /admin/stats': {
-    summary: 'Usage statistics',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'GET /admin/users': {
-    summary: 'List all users',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'POST /admin/users': {
-    summary: 'Create a user',
-    tags: ['Admin'],
-    security: ADMIN,
-    responses: { '201': { description: 'User created.' } },
-  },
-  'GET /admin/users/{username}': {
-    summary: 'Get user details',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'DELETE /admin/users/{username}': {
-    summary: 'Delete a user',
-    tags: ['Admin'],
-    security: ADMIN,
-    description: 'Immediate purge: deletes every stored object, then revokes OAuth state and removes the user.',
-  },
-  'DELETE /admin/tokens/{id}': {
-    summary: 'Revoke a token',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'PATCH /admin/users/{username}/quota': {
-    summary: 'Update storage quota',
-    tags: ['Admin'],
-    security: ADMIN,
-  },
-  'PATCH /admin/users/{username}/password': {
-    summary: 'Change a user password',
-    tags: ['Admin'],
-    security: ADMIN,
+  'GET /admin/{path}': {
+    summary: 'Redirect to /account',
+    tags: ['Account'],
+    responses: { '301': { description: 'The admin console was merged into /account.' } },
   },
 
-  'GET /admin/debug/token': {
-    summary: 'Introspect a storage/OAuth token',
+  'GET /debug/token': {
+    summary: 'Introspect a storage token',
     tags: ['Debug'],
-    security: ADMIN,
     parameters: [{ name: 'token', in: 'query', required: true, schema: { type: 'string' } }],
     description: 'Returns whoami and scopes. Secret values are never returned.',
   },
-  'POST /admin/debug/token': {
+  'POST /debug/token': {
     summary: 'Introspect a token (body)',
     tags: ['Debug'],
-    security: ADMIN,
   },
-  'GET /admin/debug/storage/{username}': {
+  'GET /debug/storage': {
     summary: 'Actual storage vs DB counter',
     tags: ['Debug'],
-    security: ADMIN,
-    description: 'Recomputes usage by listing objects (an R2 Class A operation); call on demand, not on a timer.',
+    description: 'Recomputes the Account\'s usage by listing objects (an R2 Class A operation); call on demand, not on a timer.',
   },
-  'GET /admin/debug/health/deep': {
+  'GET /debug/health/deep': {
     summary: 'Live round-trip check of each binding',
     tags: ['Debug'],
-    security: ADMIN,
   },
-  'GET /admin/debug/env': {
-    summary: 'Redacted runtime and bindings',
+  'GET /debug/env': {
+    summary: 'Redacted runtime, bindings and config',
     tags: ['Debug'],
-    security: ADMIN,
   },
-  'GET /admin/debug/oauth': {
+  'GET /debug/oauth': {
     summary: 'OAuth clients, tokens and pending codes',
     tags: ['Debug'],
-    security: ADMIN,
   },
-  'GET /admin/debug/echo': {
+  'GET /debug/echo': {
     summary: 'Echo a request; parse a storage path scope',
     tags: ['Debug'],
-    security: ADMIN,
     parameters: [{ name: 'path', in: 'query', required: false, schema: { type: 'string' } }],
   },
-  'POST /admin/debug/echo': {
+  'POST /debug/echo': {
     summary: 'Echo a request body',
     tags: ['Debug'],
-    security: ADMIN,
   },
 };

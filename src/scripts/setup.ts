@@ -23,21 +23,6 @@ function wrangler(args: string[], capture = false): { status: number; out: strin
   return { status: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 }
 
-function setSecret(name: string, value: string): void {
-  const res = spawnSync(WRANGLER, ['secret', 'put', name], {
-    input: value,
-    encoding: 'utf8',
-    stdio: ['pipe', 'inherit', 'inherit'],
-  });
-  if ((res.status ?? 1) !== 0) fail(`Failed to set secret ${name}`);
-}
-
-function randomHex(bytes = 32): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 function parseJsonArray(raw: string): any[] {
   const start = raw.indexOf('[');
   if (start === -1) return [];
@@ -86,11 +71,6 @@ if (wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', PROD_CO
   fail('D1 migrations failed.');
 }
 
-console.log('\nSetting secrets…');
-const adminSecret = randomHex(24);
-setSecret('SESSION_SECRET', randomHex(32));
-setSecret('ADMIN_SECRET', adminSecret);
-
 console.log('\nDeploying…');
 const deploy = wrangler(['deploy', '--config', PROD_CONFIG], true);
 console.log(deploy.out);
@@ -101,10 +81,10 @@ const url = deploy.out.match(/https?:\/\/[a-z0-9.-]+\.workers\.dev/i)?.[0] ?? '<
 console.log(`
 ✔ Setup complete!
 
-  Server:       ${url}
-  Admin page:   ${url}/admin/
-  Admin secret: ${adminSecret}
+  Server:  ${url}
+  Account: ${url}/account
 
-Sign in to the admin page with the admin secret, create your first user,
-then sign in at ${url}/account.
+Set ACCOUNT_USERNAME, OWNER_EMAIL and PUBLIC_BASE_URL in the Worker's settings,
+then protect /account with Cloudflare Access (see the README). Until then
+${url}/account shows what is left to do.
 `.trim());

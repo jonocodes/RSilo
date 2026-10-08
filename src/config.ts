@@ -1,42 +1,31 @@
 import type { AppEnv } from './types';
 
-const DEV_SESSION_SECRET = 'dev-session-secret-change-in-production';
-
-type SecurityEnv = Partial<Pick<AppEnv, 'SESSION_SECRET' | 'ADMIN_SECRET' | 'RSILO_DEV_MODE'>>;
-
-function securityEnv(env: unknown): SecurityEnv {
-  return typeof env === 'object' && env !== null ? env as SecurityEnv : {};
-}
+type DevModeEnv = Partial<Pick<AppEnv, 'RSILO_DEV_MODE'>>;
 
 export function isLocalDevelopment(env?: unknown): boolean {
-  const bindings = securityEnv(env);
+  const bindings = (typeof env === 'object' && env !== null ? env : {}) as DevModeEnv;
   if (bindings.RSILO_DEV_MODE !== undefined) {
     return bindings.RSILO_DEV_MODE === 'true';
   }
   return typeof process !== 'undefined' && process.env.RSILO_DEV_MODE === 'true';
 }
 
-export function getSessionSecret(env?: unknown): string | null {
-  const secret = securityEnv(env).SESSION_SECRET;
-  if (secret) return secret;
-  return isLocalDevelopment(env) ? DEV_SESSION_SECRET : null;
-}
-
-export function getAdminSecret(env?: unknown): string | null {
-  return securityEnv(env).ADMIN_SECRET || null;
-}
-
-// Per-Instance identity: the one Account it serves and the one origin every
-// advertised URL is built from. Both are required outside dev mode; in dev mode
-// they default to the values below so local servers and tests work unconfigured.
+// Per-Instance identity: the one Account it serves, the Owner allowed into
+// /account, and the one origin every advertised URL is built from. All are
+// required outside dev mode; in dev mode they default to the values below so
+// local servers and tests work unconfigured.
 export const DEV_ACCOUNT_USERNAME = 'alice';
+export const DEV_OWNER_EMAIL = 'alice@example.com';
 export const DEV_PUBLIC_BASE_URL = 'http://localhost:8787';
 
 const ACCOUNT_USERNAME_PATTERN = /^[a-z0-9_.-]+$/;
+const OWNER_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
 
 export interface InstanceConfig {
   /** The Account's username; storage keys and token subjects use it verbatim. */
   accountUsername: string;
+  /** The Owner's Cloudflare Access email, lowercased (see services/identity.ts). */
+  ownerEmail: string;
   /** Origin advertised in every URL, without a trailing slash. */
   publicBaseUrl: string;
   /** Normalised host of publicBaseUrl: lowercase, non-default port included. */
@@ -47,7 +36,7 @@ export type InstanceConfigResult =
   | { ok: true; config: InstanceConfig }
   | { ok: false; problems: string[] };
 
-type InstanceEnv = Partial<Pick<AppEnv, 'ACCOUNT_USERNAME' | 'PUBLIC_BASE_URL'>>;
+type InstanceEnv = Partial<Pick<AppEnv, 'ACCOUNT_USERNAME' | 'OWNER_EMAIL' | 'PUBLIC_BASE_URL'>>;
 
 function parsePublicBaseUrl(value: string): URL | null {
   let url: URL;
@@ -73,6 +62,13 @@ export function getInstanceConfig(env?: unknown): InstanceConfigResult {
     problems.push('ACCOUNT_USERNAME must match [a-z0-9_.-]+');
   }
 
+  const ownerEmail = (bindings.OWNER_EMAIL?.trim() || (dev ? DEV_OWNER_EMAIL : '')).toLowerCase();
+  if (!ownerEmail) {
+    problems.push('OWNER_EMAIL is not set');
+  } else if (!OWNER_EMAIL_PATTERN.test(ownerEmail)) {
+    problems.push('OWNER_EMAIL must be an email address');
+  }
+
   const rawBaseUrl = bindings.PUBLIC_BASE_URL?.trim() || (dev ? DEV_PUBLIC_BASE_URL : '');
   const baseUrl = rawBaseUrl ? parsePublicBaseUrl(rawBaseUrl) : null;
   if (!rawBaseUrl) {
@@ -84,7 +80,7 @@ export function getInstanceConfig(env?: unknown): InstanceConfigResult {
   if (problems.length > 0 || !baseUrl) return { ok: false, problems };
   return {
     ok: true,
-    config: { accountUsername, publicBaseUrl: baseUrl.origin, publicHost: baseUrl.host },
+    config: { accountUsername, ownerEmail, publicBaseUrl: baseUrl.origin, publicHost: baseUrl.host },
   };
 }
 

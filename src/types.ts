@@ -4,13 +4,14 @@ import type { TokenPayload } from './services/auth';
 export interface AppEnv {
   STORAGE: R2Bucket;
   DB: D1Database;
-  LOGIN_LIMITER?: RateLimit;
   STORAGE_LIMITER?: RateLimit;
-  ADMIN_SECRET?: string;
-  SESSION_SECRET?: string;
   RSILO_DEV_MODE?: string;
+  /** Dev mode only: email of the local dev identity. Defaults to OWNER_EMAIL. */
+  RSILO_DEV_EMAIL?: string;
   /** The one Account this Instance serves. Required outside dev mode. */
   ACCOUNT_USERNAME?: string;
+  /** The Owner's email as Cloudflare Access reports it. Required outside dev mode. */
+  OWNER_EMAIL?: string;
   /** Origin every advertised URL is built from. Required outside dev mode. */
   PUBLIC_BASE_URL?: string;
   MAX_OBJECT_SIZE_BYTES?: string;

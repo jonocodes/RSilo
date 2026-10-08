@@ -22,9 +22,10 @@ export function requireInstanceConfig() {
 /**
  * Ensures the Account row exists before a route that reads or writes it runs.
  * In the username-mismatch state the request is refused with 503 and a setup
- * message. Must run after requireInstanceConfig().
+ * message (plain text, or `render(message)` for human surfaces). Must run
+ * after requireInstanceConfig() or requireOwner().
  */
-export function requireAccountRow() {
+export function requireAccountRow(render?: (message: string) => string) {
   return async (c: Context, next: Next) => {
     const { accountUsername } = c.get('instance');
     const db = (c.env as any)?.DB;
@@ -36,7 +37,8 @@ export function requireAccountRow() {
 
     const status = await ensureAccount(db, accountUsername);
     if (status === 'username_mismatch') {
-      return c.text(usernameMismatchMessage(accountUsername), 503);
+      const message = usernameMismatchMessage(accountUsername);
+      return render ? c.html(render(message), 503) : c.text(message, 503);
     }
     await next();
   };

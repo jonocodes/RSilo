@@ -1,7 +1,6 @@
 export interface User {
   id: string;
   username: string;
-  password_hash: string | null;
   created_at: number;
   updated_at: number;
   storage_quota_bytes: number;

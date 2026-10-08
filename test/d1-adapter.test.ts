@@ -8,7 +8,6 @@ function makeMockDb() {
     getUserByUsername: vi.fn().mockResolvedValue(null),
     getUserById: vi.fn().mockResolvedValue(null),
     updateUserQuota: vi.fn().mockResolvedValue(undefined),
-    updatePasswordHash: vi.fn().mockResolvedValue(undefined),
     updateStorageUsage: vi.fn().mockResolvedValue(undefined),
     adjustStorageUsage: vi.fn().mockResolvedValue(true),
     getStorageUsage: vi.fn().mockResolvedValue(0),
@@ -39,10 +38,10 @@ describe('D1Adapter — user creation', () => {
     adapter = new D1Adapter(mockDb as any);
   });
 
-  it('INSERT INTO users calls createUser with id, username, passwordHash', async () => {
-    const sql = 'INSERT INTO users (id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)';
-    await adapter.prepare(sql).bind('uuid-1', 'alice', 'pbkdf2:hash', 1000, 1000).run();
-    expect(mockDb.createUser).toHaveBeenCalledWith('uuid-1', 'alice', 'pbkdf2:hash');
+  it('INSERT INTO users calls createUser with id and username', async () => {
+    const sql = 'INSERT INTO users (id, username) VALUES (?, ?)';
+    await adapter.prepare(sql).bind('uuid-1', 'alice').run();
+    expect(mockDb.createUser).toHaveBeenCalledWith('uuid-1', 'alice');
   });
 
   it('SELECT users WHERE username = ? calls getUserByUsername', async () => {
@@ -55,12 +54,6 @@ describe('D1Adapter — user creation', () => {
   it('SELECT users WHERE username = ? returns null for unknown user', async () => {
     const result = await adapter.prepare('SELECT id FROM users WHERE username = ?').bind('nobody').first();
     expect(result).toBeNull();
-  });
-
-  it('UPDATE users SET password_hash calls updatePasswordHash', async () => {
-    const sql = 'UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?';
-    await adapter.prepare(sql).bind('new-hash', 9999, 'alice').run();
-    expect(mockDb.updatePasswordHash).toHaveBeenCalledWith('alice', 'new-hash');
   });
 
   it('UPDATE users SET storage_quota_bytes calls updateUserQuota', async () => {

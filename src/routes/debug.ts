@@ -2,11 +2,14 @@ import { Hono } from 'hono';
 import { hasScope, scopeFromPath } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { RATE_LIMITS } from '../services/rate-limit';
-import { isLocalDevelopment } from '../config';
+import { getInstanceConfig, isLocalDevelopment } from '../config';
 import pkg from '../../package.json';
 
 const RATE_LIMITER_NAMES = Object.keys(RATE_LIMITS);
 
+// Agent-driven local debugging (ADR-0004). Mounted at /debug, and answered only
+// when the dev identity would be (dev mode, local host, no Cloudflare Access);
+// everywhere else every /debug/* path is a 404 (see routes/mount.ts).
 export const debugRouter = new Hono();
 
 const VERSION = (pkg as { version?: string }).version || 'unknown';
@@ -117,11 +120,13 @@ async function tokenHandler(c: any) {
 debugRouter.get('/token', tokenHandler);
 debugRouter.post('/token', tokenHandler);
 
-// Recomputes what is actually in storage for a user and compares it to the
-// denormalised counter the dashboard reads. Listing objects is a Class A
-// operation, so this is an on-demand admin action, not something to poll.
-debugRouter.get('/storage/:username', async (c) => {
-  const username = c.req.param('username');
+// Recomputes what is actually in storage for the Account and compares it to
+// the denormalised counter the dashboard reads. Listing objects is a Class A
+// operation, so this is an on-demand action, not something to poll.
+debugRouter.get('/storage', async (c) => {
+  const config = getInstanceConfig(c.env);
+  if ('problems' in config) return c.json({ error: 'Instance is not configured', problems: config.problems }, 503);
+  const username = config.config.accountUsername;
   const env = c.env as any;
   const db = env?.DB;
   if (!db || typeof db.prepare !== 'function') {
@@ -132,7 +137,7 @@ debugRouter.get('/storage/:username', async (c) => {
     .prepare('SELECT username, storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
     .bind(username)
     .first() as any;
-  if (!user) return c.json({ error: 'User not found' }, 404);
+  if (!user) return c.json({ error: 'Account row not found' }, 404);
 
   const storage = getStorage(c);
   const prefix = buildKey(username, '');
@@ -250,10 +255,10 @@ debugRouter.get('/health/deep', async (c) => {
   return c.json({ status, checks, timestamp: new Date().toISOString() }, criticalFailed ? 503 : 200);
 });
 
-// Redacted capability report. Never returns secret values — booleans only.
+// Redacted capability report: bindings and configuration as booleans only.
 debugRouter.get('/env', (c) => {
   const env = c.env as any;
-  const secretSet = (name: string) => typeof env?.[name] === 'string' && env[name].length > 0;
+  const isSet = (name: string) => typeof env?.[name] === 'string' && env[name].length > 0;
   const backend = storageBackend(env);
 
   return c.json({
@@ -264,12 +269,12 @@ debugRouter.get('/env', (c) => {
     bindings: {
       STORAGE: !!env?.STORAGE,
       DB: !!(env?.DB && typeof env.DB.prepare === 'function'),
-      LOGIN_LIMITER: typeof env?.LOGIN_LIMITER?.limit === 'function',
       STORAGE_LIMITER: typeof env?.STORAGE_LIMITER?.limit === 'function',
     },
-    secrets_set: {
-      ADMIN_SECRET: secretSet('ADMIN_SECRET'),
-      SESSION_SECRET: secretSet('SESSION_SECRET'),
+    config_set: {
+      ACCOUNT_USERNAME: isSet('ACCOUNT_USERNAME'),
+      OWNER_EMAIL: isSet('OWNER_EMAIL'),
+      PUBLIC_BASE_URL: isSet('PUBLIC_BASE_URL'),
     },
     timestamp: new Date().toISOString(),
   });
@@ -365,8 +370,8 @@ function redactHeaders(headers: Headers): Record<string, string> {
 
 // Echoes what the server received so a client-side bug (wrong header, wrong
 // scope, wrong method) is visible without guesswork. Pass a storage token via
-// ?token= or X-RS-Token to introspect it — never via Authorization, which the
-// admin gate consumes.
+// ?token= or X-RS-Token to introspect it; the Authorization header is redacted
+// from the echo.
 debugRouter.all('/echo', async (c) => {
   const url = new URL(c.req.url);
 

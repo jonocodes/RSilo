@@ -6,6 +6,7 @@ Status: accepted
 
 ## Consequences
 
-- Debug/observability endpoints currently mounted under `/admin` need a new home.
+- Debug/observability endpoints moved from `/admin/debug` to `/debug` and are dev-only: they answer only under the dev identity guard (dev mode, local host, no Access) and are a 404 in production. Exposing them in production (for example via an Access service token) waits for a concrete need.
+- User management is gone. The self-imposed storage quota survives as a dashboard setting.
 - The OAuth consent dialog moves under the guarded prefix (advertised via WebFinger) so `/oauth/*/token` stays reachable by apps that cannot perform an Access login.
 - The remoteStorage spec's recommendation that the consent/revocation UI live on a different origin than storage (§14) remains unmet; accepted debt for a personal instance.

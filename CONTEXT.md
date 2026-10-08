@@ -21,7 +21,7 @@ The `username@host` (or host-only `http://host/`) that a client resolves via Web
 _Avoid_: server URL
 
 **App authorization**:
-An OAuth client's bearer token granting access to one or more Modules; listed and revocable from the control plane.
+One app's grant: all of an OAuth client's bearer tokens for the Account, together granting access to one or more Modules. Listed per client (by its origin host) and revoked as a whole from the control plane.
 _Avoid_: token, session (both overloaded here)
 
 **Module**:

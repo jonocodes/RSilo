@@ -50,18 +50,6 @@ describe('Storage E2E', () => {
 
     await waitForServer(SERVER_URL);
 
-    const createUserResponse = await fetch(`${SERVER_URL}/admin/users`, {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer admin',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username: 'alice', password: 'password123' }),
-    });
-    if (createUserResponse.status !== 201) {
-      throw new Error(`Failed to create E2E user: ${createUserResponse.status} ${await createUserResponse.text()}`);
-    }
-
     devToken = createDevToken();
   });
 

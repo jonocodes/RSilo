@@ -12,7 +12,7 @@ interface RenderedOperation {
 function authLabel(operation: Record<string, unknown>): string {
   const security = (operation.security as Array<Record<string, string[]>> | undefined) ?? [];
   const schemes = security.flatMap((entry) => Object.keys(entry));
-  if (schemes.includes('adminSecret')) return '`ADMIN_SECRET`';
+  if (schemes.includes('cloudflareAccess')) return 'Cloudflare Access';
   if (schemes.includes('bearerAuth')) return '`Bearer`';
   return '';
 }

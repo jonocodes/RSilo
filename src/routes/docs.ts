@@ -5,7 +5,7 @@ import { buildOpenApiDocument } from '../openapi/spec';
  * Public API reference. The spec is derived from the running app, so the page
  * always lists the complete surface. The request console ("Try it out") is
  * disabled on purpose: this page is for discovery, not for firing requests at
- * admin/debug endpoints.
+ * account/debug endpoints.
  */
 export function apiDocsHtml(): string {
   return `<!doctype html>

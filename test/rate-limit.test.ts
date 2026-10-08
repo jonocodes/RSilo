@@ -48,18 +48,9 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
   return {
     STORAGE: mockStorage,
     DB: db,
-    LOGIN_LIMITER: fakeLimiter(RATE_LIMITS.LOGIN_LIMITER),
     STORAGE_LIMITER: fakeLimiter(RATE_LIMITS.STORAGE_LIMITER),
     ...overrides,
   } as any;
-}
-
-function login(env: any, ip = '203.0.113.10') {
-  return createServer(env).request('http://localhost/account/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'CF-Connecting-IP': ip },
-    body: new URLSearchParams({ username: 'alice', password: 'wrong' }).toString(),
-  }, env);
 }
 
 function storageGet(env: any, token: string, user = 'alice', ip = '203.0.113.20') {
@@ -68,36 +59,6 @@ function storageGet(env: any, token: string, user = 'alice', ip = '203.0.113.20'
     headers: { Authorization: `Bearer ${token}`, 'CF-Connecting-IP': ip },
   }, env);
 }
-
-describe('login rate limiting', () => {
-  it('blocks after the login budget with 429 and rate-limit headers', async () => {
-    const env = makeEnv();
-    for (let i = 0; i < RATE_LIMITS.LOGIN_LIMITER; i++) {
-      expect((await login(env)).status).toBe(302);
-    }
-    const blocked = await login(env);
-    expect(blocked.status).toBe(429);
-    expect(blocked.headers.get('Retry-After')).toBe(String(RATE_LIMIT_PERIOD_SECONDS));
-    expect(blocked.headers.get('X-RateLimit-Limit')).toBe(String(RATE_LIMITS.LOGIN_LIMITER));
-    expect(blocked.headers.get('X-RateLimit-Remaining')).toBe('0');
-  });
-
-  it('keys login attempts by namespace, IP and account', async () => {
-    const env = makeEnv();
-    await login(env);
-    expect([...env.LOGIN_LIMITER.keys.keys()]).toEqual(['account-login:ip:203.0.113.10:account:alice']);
-  });
-
-  it('fails closed in production when the login limiter is missing', async () => {
-    const env = makeEnv({ RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, SESSION_SECRET: 's', LOGIN_LIMITER: undefined });
-    expect((await login(env)).status).toBe(503);
-  });
-
-  it('skips limiting in local development when the binding is missing', async () => {
-    const env = makeEnv({ RSILO_DEV_MODE: 'true', LOGIN_LIMITER: undefined });
-    expect((await login(env)).status).toBe(302);
-  });
-});
 
 describe('storage rate limiting', () => {
   it('never throttles requests with a valid token, however many', async () => {
@@ -150,4 +111,9 @@ describe('wrangler.toml rate-limit bindings', () => {
       expect(block![1]).toMatch(new RegExp(`period\\s*=\\s*${RATE_LIMIT_PERIOD_SECONDS}\\b`));
     });
   }
+
+  it('declares no binding missing from RATE_LIMITS', () => {
+    const declared = [...toml.matchAll(/\[\[ratelimits\]\]\s*name\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(declared.sort()).toEqual(Object.keys(RATE_LIMITS).sort());
+  });
 });

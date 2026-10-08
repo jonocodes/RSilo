@@ -8,7 +8,6 @@ import { isLocalDevelopment } from '../config';
 // and X-RateLimit-Limit needs it.
 export const RATE_LIMIT_PERIOD_SECONDS = 60;
 export const RATE_LIMITS = {
-  LOGIN_LIMITER: 5,
   STORAGE_LIMITER: 20,
 } as const;
 
@@ -53,13 +52,5 @@ export async function enforceRateLimit(c: Context, options: RateLimitOptions): P
     'Retry-After': RATE_LIMIT_PERIOD_SECONDS.toString(),
     'X-RateLimit-Limit': RATE_LIMITS[options.limiter].toString(),
     'X-RateLimit-Remaining': '0',
-  });
-}
-
-export function loginRateLimit(c: Context, namespace: string, account: string): Promise<Response | null> {
-  const normalized = account.trim().toLowerCase() || '-';
-  return enforceRateLimit(c, {
-    limiter: 'LOGIN_LIMITER',
-    key: `${namespace}:ip:${trustedClientIp(c)}:account:${normalized}`,
   });
 }
