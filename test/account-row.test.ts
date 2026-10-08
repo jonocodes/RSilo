@@ -22,7 +22,7 @@ function createEnv(extra: Record<string, string> = {}) {
 
 const app = createServer({});
 const PUBLIC_MISSING = 'http://localhost/storage/alice/public/documents/missing.txt';
-const CONSENT = 'http://localhost/oauth/alice/authorize?client_id=https%3A%2F%2Fapp.example&redirect_uri=https%3A%2F%2Fapp.example%2Fcb&response_type=token&scope=documents%3Arw';
+const CONSENT = 'http://localhost/account/oauth/authorize?client_id=https%3A%2F%2Fapp.example&redirect_uri=https%3A%2F%2Fapp.example%2Fcb&response_type=token&scope=documents%3Arw';
 
 function userQueries(env: ReturnType<typeof createEnv>): number {
   return env.DB.queries.filter(sql => /\busers\b/.test(sql)).length;

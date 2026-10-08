@@ -19,7 +19,9 @@ export function accountUrls(config: InstanceConfig): AccountUrls {
   return {
     base,
     storageRoot: `${base}/storage/${user}`,
-    authorize: `${base}/oauth/${user}/authorize`,
+    // The consent page lives under the Access-guarded /account prefix and is
+    // always for the Account, so it carries no username (ADR-0004).
+    authorize: `${base}/account/oauth/authorize`,
     token: `${base}/oauth/${user}/token`,
     lrddTemplate: `${base}/webfinger/jrd?resource={uri}`,
   };

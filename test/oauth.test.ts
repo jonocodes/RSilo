@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
-import { PRODUCTION_INSTANCE } from './helpers/instance';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -58,7 +57,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     const json = await res.json() as any;
     expect(json.auth_method).toBe('popup');
     expect(json.owner).toBe('alice');
-    expect(json.auth).toContain('/oauth/alice/authorize');
+    expect(json.auth).toContain('/account/oauth/authorize');
     expect(json.token_endpoint).toContain('/oauth/alice/token');
     expect(json.storageapi).toContain('/storage/alice');
   });
@@ -67,7 +66,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     const env = { ...TEST_ENV, PUBLIC_BASE_URL: 'https://storage.example' };
     const res = await app.request('http://localhost/oauth/alice', { method: 'GET' }, env);
     const json = await res.json() as any;
-    expect(json.auth).toBe('https://storage.example/oauth/alice/authorize');
+    expect(json.auth).toBe('https://storage.example/account/oauth/authorize');
     expect(json.token_endpoint).toBe('https://storage.example/oauth/alice/token');
     expect(json.storageapi).toBe('https://storage.example/storage/alice');
   });
@@ -196,18 +195,6 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     expect(res.status).toBe(400);
     const json = await res.json() as any;
     expect(json.error).toBe('invalid_grant');
-  });
-
-  it('GET /oauth/:user/authorize without required params returns invalid_request', async () => {
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'GET' },
-      TEST_ENV
-    );
-
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBeOneOf(['invalid_request', 'unsupported_response_type']);
   });
 
   it('POST /oauth/:user/token with unsupported grant_type returns 400', async () => {
@@ -393,253 +380,10 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   });
 });
 
-describe('OAuth consent flow', () => {
-  let app: ReturnType<typeof createServer>;
-  // Same-origin form posts from the consent page (CSRF check), and a
-  // non-local production request with no Cloudflare Access identity.
-  const SAME_ORIGIN = { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' };
-  const PRODUCTION = { RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
-
-  const validClient = {
-    id: 'test-client',
-    name: 'Test App',
-    redirect_uris: 'https://example.com/callback',
-    user_id: 'alice',
-  };
-
-  function makeDb(userRow: any = null) {
-    return {
-      prepare: (sql: string) => ({
-        bind: (..._args: any[]) => ({
-          first: async () => {
-            if (sql.includes('oauth_clients')) return validClient;
-            if (sql.includes('users')) return userRow;
-            return null;
-          },
-          run: async () => ({}),
-        }),
-        first: async () => null,
-        run: async () => ({}),
-        all: async () => ({ results: [] }),
-      }),
-    } as any;
-  }
-
-  function recordingDb(table: string, inserts: any[]) {
-    return {
-      prepare: (sql: string) => ({
-        bind: (...args: any[]) => ({
-          first: async () => null,
-          run: async () => { if (sql.includes(`INSERT INTO ${table}`)) inserts.push(args); },
-        }),
-      }),
-    } as any;
-  }
-
-  function approveBody(extra: Record<string, string> = {}) {
-    return new URLSearchParams({
-      action: 'approve',
-      client_id: 'test-client',
-      redirect_uri: 'https://example.com/callback',
-      response_type: 'code',
-      scope: 'documents:rw',
-      state: 'xyz',
-      ...extra,
-    }).toString();
-  }
-
-  beforeAll(async () => {
-    app = createServer(TEST_ENV);
-  });
-
-  it('GET /oauth/:user/authorize renders the consent form, with no password step', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb() };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=https://example.com/callback&response_type=code&scope=documents:rw',
-      { method: 'GET' },
-      env
-    );
-    expect(res.status).toBe(200);
-    expect(res.headers.get('Content-Type')).toContain('text/html');
-    const html = await res.text();
-    expect(html).toContain('Authorize Access');
-    expect(html).toContain('alice');
-    expect(html).toContain('documents:rw');
-    expect(html).toContain('name="action" value="approve"');
-    expect(html).not.toContain('type="password"');
-    expect(html).not.toContain('session_token');
-  });
-
-  it('POST approve as the Owner redirects with code', async () => {
-    const codeInserts: any[] = [];
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts) };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
-      env
-    );
-    expect(res.status).toBe(302);
-    const location = res.headers.get('Location') || '';
-    expect(location).toContain('https://example.com/callback');
-    expect(location).toContain('code=');
-    expect(location).toContain('state=xyz');
-    expect(codeInserts.length).toBe(1);
-  });
-
-  it('POST approve with an Origin equal to PUBLIC_BASE_URL is accepted when Sec-Fetch-Site is absent', async () => {
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []) };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'http://localhost:8787' }, body: approveBody() },
-      env
-    );
-    expect(res.status).toBe(302);
-  });
-
-  for (const [name, headers] of [
-    ['Sec-Fetch-Site: cross-site', { 'Sec-Fetch-Site': 'cross-site' }],
-    ['Sec-Fetch-Site: same-site', { 'Sec-Fetch-Site': 'same-site' }],
-    ['a foreign Origin', { Origin: 'https://evil.example' }],
-    ['neither header', {}],
-  ] as const) {
-    it(`POST approve with ${name} is refused with 403 and issues nothing`, async () => {
-      const codeInserts: any[] = [];
-      const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts) };
-      const res = await app.request(
-        'http://localhost/oauth/alice/authorize',
-        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: approveBody() },
-        env
-      );
-      expect(res.status).toBe(403);
-      expect(res.headers.get('Location')).toBeNull();
-      expect(codeInserts).toHaveLength(0);
-    });
-  }
-
-  it('POST approve without an Owner identity returns 401 (production, no Cloudflare Access)', async () => {
-    const codeInserts: any[] = [];
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', codeInserts), ...PRODUCTION };
-    const res = await app.request(
-      'https://rsilo.example/oauth/alice/authorize',
-      {
-        method: 'POST',
-        headers: { ...SAME_ORIGIN, 'Cf-Access-Jwt-Assertion': 'forged.jwt.value' },
-        body: approveBody(),
-      },
-      env
-    );
-    expect(res.status).toBe(401);
-    expect(codeInserts).toHaveLength(0);
-  });
-
-  it('POST approve with an Access identity other than OWNER_EMAIL returns 401', async () => {
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []), ...PRODUCTION };
-    const ctx = {
-      waitUntil() {},
-      passThroughOnException() {},
-      access: { aud: 'aud', getIdentity: async () => ({ email: 'mallory@example.com' }) },
-    } as any;
-    const res = await app.request(
-      'https://rsilo.example/oauth/alice/authorize',
-      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
-      env,
-      ctx
-    );
-    expect(res.status).toBe(401);
-  });
-
-  it('POST approve with the Owner\'s Access identity redirects with code (production)', async () => {
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_codes', []), ...PRODUCTION };
-    const ctx = {
-      waitUntil() {},
-      passThroughOnException() {},
-      access: { aud: 'aud', getIdentity: async () => ({ email: 'Owner@Example.com' }) },
-    } as any;
-    const res = await app.request(
-      'https://rsilo.example/oauth/alice/authorize',
-      { method: 'POST', headers: SAME_ORIGIN, body: approveBody() },
-      env,
-      ctx
-    );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('code=');
-  });
-
-  it('POST deny redirects with access_denied', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb() };
-    const body = new URLSearchParams({
-      action: 'deny',
-      redirect_uri: 'https://example.com/callback',
-      state: 'xyz',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: SAME_ORIGIN, body: body.toString() },
-      env
-    );
-    expect(res.status).toBe(302);
-    const location = res.headers.get('Location') || '';
-    expect(location).toContain('error=access_denied');
-    expect(location).toContain('state=xyz');
-  });
-
-  it('POST approve with response_type=token redirects with access_token in hash', async () => {
-    const tokenInserts: any[] = [];
-    const env = { STORAGE: {} as any, DB: recordingDb('oauth_tokens', tokenInserts) };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize',
-      { method: 'POST', headers: SAME_ORIGIN, body: approveBody({ response_type: 'token', state: 'abc' }) },
-      env
-    );
-    expect(res.status).toBe(302);
-    const location = res.headers.get('Location') || '';
-    expect(location).toContain('https://example.com/callback');
-    expect(location).toContain('access_token=');
-    expect(location).toContain('token_type=Bearer');
-    expect(location).toContain('state=abc');
-    expect(tokenInserts.length).toBe(1);
-  });
-
-  it('GET /authorize with unsupported response_type returns 400', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb() };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=https://example.com/callback&response_type=invalid',
-      { method: 'GET' },
-      env
-    );
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('unsupported_response_type');
-  });
-
-  it('GET /authorize auto-accepts an unknown client_id (no pre-registration)', async () => {
-    const noClientDb = {
-      prepare: (_sql: string) => ({
-        bind: (..._args: any[]) => ({ first: async () => null, run: async () => ({}) }),
-      }),
-    } as any;
-    const env = { STORAGE: {} as any, DB: noClientDb };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize?client_id=unknown&redirect_uri=https://example.com/callback&response_type=code',
-      { method: 'GET' },
-      env
-    );
-    expect(res.status).toBe(200);
-    expect(res.headers.get('Content-Type')).toContain('text/html');
-    expect(await res.text()).toContain('unknown');
-  });
-
-  it('GET /authorize with an invalid redirect_uri returns 400', async () => {
-    const env = { STORAGE: {} as any, DB: makeDb() };
-    const res = await app.request(
-      'http://localhost/oauth/alice/authorize?client_id=test-client&redirect_uri=not-a-url&response_type=code',
-      { method: 'GET' },
-      env
-    );
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_request');
-  });
+// Consent itself (render, approve, deny, CSRF, origin check, legacy redirect)
+// is covered in test/consent.test.ts; these are more token endpoint cases.
+describe('OAuth token endpoint, more grants', () => {
+  const app = createServer(TEST_ENV);
 
   it('POST /token with refresh_token=missing returns invalid_grant', async () => {
     const emptyDb = {

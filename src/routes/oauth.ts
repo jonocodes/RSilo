@@ -1,128 +1,36 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
 import { generateToken } from '../services/auth';
-import { isSameOriginRequest, resolveOwner } from '../services/identity';
 import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { accountUrls } from '../services/discovery';
 
 export const oauthRouter = new Hono();
 
-// Consent and token issuance are for the Account only: any other username is a
-// 404, and the canonical ACCOUNT_USERNAME (not the path segment) is used for
-// every row written. The Account row must exist first, since OAuth rows
-// reference users(username).
+// Token issuance is for the Account only: any other username is a 404, and the
+// canonical ACCOUNT_USERNAME (not the path segment) is used for every row
+// written. The Account row must exist first, since OAuth rows reference
+// users(username). The token endpoint stays outside /account and ungated:
+// apps call it directly and cannot perform an Access login.
 const forAccount = [requireInstanceConfig(), requireAccountPath(), requireAccountRow()] as const;
 
-oauthRouter.get('/:user/authorize', ...forAccount, async (c) => {
-  const user = c.get('instance').accountUsername;
-  const clientId = c.req.query('client_id');
-  const redirectUri = c.req.query('redirect_uri');
-  const responseType = c.req.query('response_type');
-  const scope = c.req.query('scope') || 'documents:rw';
-  const state = c.req.query('state') || '';
-
-  if (!clientId || !redirectUri) {
-    return c.json({ error: 'invalid_request', error_description: 'client_id and redirect_uri are required' }, 400);
-  }
-
-  if (responseType !== 'token' && responseType !== 'code') {
-    return c.json({ error: 'unsupported_response_type' }, 400);
-  }
-
-  try {
-    new URL(redirectUri);
-  } catch {
-    return c.json({ error: 'invalid_request', error_description: 'redirect_uri must be a valid URL' }, 400);
-  }
-
-  // Clients are not pre-registered (matching Armadietto and the remoteStorage
-  // ecosystem): any client_id is accepted. We look one up only for a friendly
-  // name; the consent screen shows the redirect target as the safety cue.
-  const db = (c.env as any).DB;
-  let client: any = null;
-  try {
-    client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(clientId)?.first?.();
-  } catch { /* best effort */ }
-
-  return new Response(renderConsentForm({ user, client, clientId, redirectUri, responseType, scope, state }), {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  });
+// The consent dialog moved under /account (routes/consent.ts, ADR-0004). Apps
+// and remoteStorage.js cache discovery results, so the old URL stays as a
+// redirect passing the query string through byte-for-byte: it is sliced from
+// the raw request URL, never parsed and re-serialised. The target comes from
+// PUBLIC_BASE_URL so the Owner lands on the Access-protected hostname.
+oauthRouter.get('/:user/authorize', requireInstanceConfig(), requireAccountPath(), (c) => {
+  const url = c.req.url;
+  const queryStart = url.indexOf('?');
+  const search = queryStart === -1 ? '' : url.slice(queryStart);
+  return c.redirect(`${accountUrls(c.get('instance')).authorize}${search}`, 302);
 });
 
-oauthRouter.post('/:user/authorize', ...forAccount, async (c) => {
-  const user = c.get('instance').accountUsername;
-  const body = await c.req.parseBody() as any;
-  const { client_id, redirect_uri, response_type, scope, state, action } = body;
-
-  // The consent form carries no secret of its own, so a cross-site POST must
-  // not be able to approve (or deny) on the Owner's behalf.
-  if (!isSameOriginRequest(c, c.get('instance').publicBaseUrl)) {
-    return c.json({ error: 'access_denied', error_description: 'Cross-site request refused' }, 403);
-  }
-
-  if (action === 'deny') {
-    const denyUrl = new URL(redirect_uri);
-    denyUrl.searchParams.set('error', 'access_denied');
-    if (state) denyUrl.searchParams.set('state', state);
-    return c.redirect(denyUrl.toString(), 302);
-  }
-
-  const db = (c.env as any).DB;
-
-  if (action === 'approve') {
-    // Approval needs the Owner (services/identity.ts). Until the consent dialog
-    // moves under the Access-guarded /account prefix, production requests here
-    // carry no Access identity and are refused.
-    const owner = await resolveOwner(c);
-    if (owner.status !== 'owner') {
-      return c.json({ error: 'access_denied', error_description: 'Sign in as the Owner to approve apps' }, 401);
-    }
-
-    if (!client_id || !redirect_uri) {
-      return c.json({ error: 'invalid_request' }, 400);
-    }
-
-    // Record the client on first approval so it can be listed and revoked.
-    try {
-      const known = await db?.prepare?.('SELECT id FROM oauth_clients WHERE id = ?')?.bind?.(client_id)?.first?.();
-      if (!known) {
-        await db?.prepare?.('INSERT INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
-          ?.bind?.(client_id, client_id, redirect_uri, Math.floor(Date.now() / 1000), user)?.run?.();
-      }
-    } catch { /* best effort */ }
-
-    if (response_type === 'token') {
-      const accessToken = generateToken();
-      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await db?.prepare?.(
-        'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      )?.bind?.(crypto.randomUUID(), accessToken, null, expiresAt, scope || 'documents:rw', user, client_id)?.run?.();
-
-      const redirectUrl = new URL(redirect_uri);
-      redirectUrl.hash = new URLSearchParams({
-        access_token: accessToken,
-        token_type: 'Bearer',
-        expires_in: '3600',
-        scope: scope || 'documents:rw',
-        ...(state ? { state } : {}),
-      }).toString();
-      return c.redirect(redirectUrl.toString(), 302);
-    }
-
-    // response_type=code
-    const code = generateAuthCode();
-    const expiresAt = Math.floor(Date.now() / 1000) + 600;
-    await db?.prepare?.(
-      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
-    )?.bind?.(code, client_id, user, redirect_uri, scope || 'documents:rw', expiresAt)?.run?.();
-
-    const redirectUrl = new URL(redirect_uri);
-    redirectUrl.searchParams.set('code', code);
-    if (state) redirectUrl.searchParams.set('state', state);
-    return c.redirect(redirectUrl.toString(), 302);
-  }
-
-  return c.json({ error: 'invalid_request', error_description: 'Unknown action' }, 400);
+// Consent is no longer submitted here. 405 rather than 404: the resource still
+// exists (GET redirects), only this method is gone. Not a 307 to the new URL
+// either: a consent decision must come from the page under /account that
+// rendered it, behind the Owner gate and CSRF check.
+oauthRouter.post('/:user/authorize', requireInstanceConfig(), requireAccountPath(), (c) => {
+  return c.text('Method Not Allowed: consent is submitted at /account/oauth/authorize', 405, { Allow: 'GET, OPTIONS' });
 });
 
 oauthRouter.post('/:user/token', ...forAccount, async (c) => {
@@ -262,7 +170,7 @@ oauthRouter.options('/:user/authorize', (c) => {
     status: 204,
     headers: {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     }
   });
@@ -280,87 +188,3 @@ oauthRouter.options('/:user/token', (c) => {
   });
 });
 
-function generateAuthCode(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => chars[b % chars.length]).join('');
-}
-
-function escapeHtml(str: string): string {
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-const CSS = `
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
-  .container { max-width: 400px; margin: 100px auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-  h1 { font-size: 1.25rem; margin-bottom: 1rem; }
-  .client-info { background: #f5f5f5; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
-  .client-info p { margin: 0.25rem 0; font-size: 0.875rem; }
-  .client-name { font-weight: 600; }
-  .scope-list { margin: 1rem 0; }
-  .scope-item { padding: 0.5rem; background: #e8f4ff; border-radius: 4px; margin: 0.25rem 0; font-size: 0.875rem; }
-  .buttons { display: flex; gap: 1rem; margin-top: 1.5rem; }
-  button { flex: 1; padding: 0.75rem; border-radius: 4px; border: none; font-size: 1rem; cursor: pointer; }
-  .approve { background: #0066cc; color: white; }
-  .approve:hover { background: #0052a3; }
-  .deny { background: #dc3545; color: white; }
-  .deny:hover { background: #c82333; }
-  .user-badge { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
-`;
-
-interface ConsentFormParams {
-  user: string;
-  client: any;
-  clientId: string;
-  redirectUri: string;
-  responseType: string;
-  scope: string;
-  state: string;
-}
-
-function renderConsentForm({ user, client, clientId, redirectUri, responseType, scope, state }: ConsentFormParams): string {
-  const scopes = scope.split(/\s+/).filter(Boolean);
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Authorize — ${escapeHtml(clientId)}</title>
-  <style>${CSS}</style>
-</head>
-<body>
-  <div class="container">
-    <h1>Authorize Access</h1>
-    <p class="user-badge">Account <strong>${escapeHtml(user)}</strong></p>
-    <div class="client-info">
-      <p class="client-name">${escapeHtml(client?.name || clientId)}</p>
-      <p><strong>Client ID:</strong> ${escapeHtml(clientId)}</p>
-      <p><strong>Redirect URI:</strong> ${escapeHtml(redirectUri)}</p>
-    </div>
-    <p>This application is requesting access to:</p>
-    <div class="scope-list">
-      ${scopes.map(s => `<div class="scope-item">${escapeHtml(s)}</div>`).join('')}
-    </div>
-    <form method="POST" action="/oauth/${escapeHtml(user)}/authorize">
-      <input type="hidden" name="action" value="approve">
-      <input type="hidden" name="client_id" value="${escapeHtml(clientId)}">
-      <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
-      <input type="hidden" name="response_type" value="${escapeHtml(responseType)}">
-      <input type="hidden" name="scope" value="${escapeHtml(scope)}">
-      ${state ? `<input type="hidden" name="state" value="${escapeHtml(state)}">` : ''}
-      <div class="buttons">
-        <button type="submit" class="approve">Authorize</button>
-        <button type="submit" form="deny-form" class="deny">Deny</button>
-      </div>
-    </form>
-    <form id="deny-form" method="POST" action="/oauth/${escapeHtml(user)}/authorize">
-      <input type="hidden" name="action" value="deny">
-      <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
-      ${state ? `<input type="hidden" name="state" value="${escapeHtml(state)}">` : ''}
-    </form>
-  </div>
-</body>
-</html>`;
-}
