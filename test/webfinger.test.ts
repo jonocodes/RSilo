@@ -79,7 +79,7 @@ describe('WebFinger endpoint', () => {
     const json = await res.json() as any;
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink.properties).toBeDefined();
-    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toBe('http://localhost:8787/oauth/alice/authorize');
+    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toBe('http://localhost:8787/account/oauth/authorize');
   });
 
   it('WebFinger returns 404 for a user other than the Account', async () => {

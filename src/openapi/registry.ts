@@ -80,23 +80,20 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       + '404 unless {user} is ACCOUNT_USERNAME.',
   },
   'GET /oauth/{user}/authorize': {
-    summary: 'Consent form',
+    summary: 'Legacy consent URL (redirect)',
     tags: ['OAuth'],
-    description: '404 unless {user} is ACCOUNT_USERNAME.',
-    parameters: [
-      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' } },
-      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' } },
-      { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
-      { name: 'scope', in: 'query', required: true, schema: { type: 'string' }, description: 'Space-separated scopes, e.g. documents:rw' },
-    ],
+    description: 'Redirects to /account/oauth/authorize on PUBLIC_BASE_URL with the query string unchanged, '
+      + 'for apps that cached the old discovery result.',
+    responses: {
+      '302': { description: 'To the consent page under /account.' },
+      '404': { description: '{user} is not ACCOUNT_USERNAME.' },
+    },
   },
   'POST /oauth/{user}/authorize': {
-    summary: 'Approve or deny consent',
+    summary: 'Legacy consent URL (no longer accepts submissions)',
     tags: ['OAuth'],
     responses: {
-      '302': { description: 'Redirect back to the client with a code or token.' },
-      '401': { description: 'Approval without the Owner\'s identity.' },
-      '403': { description: 'Cross-site request.' },
+      '405': { description: 'Consent is submitted at /account/oauth/authorize.' },
       '404': { description: '{user} is not ACCOUNT_USERNAME.' },
     },
   },
@@ -186,6 +183,39 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     responses: {
       '302': { description: 'Back to the dashboard.' },
       '403': { description: 'Cross-site request.' },
+    },
+  },
+  'GET /account/oauth/authorize': {
+    summary: 'OAuth consent page',
+    tags: ['OAuth'],
+    security: ACCESS,
+    description: 'Shows the requesting app\'s origin host, the requested Modules and the redirect target, '
+      + 'for the Account. Rendered entirely from the query string, so it can be reloaded to retry. '
+      + 'Advertised by WebFinger and /oauth/{user}.',
+    parameters: [
+      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s http(s) URL. Clients are not pre-registered.' },
+      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An http(s) URL on the same origin as client_id.' },
+      { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
+      { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated scopes, e.g. documents:rw. Defaults to documents:rw.' },
+      { name: 'state', in: 'query', required: false, schema: { type: 'string' } },
+    ],
+    responses: {
+      '200': { description: 'The consent page.' },
+      '400': { description: 'Invalid request, including a redirect_uri origin other than the client_id origin. Never redirects.' },
+      '403': { description: 'A signed-in identity other than OWNER_EMAIL.' },
+    },
+  },
+  'POST /account/oauth/authorize': {
+    summary: 'Approve or deny an app',
+    tags: ['OAuth'],
+    security: ACCESS,
+    description: 'Form fields: action (approve or deny) plus the request parameters. Approving with response_type=token '
+      + 'redirects with the access token in the fragment; with code, with a code for /oauth/{user}/token. '
+      + 'Deny redirects with error=access_denied.',
+    responses: {
+      '302': { description: 'Back to the app\'s redirect_uri.' },
+      '400': { description: 'Invalid request, including a redirect_uri origin other than the client_id origin. Never redirects.' },
+      '403': { description: 'Cross-site request, or an identity other than OWNER_EMAIL.' },
     },
   },
   'GET /account/tokens': {

@@ -34,9 +34,11 @@ app — the interactive view is at `GET /api`, the raw spec at `GET /openapi.jso
 
 | Method | Path | Auth | Summary |
 | --- | --- | --- | --- |
+| `GET` | `/account/oauth/authorize` | Cloudflare Access | OAuth consent page |
+| `POST` | `/account/oauth/authorize` | Cloudflare Access | Approve or deny an app |
 | `GET` | `/oauth/{user}` |  | OAuth discovery document |
-| `GET` | `/oauth/{user}/authorize` |  | Consent form |
-| `POST` | `/oauth/{user}/authorize` |  | Approve or deny consent |
+| `GET` | `/oauth/{user}/authorize` |  | Legacy consent URL (redirect) |
+| `POST` | `/oauth/{user}/authorize` |  | Legacy consent URL (no longer accepts submissions) |
 | `POST` | `/oauth/{user}/token` |  | Exchange code or refresh token |
 
 ### Account

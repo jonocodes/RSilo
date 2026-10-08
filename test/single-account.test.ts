@@ -74,7 +74,7 @@ describe('WebFinger accepts only the Account', () => {
       expect(json.subject).toBe(resource);
       const link = remoteStorageLink(json);
       expect(link.href).toBe(`${BASE}/storage/alice`);
-      expect(link.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toBe(`${BASE}/oauth/alice/authorize`);
+      expect(link.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toBe(`${BASE}/account/oauth/authorize`);
     });
 
     it(`/webfinger/jrd resolves ${resource} to the Account`, async () => {
@@ -83,7 +83,7 @@ describe('WebFinger accepts only the Account', () => {
       expect(res.status).toBe(200);
       const json = await res.json() as any;
       expect(json.links[0].template).toBe(`${BASE}/storage/alice/{category}`);
-      expect(json.links[0].auth).toBe(`${BASE}/oauth/alice/authorize`);
+      expect(json.links[0].auth).toBe(`${BASE}/account/oauth/authorize`);
     });
 
     it(`/webfinger/xrd resolves ${resource} to the Account`, async () => {
@@ -92,7 +92,7 @@ describe('WebFinger accepts only the Account', () => {
       expect(res.status).toBe(200);
       const text = await res.text();
       expect(text).toContain(`href="${BASE}/storage/alice"`);
-      expect(text).toContain(`href="${BASE}/oauth/alice/authorize"`);
+      expect(text).toContain(`href="${BASE}/account/oauth/authorize"`);
     });
   }
 
@@ -140,7 +140,7 @@ describe('Advertised URLs use PUBLIC_BASE_URL', () => {
     expect(JSON.stringify(json)).not.toContain('evil.example');
     expect(remoteStorageLink(json).href).toBe(`${BASE}/storage/alice`);
     const simple = json.links.find((l: any) => l.rel === 'remoteStorage');
-    expect(simple.auth).toBe(`${BASE}/oauth/alice/authorize`);
+    expect(simple.auth).toBe(`${BASE}/account/oauth/authorize`);
     expect(simple.template).toBe(`${BASE}/storage/alice/{category}`);
   });
 
@@ -175,7 +175,7 @@ describe('Advertised URLs use PUBLIC_BASE_URL', () => {
     const res = await app.request('http://evil.example/oauth/alice', { headers: spoofed }, createEnv());
     const json = await res.json() as any;
     expect(json.www).toBe(BASE);
-    expect(json.auth).toBe(`${BASE}/oauth/alice/authorize`);
+    expect(json.auth).toBe(`${BASE}/account/oauth/authorize`);
     expect(json.token_endpoint).toBe(`${BASE}/oauth/alice/token`);
     expect(json.storageapi).toBe(`${BASE}/storage/alice`);
   });
@@ -213,9 +213,10 @@ describe('OAuth is for the Account only', () => {
     expect(res.status).toBe(404);
   });
 
-  it('GET /oauth/:user/authorize renders for the Account', async () => {
+  it('GET /oauth/:user/authorize redirects the Account to the consent page under /account', async () => {
     const res = await app.request(`http://localhost/oauth/alice/authorize?${consent}`, {}, createEnv());
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(`${BASE}/account/oauth/authorize?${consent}`);
   });
 });
 

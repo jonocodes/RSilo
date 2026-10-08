@@ -7,23 +7,28 @@ import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingE
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 import { requireAccountRow } from '../middleware/instance';
 import { requireOwner, requireSameOrigin } from '../middleware/owner';
+import { consentRouter } from './consent';
 
 export const accountRouter = new Hono();
 
-const CONTENT_SECURITY_POLICY = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'unsafe-inline'",
-  "img-src 'self' data:",
-  "connect-src 'self'",
-  "form-action 'self'",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
+// `formActionOrigin` is set only by the consent page, whose form must be
+// allowed to follow the approve/deny redirect to the app (routes/consent.ts).
+function contentSecurityPolicy(formActionOrigin?: string): string {
+  return [
+    "default-src 'none'",
+    "script-src 'self'",
+    "style-src 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    formActionOrigin ? `form-action 'self' ${formActionOrigin}` : "form-action 'self'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
 
 accountRouter.use('*', async (c, next) => {
   await next();
-  c.header('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  c.header('Content-Security-Policy', contentSecurityPolicy(c.get('formActionOrigin')));
   c.header('Referrer-Policy', 'no-referrer');
   c.header('X-Content-Type-Options', 'nosniff');
 });
@@ -338,6 +343,9 @@ accountRouter.post('/apps/revoke', async (c) => {
     .run();
   return c.redirect('/account', 302);
 });
+
+// OAuth consent for the Account: /account/oauth/authorize (ADR-0004).
+accountRouter.route('/oauth', consentRouter);
 
 // App authorizations used to have their own page.
 accountRouter.get('/tokens', (c) => c.redirect('/account', 302));

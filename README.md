@@ -153,13 +153,13 @@ Every state-changing `/account` request must come from the page itself (`Sec-Fet
 Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears on your `/account` dashboard.
 
 1. In the app, enter your storage address: either `<ACCOUNT_USERNAME>@<your-worker>.workers.dev` or, if the app supports it, just the server URL `https://<your-worker>.workers.dev`.
-2. The app discovers your endpoints via WebFinger and sends you to the OAuth consent page.
-3. Check the app and **where it redirects to**, and approve the requested module permissions. Approving requires your identity as the Owner.
+2. The app discovers your endpoints via WebFinger and sends you to the consent page, `/account/oauth/authorize`. It is part of `/account`, so Cloudflare Access signs you in first if you are not already.
+3. The page shows the app (by its origin host), the modules it asks for and whether it wants read-only or read-write access, and **where it will send you back to**. Allow or deny.
 4. The app gets a token and starts syncing into that module.
 
 Your `/account` dashboard lists each app once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
-> **Transitional:** the consent page still lives at `/oauth/<user>/authorize`, outside the Access-protected `/account` path, so in production approval is refused (`401`) until it moves under `/account` (issue #18). Local development is unaffected.
+Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `http(s)` URL, and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
 
 ## Share a file publicly
 
@@ -172,7 +172,7 @@ bun run dev-token alice 'documents:rw'
 
 ## One Account per Instance
 
-An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, OAuth consent and token issuance return `404` for any other username, and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
+An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, the `/oauth/<username>/…` endpoints return `404` for any other username (consent is always for the Account), and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
 
 ## Running on the Cloudflare free tier
 
@@ -246,14 +246,18 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 ### OAuth flow (production)
 
 1. App queries WebFinger to discover auth and storage endpoints (see [Discovery](#discovery))
-2. App redirects user to `/oauth/<ACCOUNT_USERNAME>/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
-3. The Owner reviews the requested scopes and approves (their identity comes from Cloudflare Access; see [Protect `/account`](#protect-account-with-cloudflare-access-and-sign-in))
+2. App redirects user to the advertised consent URL, `/account/oauth/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw&state=...`
+3. The Owner reviews the requested scopes and approves (their identity comes from Cloudflare Access; see [Protect `/account`](#protect-account-with-cloudflare-access-and-sign-in)). Approve and deny are `/account` form posts, so they get the same-origin check.
 4. Server redirects back with `?code=...`
 5. App exchanges code at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
 7. When the access token expires, exchange the refresh token at `/oauth/:user/token` with `grant_type=refresh_token`
 
-Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. Consent and token issuance are for the Account only: `/oauth/:user/authorize` and `/oauth/:user/token` return `404` when `:user` is not `ACCOUNT_USERNAME`, and tokens are always issued for the Account.
+Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
+
+Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
+
+The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) cache discovery results, so that URL still answers `GET` with a `302` to `/account/oauth/authorize`, passing the query string through unchanged. `POST` there returns `405`, and any `:user` other than the Account returns `404`.
 
 ### Discovery
 
@@ -314,7 +318,8 @@ curl http://localhost:8787/storage/alice/public/documents/shared.txt
 src/
   index.ts            Worker entry (Hono app)
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
-  routes/             storage, webfinger, oauth, account, debug, mount (shared route table)
+  routes/             storage, webfinger, oauth (discovery, token, legacy consent redirect), account,
+                      consent (/account/oauth/authorize), debug, mount (shared route table)
   config.ts           per-Instance config (ACCOUNT_USERNAME, OWNER_EMAIL, PUBLIC_BASE_URL) and dev defaults
   services/           auth, identity (Owner resolver: Cloudflare Access or dev identity; CSRF check),
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger
@@ -338,7 +343,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**523 tests** across 27 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**573 tests** across 28 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
