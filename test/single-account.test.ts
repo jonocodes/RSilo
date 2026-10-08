@@ -37,6 +37,8 @@ const ACCEPTED = [
   'acct:alice@rs.example:8443',
   'acct:ALICE@RS.Example:8443',
   'ACCT:Alice@rs.example:8443',
+  // Clients (e.g. the 0dataapp spec-check) build acct: from the bare hostname.
+  'acct:alice@rs.example',
   'https://rs.example:8443',
   'https://rs.example:8443/',
   'http://rs.example:8443',
@@ -45,7 +47,7 @@ const ACCEPTED = [
 
 const REJECTED = [
   'acct:bob@rs.example:8443',
-  'acct:alice@rs.example',
+  'acct:alice@rs.example:9999',
   'acct:alice@other.example:8443',
   'acct:alice@rs.example:8443/storage',
   'acct:alice@evil@rs.example:8443',
@@ -224,7 +226,9 @@ describe('Storage serves only the Account', () => {
   }
 
   for (const method of ['GET', 'HEAD', 'PUT', 'DELETE']) {
-    it(`${method} on another user's storage returns 404 even with that user's valid token`, async () => {
+    // remoteStorage clients (and the 0dataapp spec-check) expect 401/403 for a
+    // storage root the token does not cover, so other users get 403, not 404.
+    it(`${method} on another user's storage is 403 even with that user's valid token`, async () => {
       const env = storageEnv();
       const token = seedToken(env, 'bob', 'documents:rw');
 
@@ -234,24 +238,26 @@ describe('Storage serves only the Account', () => {
         ...(method === 'PUT' ? { body: 'x' } : {}),
       }, env);
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(403);
+      expect(res.headers.get('WWW-Authenticate')).toContain('Bearer');
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example');
     });
   }
 
-  it('anonymous /public/ reads of another user return 404', async () => {
+  it('anonymous /public/ reads of another user are 401', async () => {
     const res = await app.request('http://localhost/storage/bob/public/documents/a.txt', {}, storageEnv());
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
-  it('other users are 404 without a token too, so they cannot be probed', async () => {
+  it('other users are 401 without a token', async () => {
     const res = await app.request('http://localhost/storage/bob/documents/a.txt', {}, storageEnv());
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('Bearer');
   });
 
   it('matches the Account username exactly, like the advertised storage root', async () => {
     const res = await app.request('http://localhost/storage/ALICE/public/documents/a.txt', {}, storageEnv());
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   it("the Account's own storage is unchanged", async () => {

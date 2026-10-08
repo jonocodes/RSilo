@@ -39,18 +39,20 @@ function normaliseHost(host: string, protocol: string): string | null {
 
 /**
  * True when a WebFinger `resource` names the Account. Accepted forms:
- * - `acct:<ACCOUNT_USERNAME>@<host>` (scheme, username and host case-insensitive)
+ * - `acct:<ACCOUNT_USERNAME>@<host>` (scheme, username and host case-insensitive);
+ *   the port may be omitted, since clients often build it from the bare hostname
  * - `http://<host>` / `https://<host>`, with or without a trailing slash
  * where `<host>` equals the PUBLIC_BASE_URL host, including a non-default port.
  */
 export function isAccountResource(resource: string, config: InstanceConfig): boolean {
-  const protocol = new URL(config.publicBaseUrl).protocol;
+  const { protocol, hostname } = new URL(config.publicBaseUrl);
 
   const acct = /^acct:([^@]+)@([^@]+)$/i.exec(resource);
   if (acct) {
     const [, user, host] = acct;
+    const normalised = normaliseHost(host, protocol);
     return user.toLowerCase() === config.accountUsername
-      && normaliseHost(host, protocol) === config.publicHost;
+      && (normalised === config.publicHost || normalised === hostname);
   }
 
   const hostOnly = /^(https?:)\/\/([^/?#]+)\/?$/i.exec(resource);

@@ -19,7 +19,7 @@ export const BEARER = [{ bearerAuth: [] }];
 export const ADMIN = [{ adminSecret: [] }];
 
 const ACCOUNT_RESOURCE = 'acct:<ACCOUNT_USERNAME>@<host>, or http(s)://<host> with or without a trailing slash, '
-  + 'where <host> is the PUBLIC_BASE_URL host (including a non-default port). Case-insensitive.';
+  + 'where <host> is the PUBLIC_BASE_URL host (including a non-default port; acct: may omit it). Case-insensitive.';
 
 /**
  * Metadata keyed by "METHOD /normalized/path". The spec's paths and methods are

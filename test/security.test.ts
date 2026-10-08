@@ -92,7 +92,7 @@ describe('Security Tests', () => {
         env
       );
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(403);
     });
   });
 

@@ -43,15 +43,14 @@ export function requireAccountRow() {
 }
 
 /**
- * 404s unless the route's username segment (`:user` for OAuth, `:username` for
- * storage) names the Account exactly, matching the canonical advertised URLs
- * (storage keys are case-sensitive). Other accounts'
- * rows, tokens and data are thereby unreachable. Must run after
+ * 404s unless an OAuth route's `:user` segment names the Account exactly,
+ * matching the canonical advertised URLs. (Storage refuses other usernames
+ * with the protocol's 401/403 instead; see routes/storage.ts.) Must run after
  * requireInstanceConfig().
  */
-export function requireAccountPath(param: 'user' | 'username' = 'user') {
+export function requireAccountPath() {
   return async (c: Context, next: Next) => {
-    const user = c.req.param(param);
+    const user = c.req.param('user');
     if (user !== c.get('instance').accountUsername) {
       return c.json({ error: 'not_found', error_description: 'Unknown account' }, 404);
     }

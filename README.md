@@ -181,7 +181,7 @@ bun run dev-token alice 'documents:rw'
 
 ## One Account per Instance
 
-An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, OAuth consent and token issuance return `404` for any other username, and so does every `/storage/<username>/…` request (including anonymous `public/` reads), with or without a token. If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
+An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, OAuth consent and token issuance return `404` for any other username, and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
 
 ## Running on the Cloudflare free tier
 
@@ -271,7 +271,7 @@ WebFinger (`/.well-known/webfinger`, `/webfinger/jrd`, `/webfinger/xrd`) accepts
 - `acct:<ACCOUNT_USERNAME>@<host>` — username and host compared case-insensitively
 - the host-only form `http://<host>` or `https://<host>`, with or without a trailing slash
 
-`<host>` must equal the `PUBLIC_BASE_URL` host, including any non-default port (`acct:alice@localhost:8787` in dev). Any other resource returns `404` on every discovery route, as does `/oauth/:user` for any user but the Account. All advertised URLs come from `PUBLIC_BASE_URL`, never the request's `Host` header.
+`<host>` must equal the `PUBLIC_BASE_URL` host, including any non-default port (`acct:alice@localhost:8787` in dev); `acct:` resources may also omit the port (`acct:alice@localhost`). Any other resource returns `404` on every discovery route, as does `/oauth/:user` for any user but the Account. All advertised URLs come from `PUBLIC_BASE_URL`, never the request's `Host` header.
 
 ```bash
 curl 'http://localhost:8787/.well-known/webfinger?resource=acct:alice@localhost:8787'
