@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PROD_CONFIG, configArgs } from './wrangler-config';
+import { withoutEmptyVars } from './setup-config';
+import { DEPLOY_CONFIG, PROD_CONFIG, configArgs } from './wrangler-config';
 
 const ROOT = process.cwd();
 const WRANGLER = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
@@ -31,11 +32,24 @@ if (!existsSync(prodConfigPath)) {
   }
 }
 
-const args = configArgs(existsSync(prodConfigPath));
+let args = configArgs(existsSync(prodConfigPath));
 if (args.length > 0) {
   console.log(`Using ${PROD_CONFIG} (local production resource IDs)`);
 } else {
   console.log('Using wrangler.toml (placeholders or Cloudflare-injected IDs)');
+}
+
+// Empty [vars] entries are placeholders (wrangler.toml ships the Instance vars
+// empty for the deploy button). Deploying them would blank values the Owner set
+// in the dashboard, so deploy a copy without them, and --keep-vars keeps any
+// dashboard var the config does not mention.
+const sourceConfig = join(ROOT, args.length > 0 ? PROD_CONFIG : 'wrangler.toml');
+const sourceToml = readFileSync(sourceConfig, 'utf8');
+const deployToml = withoutEmptyVars(sourceToml);
+if (deployToml !== sourceToml) {
+  writeFileSync(join(ROOT, DEPLOY_CONFIG), deployToml);
+  args = ['--config', DEPLOY_CONFIG];
+  console.log(`Leaving empty vars out of the deploy (${DEPLOY_CONFIG}); dashboard values are kept`);
 }
 
 function run(cliArgs: string[]): void {
@@ -44,4 +58,4 @@ function run(cliArgs: string[]): void {
 }
 
 run(['d1', 'migrations', 'apply', 'DB', '--remote']);
-if (!migrateOnly) run(['deploy']);
+if (!migrateOnly) run(['deploy', '--keep-vars']);

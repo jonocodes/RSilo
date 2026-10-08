@@ -2,6 +2,7 @@ node_modules
 .flox
 .wrangler
 wrangler.prod.toml
+wrangler.deploy.toml
 armadietto*
 data/
 .dev.vars
