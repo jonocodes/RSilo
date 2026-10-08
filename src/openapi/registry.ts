@@ -18,6 +18,9 @@ export interface OperationMeta {
 export const BEARER = [{ bearerAuth: [] }];
 export const ADMIN = [{ adminSecret: [] }];
 
+const ACCOUNT_RESOURCE = 'acct:<ACCOUNT_USERNAME>@<host>, or http(s)://<host> with or without a trailing slash, '
+  + 'where <host> is the PUBLIC_BASE_URL host (including a non-default port; acct: may omit it). Case-insensitive.';
+
 /**
  * Metadata keyed by "METHOD /normalized/path". The spec's paths and methods are
  * derived from `app.routes`; this registry only supplies the human-facing
@@ -38,33 +41,48 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'GET /.well-known/host-meta': {
     summary: 'host-meta XRD document',
     tags: ['WebFinger'],
-    description: 'Legacy host-meta discovery, pointing at the JRD endpoint.',
+    description: 'Legacy host-meta discovery, pointing at the JRD endpoint. Built from PUBLIC_BASE_URL.',
   },
   'GET /.well-known/webfinger': {
     summary: 'WebFinger discovery',
     tags: ['WebFinger'],
-    parameters: [
-      { name: 'resource', in: 'query', required: false, schema: { type: 'string' }, description: 'acct:user@host' },
-    ],
+    description: 'Resolves the Account to its storage root and consent URL, built from PUBLIC_BASE_URL. '
+      + 'Without a resource, returns the lrdd template.',
+    parameters: [{ name: 'resource', in: 'query', required: false, schema: { type: 'string' }, description: ACCOUNT_RESOURCE }],
+    responses: {
+      '200': { description: 'JRD for the Account.' },
+      '404': { description: 'The resource is not the Account.' },
+    },
   },
   'GET /webfinger/jrd': {
     summary: 'JRD discovery',
     tags: ['WebFinger'],
-    parameters: [{ name: 'resource', in: 'query', required: true, schema: { type: 'string' } }],
+    parameters: [{ name: 'resource', in: 'query', required: true, schema: { type: 'string' }, description: ACCOUNT_RESOURCE }],
+    responses: {
+      '200': { description: 'JRD for the Account.' },
+      '404': { description: 'The resource is not the Account.' },
+    },
   },
   'GET /webfinger/xrd': {
     summary: 'XRD discovery',
     tags: ['WebFinger'],
+    parameters: [{ name: 'resource', in: 'query', required: false, schema: { type: 'string' }, description: ACCOUNT_RESOURCE }],
+    responses: {
+      '200': { description: 'XRD for the Account.' },
+      '404': { description: 'The resource is not the Account.' },
+    },
   },
 
   'GET /oauth/{user}': {
     summary: 'OAuth discovery document',
     tags: ['OAuth'],
-    description: 'Advertises the auth and token endpoints plus supported scopes.',
+    description: 'Advertises the auth and token endpoints plus supported scopes, built from PUBLIC_BASE_URL. '
+      + '404 unless {user} is ACCOUNT_USERNAME.',
   },
   'GET /oauth/{user}/authorize': {
     summary: 'Login and consent form',
     tags: ['OAuth'],
+    description: '404 unless {user} is ACCOUNT_USERNAME.',
     parameters: [
       { name: 'client_id', in: 'query', required: true, schema: { type: 'string' } },
       { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' } },
@@ -75,15 +93,19 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'POST /oauth/{user}/authorize': {
     summary: 'Submit login or consent',
     tags: ['OAuth'],
-    responses: { '302': { description: 'Redirect back to the client with a code or token.' } },
+    responses: {
+      '302': { description: 'Redirect back to the client with a code or token.' },
+      '404': { description: '{user} is not ACCOUNT_USERNAME.' },
+    },
   },
   'POST /oauth/{user}/token': {
     summary: 'Exchange code or refresh token',
     tags: ['OAuth'],
-    description: 'Supports grant_type=authorization_code and grant_type=refresh_token.',
+    description: 'Supports grant_type=authorization_code and grant_type=refresh_token. Tokens are issued for the Account only.',
     responses: {
       '200': { description: 'Access token (and refresh token).' },
       '400': { description: 'invalid_grant.' },
+      '404': { description: '{user} is not ACCOUNT_USERNAME.' },
     },
   },
 

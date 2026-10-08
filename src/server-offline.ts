@@ -11,6 +11,7 @@ import { LocalStorage } from './services/local-storage';
 import { LocalDatabase } from './services/db/local';
 import { D1Adapter } from './services/db/d1-mock';
 import { readFileSync } from 'fs';
+import { DEV_ACCOUNT_USERNAME } from './config';
 
 function loadDevVars(path: string) {
   try {
@@ -35,6 +36,11 @@ const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
 const DB_PATH = process.env.DB_PATH || 'data/remotestorage.db';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-session-secret-change-in-production';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin';
+const port = parseInt(process.env.PORT || '8787');
+// Offline mode is dev mode: unset values fall back to the dev defaults, with
+// the public origin following the port actually listened on.
+const ACCOUNT_USERNAME = process.env.ACCOUNT_USERNAME || DEV_ACCOUNT_USERNAME;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 
 const localStorage = new LocalStorage(STORAGE_DIR);
 const localDb = new LocalDatabase(DB_PATH);
@@ -50,6 +56,8 @@ app.use('*', async (c, next) => {
   (c.env as any).SESSION_SECRET = SESSION_SECRET;
   (c.env as any).ADMIN_SECRET = ADMIN_SECRET;
   (c.env as any).RSILO_DEV_MODE = 'true';
+  (c.env as any).ACCOUNT_USERNAME = ACCOUNT_USERNAME;
+  (c.env as any).PUBLIC_BASE_URL = PUBLIC_BASE_URL;
   await next();
 });
 
@@ -65,11 +73,10 @@ app.get('/health', (c) => c.json({ status: 'ok', mode: 'offline' }));
 
 mountDocs(app);
 
-const port = parseInt(process.env.PORT || '8787');
-
 console.log(`RemoteStorage Worker (offline mode)`);
 console.log(`Storage: ${STORAGE_DIR}`);
 console.log(`Database: ${DB_PATH}`);
+console.log(`Account: ${ACCOUNT_USERNAME} at ${PUBLIC_BASE_URL}`);
 console.log(`Listening on http://localhost:${port}`);
 
 serve({

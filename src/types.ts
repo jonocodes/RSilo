@@ -9,6 +9,9 @@ export interface AppEnv {
   ADMIN_SECRET?: string;
   SESSION_SECRET?: string;
   RSILO_DEV_MODE?: string;
+  /** The one Account this Instance serves. Required outside dev mode. */
+  ACCOUNT_USERNAME?: string;
+  /** Origin every advertised URL is built from. Required outside dev mode. */
   PUBLIC_BASE_URL?: string;
   MAX_OBJECT_SIZE_BYTES?: string;
 }

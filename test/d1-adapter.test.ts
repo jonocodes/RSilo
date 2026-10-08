@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { D1Adapter } from '../src/services/db/d1-mock';
+import { ensureAccount } from '../src/services/account';
 
 function makeMockDb() {
   return {
@@ -267,5 +268,40 @@ describe('D1Adapter — stats queries', () => {
     mockDb.getAllUsers.mockResolvedValue([{ id: '1', username: 'alice' }]);
     const result = await adapter.prepare('SELECT id, username FROM users ORDER BY created_at DESC LIMIT 100').bind().all();
     expect((result as any).results).toHaveLength(1);
+  });
+});
+
+// ensureAccount must work against the offline LocalDatabase too, so run it
+// through the adapter over an in-memory stand-in for LocalDatabase's users.
+describe('D1Adapter — Account row lifecycle', () => {
+  function usersDb(initial: string[] = []) {
+    const users = new Set(initial);
+    return {
+      users,
+      getUserByUsername: vi.fn(async (username: string) => users.has(username) ? { id: username, username } : null),
+      getUserCount: vi.fn(async () => users.size),
+      createUserIfAbsent: vi.fn(async (_id: string, username: string) => { users.add(username); }),
+    };
+  }
+
+  it('creates the Account row in an empty table, once', async () => {
+    const db = usersDb();
+    const adapter = new D1Adapter(db as any);
+
+    expect(await ensureAccount(adapter, 'alice')).toBe('ready');
+    expect(await ensureAccount(adapter, 'alice')).toBe('ready');
+
+    expect([...db.users]).toEqual(['alice']);
+    expect(db.createUserIfAbsent).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a username mismatch without writing when other rows exist', async () => {
+    const db = usersDb(['bob']);
+    const adapter = new D1Adapter(db as any);
+
+    expect(await ensureAccount(adapter, 'alice')).toBe('username_mismatch');
+
+    expect([...db.users]).toEqual(['bob']);
+    expect(db.createUserIfAbsent).not.toHaveBeenCalled();
   });
 });

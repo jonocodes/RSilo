@@ -1,5 +1,8 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
+import { requireInstanceConfig } from '../middleware/instance';
+import { accountUrls, isAccountResource } from '../services/discovery';
+import type { Context } from '../types';
 
 export const webfingerRouter = new Hono();
 
@@ -39,108 +42,90 @@ webfingerRouter.get('/', (c) => {
 </html>`);
 });
 
-webfingerRouter.get('/.well-known/host-meta', (c) => {
-  const baseUrl = getBaseUrl(c);
+// Discovery for the one Account. Every URL comes from PUBLIC_BASE_URL (see
+// services/discovery.ts); any resource other than the Account is a 404.
+
+const JRD = { 'Content-Type': 'application/jrd+json' };
+const XRD = { 'Content-Type': 'application/xrd+xml' };
+
+function notFound(c: Context): Response {
+  return c.json({ error: 'not_found', error_description: 'Unknown resource' }, 404);
+}
+
+webfingerRouter.get('/.well-known/host-meta', requireInstanceConfig(), (c) => {
+  const instance = c.get('instance');
+  const urls = accountUrls(instance);
   return c.text(`<?xml version="1.0" encoding="UTF-8"?>
 <XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd/1.0"
    xmlns:hm="http://host-meta.net/xrd/1.0">
-  <hm:Host>${c.req.header('Host') || 'localhost'}</hm:Host>
-  <Link rel="lrdd" template="${baseUrl}/webfinger/jrd?resource={uri}"/>
-</XRD>`, 200, { 'Content-Type': 'application/xrd+xml' });
+  <hm:Host>${instance.publicHost}</hm:Host>
+  <Link rel="lrdd" template="${urls.lrddTemplate}"/>
+</XRD>`, 200, XRD);
 });
 
-webfingerRouter.get('/.well-known/webfinger', async (c) => {
+webfingerRouter.get('/.well-known/webfinger', requireInstanceConfig(), async (c) => {
+  const instance = c.get('instance');
+  const urls = accountUrls(instance);
   const resource = c.req.query('resource');
   if (!resource) {
-    return c.json({
-      links: [{
-        rel: 'lrdd',
-        template: `${getBaseUrl(c)}/webfinger/jrd?resource={uri}`,
-      }]
-    }, 200, { 'Content-Type': 'application/jrd+json' } as any);
+    return c.json({ links: [{ rel: 'lrdd', template: urls.lrddTemplate }] }, 200, JRD);
   }
-
-  const user = resource.replace(/^acct:/, '').split('@')?.[0];
-  if (!user) {
-    return c.json({ error: 'invalid_request' }, 400);
-  }
+  if (!isAccountResource(resource, instance)) return notFound(c);
 
   return c.json({
     subject: resource,
     links: [
       {
-        href: `${getBaseUrl(c)}/storage/${user}`,
+        href: urls.storageRoot,
         rel: 'http://tools.ietf.org/id/draft-dejong-remotestorage',
         type: PROTOCOL_VERSION,
         properties: {
           'http://remotestorage.io/spec/version': PROTOCOL_VERSION,
-          'http://tools.ietf.org/html/rfc6749#section-4.2': `${getBaseUrl(c)}/oauth/${user}/authorize`,
+          'http://tools.ietf.org/html/rfc6749#section-4.2': urls.authorize,
         }
       },
       {
         rel: 'remoteStorage',
         api: 'simple',
-        auth: `${getBaseUrl(c)}/oauth/${user}/authorize`,
-        template: `${getBaseUrl(c)}/storage/${user}/{category}`,
+        auth: urls.authorize,
+        template: `${urls.storageRoot}/{category}`,
       }
     ]
-  }, 200, { 'Content-Type': 'application/jrd+json' } as any);
+  }, 200, JRD);
 });
 
-webfingerRouter.get('/webfinger/jrd', async (c) => {
+webfingerRouter.get('/webfinger/jrd', requireInstanceConfig(), async (c) => {
+  const instance = c.get('instance');
   const resource = c.req.query('resource');
-  const user = resource?.replace(/^acct:/, '').split('@')?.[0];
-
-  if (!user) {
+  if (!resource) {
     return c.json({ error: 'invalid_request' }, 400);
   }
+  if (!isAccountResource(resource, instance)) return notFound(c);
 
+  const urls = accountUrls(instance);
   return c.json({
     subject: resource,
     links: [{
       rel: 'remoteStorage',
       api: 'simple',
-      auth: `${getBaseUrl(c)}/oauth/${user}/authorize`,
-      template: `${getBaseUrl(c)}/storage/${user}/{category}`,
+      auth: urls.authorize,
+      template: `${urls.storageRoot}/{category}`,
     }]
-  }, 200, { 'Content-Type': 'application/jrd+json' } as any);
+  }, 200, JRD);
 });
 
-webfingerRouter.get('/webfinger/xrd', async (c) => {
+webfingerRouter.get('/webfinger/xrd', requireInstanceConfig(), async (c) => {
+  const instance = c.get('instance');
+  const resource = c.req.query('resource');
+  if (resource !== undefined && !isAccountResource(resource, instance)) {
+    return c.text('Not Found', 404);
+  }
+
+  const urls = accountUrls(instance);
   return c.text(`<?xml version="1.0" encoding="UTF-8"?>
 <XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd/1.0">
-  <Link rel="remoteStorage" api="simple" href="${getBaseUrl(c)}/storage/">
-    <Property type="http://tools.ietf.org/html/rfc6749#section-4.2" href="${getBaseUrl(c)}/oauth/"/>
+  <Link rel="remoteStorage" api="simple" href="${urls.storageRoot}">
+    <Property type="http://tools.ietf.org/html/rfc6749#section-4.2" href="${urls.authorize}"/>
   </Link>
-</XRD>`, 200, { 'Content-Type': 'application/xrd+xml' });
+</XRD>`, 200, XRD);
 });
-
-webfingerRouter.get('/oauth/:user', async (c) => {
-  const user = c.req.param('user');
-  const baseUrl = getBaseUrl(c);
-
-  return c.json({
-    needs_grant: false,
-    auth_method: 'popup',
-    scopes: ['documents:rw', 'pictures:rw', 'music:rw'],
-    owner: user,
-    www: baseUrl,
-    api: PROTOCOL_VERSION,
-    auth: `${baseUrl}/oauth/${user}/authorize`,
-    token_endpoint: `${baseUrl}/oauth/${user}/token`,
-    storageapi: `${baseUrl}/storage/${user}`,
-  }, 200, { 'Content-Type': 'application/json' } as any);
-});
-
-function getBaseUrl(c: { req: { header: (name: string) => string | undefined; url: string } }): string {
-  let protocol = c.req.header('X-Forwarded-Proto');
-  if (!protocol) {
-    try {
-      protocol = new URL(c.req.url).protocol.replace(':', '');
-    } catch {
-      protocol = 'https';
-    }
-  }
-  const host = c.req.header('Host') || 'localhost';
-  return `${protocol}://${host}`;
-}

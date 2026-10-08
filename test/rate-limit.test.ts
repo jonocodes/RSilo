@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { RATE_LIMITS, RATE_LIMIT_PERIOD_SECONDS } from '../src/services/rate-limit';
 
 // Mirrors the native Workers rate-limit binding: limit() counts the call and
@@ -88,7 +89,7 @@ describe('login rate limiting', () => {
   });
 
   it('fails closed in production when the login limiter is missing', async () => {
-    const env = makeEnv({ RSILO_DEV_MODE: 'false', SESSION_SECRET: 's', LOGIN_LIMITER: undefined });
+    const env = makeEnv({ RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, SESSION_SECRET: 's', LOGIN_LIMITER: undefined });
     expect((await login(env)).status).toBe(503);
   });
 
@@ -119,15 +120,16 @@ describe('storage rate limiting', () => {
     expect(blocked.headers.get('X-RateLimit-Limit')).toBe(String(RATE_LIMITS.STORAGE_LIMITER));
   });
 
-  it('keys failed storage auth by IP only, so varying the path user does not reset it', async () => {
+  it('keys failed storage auth by IP only', async () => {
     const env = makeEnv();
+    // Only the Account's paths reach auth, so the key carries no username.
     await storageGet(env, 'not-a-token', 'alice');
-    await storageGet(env, 'not-a-token', 'bob');
+    await storageGet(env, 'not-a-token', 'alice');
     expect([...env.STORAGE_LIMITER.keys.entries()]).toEqual([['storage-auth:ip:203.0.113.20', 2]]);
   });
 
   it('fails closed in production when the storage limiter is missing', async () => {
-    const env = makeEnv({ RSILO_DEV_MODE: 'false', STORAGE_LIMITER: undefined });
+    const env = makeEnv({ RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, STORAGE_LIMITER: undefined });
     expect((await storageGet(env, 'not-a-token')).status).toBe(503);
   });
 });

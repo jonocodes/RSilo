@@ -6,6 +6,7 @@ import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { loginRateLimit } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
+import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 
 export const accountRouter = new Hono();
 
@@ -28,6 +29,10 @@ accountRouter.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'no-referrer');
   c.header('X-Content-Type-Options', 'nosniff');
 });
+
+// Until the setup page lands (#17), an unconfigured Instance or a username
+// mismatch is reported here as a minimal text response.
+accountRouter.use('*', requireInstanceConfig(), requireAccountRow());
 
 accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
   headers: {

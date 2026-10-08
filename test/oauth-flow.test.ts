@@ -199,7 +199,8 @@ describe('OAuth Flow Tests', () => {
         env
       );
 
-      expect(res.status).toBe(400);
+      // Token issuance is for the Account only; any other username is unknown.
+      expect(res.status).toBe(404);
     });
   });
 

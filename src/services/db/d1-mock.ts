@@ -59,7 +59,9 @@ export class D1Adapter {
         },
 
         run: async () => {
-          if (sql.includes('INSERT INTO users')) {
+          if (sql.includes('INSERT OR IGNORE INTO users')) {
+            await self.db.createUserIfAbsent(values[0], values[1]);
+          } else if (sql.includes('INSERT INTO users')) {
             await self.db.createUser(values[0], values[1], values[2]);
           } else if (sql.includes('INSERT INTO oauth_tokens')) {
             await self.db.createToken({

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { hashPassword, signSessionToken } from '../src/services/auth';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
@@ -63,19 +64,21 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     expect(json.storageapi).toContain('/storage/alice');
   });
 
-  it('advertises HTTPS endpoints for HTTPS requests', async () => {
-    const res = await app.request('https://storage.example/oauth/alice', { method: 'GET' }, TEST_ENV);
+  it('advertises HTTPS endpoints from an HTTPS PUBLIC_BASE_URL', async () => {
+    const env = { ...TEST_ENV, PUBLIC_BASE_URL: 'https://storage.example' };
+    const res = await app.request('http://localhost/oauth/alice', { method: 'GET' }, env);
     const json = await res.json() as any;
     expect(json.auth).toBe('https://storage.example/oauth/alice/authorize');
     expect(json.token_endpoint).toBe('https://storage.example/oauth/alice/token');
     expect(json.storageapi).toBe('https://storage.example/storage/alice');
   });
 
-  it('honors a secure forwarded protocol without allowing an HTTPS downgrade', async () => {
+  it('ignores X-Forwarded-Proto, so a request cannot downgrade the advertised scheme', async () => {
+    const env = { ...TEST_ENV, PUBLIC_BASE_URL: 'https://storage.example' };
     const res = await app.request('http://storage.example/oauth/alice', {
       method: 'GET',
-      headers: { 'X-Forwarded-Proto': 'https' },
-    }, TEST_ENV);
+      headers: { 'X-Forwarded-Proto': 'http' },
+    }, env);
     const json = await res.json() as any;
     expect(json.auth).toMatch(/^https:\/\//);
   });
@@ -469,6 +472,7 @@ describe('OAuth login flow', () => {
       STORAGE: {} as any,
       DB: makeDb({ username: 'alice', password_hash: passwordHash }),
       RSILO_DEV_MODE: 'false',
+      ...PRODUCTION_INSTANCE,
     };
     const body = new URLSearchParams({
       action: 'login',

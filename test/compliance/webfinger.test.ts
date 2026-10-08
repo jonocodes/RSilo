@@ -22,14 +22,14 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
 
       expect(res.status).toBe(200);
       const json = await res.json() as any;
-      expect(json.subject).toBe('acct:alice@example.com');
+      expect(json.subject).toBe('acct:alice@localhost:8787');
       expect(json.links).toBeDefined();
       expect(Array.isArray(json.links)).toBe(true);
     });
@@ -39,7 +39,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
@@ -52,7 +52,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
@@ -68,7 +68,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
@@ -84,7 +84,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
@@ -99,7 +99,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+        'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );
@@ -131,7 +131,7 @@ describe('WebFinger Compliance', () => {
         env
       );
 
-      expect(res.status).toBeGreaterThanOrEqual(200);
+      expect(res.status).toBe(404);
     });
 
     it('handles WebFinger XRD format via /webfinger/xrd', async () => {
@@ -156,7 +156,7 @@ describe('WebFinger Compliance', () => {
       const app = createServer(env);
 
       const res = await app.request(
-        'http://localhost/webfinger/jrd?resource=acct:alice@example.com',
+        'http://localhost/webfinger/jrd?resource=acct:alice@localhost:8787',
         { method: 'GET' },
         env
       );

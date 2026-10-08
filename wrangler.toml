@@ -36,4 +36,8 @@ enabled = true
 # Required production secrets — set each with `wrangler secret put`:
 #   SESSION_SECRET   — signs file manager and OAuth session cookies
 #   ADMIN_SECRET     — protects /admin/* endpoints
+# Required production vars (plain text, not secrets) — set them in the Worker's
+# dashboard settings or under [vars] in wrangler.prod.toml:
+#   ACCOUNT_USERNAME — the one Account this Instance serves
+#   PUBLIC_BASE_URL  — origin every advertised URL is built from
 # RSILO_DEV_MODE is only for local development and must never be deployed.

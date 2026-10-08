@@ -3,21 +3,19 @@ import { PROTOCOL_VERSION } from '../protocol/constants';
 import { generateToken, verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
 import { getSessionSecret } from '../config';
 import { loginRateLimit } from '../services/rate-limit';
+import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
+import { accountUrls } from '../services/discovery';
 
 export const oauthRouter = new Hono();
 
-function getPublicBaseUrl(c: any): string {
-  const configured = c.env?.PUBLIC_BASE_URL;
-  if (configured) return new URL(configured).origin;
+// Consent and token issuance are for the Account only: any other username is a
+// 404, and the canonical ACCOUNT_USERNAME (not the path segment) is used for
+// every row written. The Account row must exist first, since OAuth rows
+// reference users(username).
+const forAccount = [requireInstanceConfig(), requireAccountPath(), requireAccountRow()] as const;
 
-  const url = new URL(c.req.url);
-  const forwardedProtocol = c.req.header('X-Forwarded-Proto')?.split(',')[0].trim().toLowerCase();
-  if (url.protocol === 'http:' && forwardedProtocol === 'https') url.protocol = 'https:';
-  return url.origin;
-}
-
-oauthRouter.get('/:user/authorize', async (c) => {
-  const user = c.req.param('user');
+oauthRouter.get('/:user/authorize', ...forAccount, async (c) => {
+  const user = c.get('instance').accountUsername;
   const clientId = c.req.query('client_id');
   const redirectUri = c.req.query('redirect_uri');
   const responseType = c.req.query('response_type');
@@ -52,8 +50,8 @@ oauthRouter.get('/:user/authorize', async (c) => {
   });
 });
 
-oauthRouter.post('/:user/authorize', async (c) => {
-  const user = c.req.param('user');
+oauthRouter.post('/:user/authorize', ...forAccount, async (c) => {
+  const user = c.get('instance').accountUsername;
   const body = await c.req.parseBody() as any;
   const { client_id, redirect_uri, response_type, scope, state, action, password, session_token } = body;
 
@@ -164,7 +162,7 @@ oauthRouter.post('/:user/authorize', async (c) => {
   return c.json({ error: 'invalid_request', error_description: 'Unknown action' }, 400);
 });
 
-oauthRouter.post('/:user/token', async (c) => {
+oauthRouter.post('/:user/token', ...forAccount, async (c) => {
   const contentType = c.req.header('Content-Type') || '';
 
   let grantType: string;
@@ -261,21 +259,21 @@ oauthRouter.post('/:user/token', async (c) => {
   return c.json({ error: 'unsupported_grant_type' }, 400);
 });
 
-oauthRouter.get('/:user', async (c) => {
-  const user = c.req.param('user');
+oauthRouter.get('/:user', requireInstanceConfig(), requireAccountPath(), async (c) => {
+  const instance = c.get('instance');
   const origin = c.req.header('Origin') || '*';
-  const baseUrl = getPublicBaseUrl(c);
+  const urls = accountUrls(instance);
 
   return c.json({
     needs_grant: false,
     auth_method: 'popup',
     scopes: ['documents:rw', 'pictures:rw', 'music:rw'],
-    owner: user,
-    www: baseUrl,
+    owner: instance.accountUsername,
+    www: urls.base,
     api: PROTOCOL_VERSION,
-    auth: `${baseUrl}/oauth/${user}/authorize`,
-    token_endpoint: `${baseUrl}/oauth/${user}/token`,
-    storageapi: `${baseUrl}/storage/${user}`,
+    auth: urls.authorize,
+    token_endpoint: urls.token,
+    storageapi: urls.storageRoot,
   }, 200, {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',

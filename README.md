@@ -4,7 +4,7 @@
 
 A [RemoteStorage.io](https://remotestorage.io)-compatible personal storage server that runs on Cloudflare Workers, with a built-in web file manager and OAuth server.
 
-**Why this exists:** to give anyone — especially people who aren't technical — their own free, self-hosted place to back up and sync app data. One person, a small amount of data, no monthly bill, no vendor lock-in. Multi-user is supported, but a personal single-user setup is the intended path.
+**Why this exists:** to give anyone — especially people who aren't technical — their own free, self-hosted place to back up and sync app data. One person, a small amount of data, no monthly bill, no vendor lock-in. Each deployment (an *Instance*) serves exactly one *Account*; more accounts means more Instances ([ADR-0002](docs/adr/0002-instances-are-single-user.md)).
 
 ## What is RemoteStorage?
 
@@ -83,6 +83,8 @@ wrangler secret put SESSION_SECRET   # bun run secret
 wrangler secret put ADMIN_SECRET     # bun run secret
 ```
 
+Then set `ACCOUNT_USERNAME` and `PUBLIC_BASE_URL` as described in [Instance configuration](#instance-configuration).
+
 Alternatively, let wrangler provision the resources: delete the `database_id` line from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy it from `wrangler d1 list` if you need them later.
 
 </details>
@@ -95,6 +97,19 @@ Alternatively, let wrangler provision the resources: delete the `database_id` li
 Generate each secret with `bun run secret`. Production requests fail with `503` when the relevant secret is missing; insecure bypasses are available only when `RSILO_DEV_MODE=true` is explicitly set for local development. Storage access tokens need no secret: they are opaque values stored in D1 (see [Authentication](#authentication)).
 
 `MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
+
+### Instance configuration
+
+Two plain (non-secret) variables identify the Instance. Both are **required in production**; set them in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets**, type *Text*) or under `[vars]` in your `wrangler.prod.toml`. Without them every discovery, OAuth, storage and `/account` request returns `503` with a message naming what is missing.
+
+| Variable | Purpose | Dev-mode default |
+|----------|---------|------------------|
+| `ACCOUNT_USERNAME` | The one Account this Instance serves (`[a-z0-9_.-]+`). It names the storage root `/storage/<ACCOUNT_USERNAME>/` and is never derived from an email address. | `alice` |
+| `PUBLIC_BASE_URL` | The origin apps reach the Instance at, e.g. `https://rsilo.<subdomain>.workers.dev` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it, never from the request's `Host` or `X-Forwarded-Proto`. | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
+
+The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value (for example a `PUBLIC_BASE_URL` with a path) is rejected even in dev mode.
+
+**The Account row.** The first request that needs it creates the `users` row for `ACCOUNT_USERNAME` (an idempotent insert; the check is cached per Worker isolate). If that row is missing **and** the table already holds other users — you changed `ACCOUNT_USERNAME`, or migrated a multi-user deployment — RSilo will not create a second row: storage returns `503` and `/account` and the consent page show a *username mismatch* message. Set `ACCOUNT_USERNAME` to the existing account you want to keep. Other rows are ignored, not deleted.
 
 ### Deploying updates to your own instance
 
@@ -126,9 +141,10 @@ To release on every push to `main`, connect the repository to your Worker using 
 
 ## Create your account and sign in
 
-1. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
-2. Create yourself a user (username `[a-z0-9_.-]+`, password ≥ 8 characters).
-3. Go to `/account` and sign in with that username and password.
+1. Set `ACCOUNT_USERNAME` and `PUBLIC_BASE_URL` (see [Instance configuration](#instance-configuration)).
+2. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
+3. Give your Account a password: create a user with the **same username as `ACCOUNT_USERNAME`** (password ≥ 8 characters), or set the password on it if it already exists.
+4. Go to `/account` and sign in with that username and password.
 
 ## Change a password
 
@@ -147,7 +163,7 @@ Existing app tokens (authorizations) keep working after a password change — re
 
 Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears in the admin dashboard.
 
-1. In the app, enter your server address (e.g. `https://<your-worker>.workers.dev`).
+1. In the app, enter your storage address: either `<ACCOUNT_USERNAME>@<your-worker>.workers.dev` or, if the app supports it, just the server URL `https://<your-worker>.workers.dev`.
 2. The app discovers your endpoints via WebFinger and sends you to the OAuth consent page.
 3. Sign in, check the app name and **where it redirects to**, and approve the requested module permissions.
 4. The app gets a token and starts syncing into that module.
@@ -163,9 +179,9 @@ bun run dev-token alice 'documents:rw'
 # then PUT to /storage/alice/public/documents/hello.txt and GET it without auth
 ```
 
-## Managing multiple users (optional)
+## One Account per Instance
 
-Single-user is the common case. If you want more, create users from the dashboard or the admin API — see [For developers → User management](#admin). Each user gets their own namespace under `/storage/:username/`.
+An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, OAuth consent and token issuance return `404` for any other username, and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
 
 ## Running on the Cloudflare free tier
 
@@ -221,7 +237,7 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin` and the session secret has a local-only fallback. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
+`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin`, the session secret has a local-only fallback, and the Instance serves the Account `alice` at `http://localhost:8787` (set `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
 
 ## API reference
 
@@ -238,15 +254,29 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 ### OAuth flow (production)
 
-1. App queries WebFinger to discover auth and storage endpoints
-2. App redirects user to `/oauth/:user/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
+1. App queries WebFinger to discover auth and storage endpoints (see [Discovery](#discovery))
+2. App redirects user to `/oauth/<ACCOUNT_USERNAME>/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
 3. User enters password, reviews scope, approves
 4. Server redirects back with `?code=...`
 5. App exchanges code at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
 7. When the access token expires, exchange the refresh token at `/oauth/:user/token` with `grant_type=refresh_token`
 
-Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported.
+Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. Consent and token issuance are for the Account only: `/oauth/:user/authorize` and `/oauth/:user/token` return `404` when `:user` is not `ACCOUNT_USERNAME`, and tokens are always issued for the Account.
+
+### Discovery
+
+WebFinger (`/.well-known/webfinger`, `/webfinger/jrd`, `/webfinger/xrd`) accepts exactly these resources, all resolving to the Account:
+
+- `acct:<ACCOUNT_USERNAME>@<host>` — username and host compared case-insensitively
+- the host-only form `http://<host>` or `https://<host>`, with or without a trailing slash
+
+`<host>` must equal the `PUBLIC_BASE_URL` host, including any non-default port (`acct:alice@localhost:8787` in dev); `acct:` resources may also omit the port (`acct:alice@localhost`). Any other resource returns `404` on every discovery route, as does `/oauth/:user` for any user but the Account. All advertised URLs come from `PUBLIC_BASE_URL`, never the request's `Host` header.
+
+```bash
+curl 'http://localhost:8787/.well-known/webfinger?resource=acct:alice@localhost:8787'
+curl 'http://localhost:8787/.well-known/webfinger?resource=http://localhost:8787/'
+```
 
 Access tokens are **opaque bearer tokens**: random strings stored as rows in the D1 `oauth_tokens` table. A token is valid exactly while its unexpired row exists, so revoking an app (deleting its row) takes effect on the very next request. JWTs — signed or unsigned — are never accepted, in production or in local-development mode ([ADR-0003](docs/adr/0003-opaque-bearer-tokens-only.md)).
 
@@ -320,8 +350,10 @@ src/
   index.ts            Worker entry (Hono app)
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
   routes/             storage, webfinger, oauth, admin, account, debug
-  services/           auth, r2 (+ getStorage adapter), local-storage, db/
-  middleware/         auth, cors
+  config.ts           per-Instance config (ACCOUNT_USERNAME, PUBLIC_BASE_URL) and dev defaults
+  services/           auth, account (Account row lifecycle), discovery (advertised URLs,
+                      WebFinger matching), r2 (+ getStorage adapter), local-storage, db/
+  middleware/         auth, cors, instance (config + Account gates)
   protocol/           constants (ETag normalisation, path validation)
   scripts/            setup, deploy, secret, dev-token, setup-local-db
 drizzle/migrations/   D1 migrations
@@ -339,7 +371,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**404 tests** across 25 files: protocol compliance (RemoteStorage, WebFinger, edge cases), storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**531 tests** across 28 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
