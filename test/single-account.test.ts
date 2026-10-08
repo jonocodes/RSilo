@@ -18,6 +18,7 @@ function createEnv(extra: Record<string, string> = {}) {
     } as any,
     DB: {} as any,
     ACCOUNT_USERNAME: 'alice',
+    OWNER_EMAIL: 'owner@example.com',
     PUBLIC_BASE_URL: BASE,
     ...extra,
   };
@@ -307,6 +308,18 @@ describe('Instance configuration', () => {
     expect(storage.status).toBe(503);
     expect(discovery.status).toBe(503);
     expect(token.status).toBe(503);
+  });
+
+  it('outside dev mode, OWNER_EMAIL is required too', async () => {
+    const env = { ...createEnv(production) } as any;
+    delete env.OWNER_EMAIL;
+
+    const storage = await app.request('http://localhost/storage/alice/public/documents/x.txt', {}, env);
+    const discovery = await app.request('http://localhost/oauth/alice', {}, env);
+
+    expect(storage.status).toBe(503);
+    expect(discovery.status).toBe(503);
+    expect(await discovery.text()).toContain('OWNER_EMAIL');
   });
 
   it('outside dev mode, configured values are used', async () => {

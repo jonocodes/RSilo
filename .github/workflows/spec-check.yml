@@ -25,8 +25,6 @@ jobs:
           STORAGE_DIR=/tmp/rsilo/storage \
           DB_PATH=/tmp/rsilo/db.sqlite \
           PORT=8788 \
-          SESSION_SECRET=ci-secret \
-          ADMIN_SECRET=ci-admin \
           bun run src/server-offline.ts > /tmp/rsilo/server.log 2>&1 &
 
           for i in $(seq 1 30); do
@@ -35,11 +33,7 @@ jobs:
           done
           curl -sf http://localhost:8788/health
 
-          curl -sf -X POST http://localhost:8788/admin/users \
-            -H "Authorization: Bearer ci-admin" \
-            -H "Content-Type: application/json" \
-            --data '{"username":"alice","password":"ci-password"}'
-
+          # dev-token creates the Account row (alice, the dev default) if it is missing.
           RW=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice 'api-test-suite:rw' | tail -1)
           RO=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice 'api-test-suite:r' | tail -1)
           GL=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice '*:rw' | tail -1)

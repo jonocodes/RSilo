@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { PRODUCTION_INSTANCE } from './helpers/instance';
 
 class FakeStorage {
   objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
@@ -74,7 +75,7 @@ const testUser = {
   used_storage_bytes: 400,
 };
 
-describe('GET /admin/debug/token', () => {
+describe('GET /debug/token', () => {
   let app: ReturnType<typeof createServer>;
   const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
 
@@ -85,7 +86,7 @@ describe('GET /admin/debug/token', () => {
   it('introspects a valid opaque token', async () => {
     const token = seedToken(env, 'alice', 'documents:rw pictures:r');
     const res = await app.request(
-      `http://localhost/admin/debug/token?token=${encodeURIComponent(token)}`,
+      `http://localhost/debug/token?token=${encodeURIComponent(token)}`,
       { method: 'GET' },
       env,
     );
@@ -101,7 +102,7 @@ describe('GET /admin/debug/token', () => {
   it('reports scope checks against the token scopes', async () => {
     const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
-      `http://localhost/admin/debug/token?token=${encodeURIComponent(token)}&scope=documents:rw&scope=pictures:r`,
+      `http://localhost/debug/token?token=${encodeURIComponent(token)}&scope=documents:rw&scope=pictures:r`,
       { method: 'GET' },
       env,
     );
@@ -113,7 +114,7 @@ describe('GET /admin/debug/token', () => {
 
   it('returns valid:false for a malformed token', async () => {
     const res = await app.request(
-      'http://localhost/admin/debug/token?token=not-a-token',
+      'http://localhost/debug/token?token=not-a-token',
       { method: 'GET' },
       env,
     );
@@ -127,7 +128,7 @@ describe('GET /admin/debug/token', () => {
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({ sub: 'alice', scopes: '*:rw', exp: 9999999999 })).toString('base64url');
     const res = await app.request(
-      `http://localhost/admin/debug/token?token=${header}.${payload}.`,
+      `http://localhost/debug/token?token=${header}.${payload}.`,
       { method: 'GET' },
       env,
     );
@@ -141,7 +142,7 @@ describe('GET /admin/debug/token', () => {
   it('accepts a token in a POST body', async () => {
     const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
-      'http://localhost/admin/debug/token',
+      'http://localhost/debug/token',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -156,12 +157,12 @@ describe('GET /admin/debug/token', () => {
   });
 
   it('returns 400 when no token is supplied', async () => {
-    const res = await app.request('http://localhost/admin/debug/token', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/token', { method: 'GET' }, env);
     expect(res.status).toBe(400);
   });
 });
 
-describe('GET /admin/debug/storage/:username', () => {
+describe('GET /debug/storage', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
@@ -170,7 +171,7 @@ describe('GET /admin/debug/storage/:username', () => {
 
   it('summarises actual storage and reports drift against the DB counter', async () => {
     const env = { STORAGE: new FakeStorage() as any, DB: makeDb(testUser) };
-    const res = await app.request('http://localhost/admin/debug/storage/alice', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as any;
@@ -183,20 +184,20 @@ describe('GET /admin/debug/storage/:username', () => {
     expect(json.by_module['public/documents']).toEqual({ objects: 1, bytes: 20 });
   });
 
-  it('returns 404 for an unknown user', async () => {
+  it('returns 404 when the Account row is missing', async () => {
     const env = { STORAGE: new FakeStorage() as any, DB: makeDb(null) };
-    const res = await app.request('http://localhost/admin/debug/storage/nobody', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
 
   it('returns 503 when the DB is unavailable', async () => {
     const env = { STORAGE: new FakeStorage() as any, DB: null };
-    const res = await app.request('http://localhost/admin/debug/storage/alice', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
     expect(res.status).toBe(503);
   });
 });
 
-describe('GET /admin/debug/health/deep', () => {
+describe('GET /debug/health/deep', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
@@ -205,7 +206,7 @@ describe('GET /admin/debug/health/deep', () => {
 
   it('reports ok with a storage round-trip and a DB check', async () => {
     const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
-    const res = await app.request('http://localhost/admin/debug/health/deep', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as any;
@@ -220,7 +221,7 @@ describe('GET /admin/debug/health/deep', () => {
   it('does not leave health-check objects behind', async () => {
     const storage = new FakeStorage();
     const env = { STORAGE: storage as any, DB: makeDb() };
-    await app.request('http://localhost/admin/debug/health/deep', { method: 'GET' }, env);
+    await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
     expect([...storage.objects.keys()].filter((k) => k.startsWith('_healthcheck/'))).toHaveLength(0);
   });
 
@@ -233,7 +234,7 @@ describe('GET /admin/debug/health/deep', () => {
       list: async () => ({ objects: [] }),
     };
     const env = { STORAGE: brokenStorage as any, DB: makeDb() };
-    const res = await app.request('http://localhost/admin/debug/health/deep', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
 
     expect(res.status).toBe(503);
     const json = await res.json() as any;
@@ -242,50 +243,67 @@ describe('GET /admin/debug/health/deep', () => {
   });
 });
 
-describe('GET /admin/debug/env', () => {
+describe('GET /debug/env', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
     app = createServer({ STORAGE: new FakeStorage() as any, DB: makeDb() });
   });
 
-  it('reports bindings and redacts secrets to booleans', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), ADMIN_SECRET: 'super-secret-value' };
-    const res = await app.request(
-      'http://localhost/admin/debug/env',
-      { method: 'GET', headers: { Authorization: 'Bearer super-secret-value' } },
-      env,
-    );
+  it('reports bindings and reduces config to booleans', async () => {
+    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), OWNER_EMAIL: 'super-secret-value@example.com' };
+    const res = await app.request('http://localhost/debug/env', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as any;
     expect(json.bindings.STORAGE).toBe(true);
     expect(json.bindings.DB).toBe(true);
-    expect(json.bindings.LOGIN_LIMITER).toBe(false);
     expect(json.bindings.STORAGE_LIMITER).toBe(false);
     expect(json.storage_backend).toBe('local');
-    expect(json.secrets_set.ADMIN_SECRET).toBe(true);
-    expect(json.secrets_set).not.toHaveProperty('JWT_SECRET');
+    expect(json.config_set.OWNER_EMAIL).toBe(true);
+    expect(json.config_set.ACCOUNT_USERNAME).toBe(false);
+    expect(json).not.toHaveProperty('secrets_set');
 
     const text = await new Response(JSON.stringify(json)).text();
     expect(text).not.toContain('super-secret-value');
   });
 });
 
-describe('debug endpoints auth', () => {
-  it('requires ADMIN_SECRET when set', async () => {
-    const app = createServer({ STORAGE: new FakeStorage() as any, DB: makeDb() });
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), ADMIN_SECRET: 'mysecret' };
+describe('debug endpoints are dev-only', () => {
+  const app = createServer({});
+  const paths = ['/debug/token?token=x', '/debug/storage', '/debug/health/deep', '/debug/env', '/debug/oauth', '/debug/echo', '/debug/anything'];
+  const accessCtx = {
+    waitUntil() {},
+    passThroughOnException() {},
+    access: { aud: 'aud', getIdentity: async () => ({ email: 'alice@example.com' }) },
+  } as any;
 
-    const res = await app.request('http://localhost/admin/debug/env', { method: 'GET' }, env);
-    expect(res.status).toBe(401);
+  for (const path of paths) {
+    it(`${path} is a 404 in production`, async () => {
+      const env = { STORAGE: new FakeStorage() as any, DB: makeDb(testUser), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
+      const res = await app.request(`https://rsilo.example${path}`, { method: 'GET' }, env);
+      expect(res.status).toBe(404);
+    });
+  }
 
-    const authed = await app.request(
-      'http://localhost/admin/debug/env',
-      { method: 'GET', headers: { Authorization: 'Bearer mysecret' } },
-      env,
-    );
-    expect(authed.status).toBe(200);
+  it('is a 404 in dev mode on a non-local host', async () => {
+    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    const res = await app.request('https://rsilo.example/debug/env', { method: 'GET' }, env);
+    expect(res.status).toBe(404);
+  });
+
+  it('is a 404 in dev mode when Cloudflare Access is present', async () => {
+    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    const res = await app.request('http://localhost/debug/env', { method: 'GET' }, env, accessCtx);
+    expect(res.status).toBe(404);
+  });
+
+  it('answers in dev mode on localhost', async () => {
+    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+      const res = await app.request(`http://${host}:8787/debug/env`, { method: 'GET' }, env);
+      expect(res.status).toBe(200);
+    }
   });
 });
 
@@ -309,7 +327,7 @@ function makeOAuthDb({ clients = [] as any[], tokens = [] as any[], codes = [] a
   } as any;
 }
 
-describe('GET /admin/debug/oauth', () => {
+describe('GET /debug/oauth', () => {
   const now = Math.floor(Date.now() / 1000);
   const clients = [
     { id: 'app-1', name: 'App One', user_id: 'alice', redirect_uris: 'https://app.example/cb', created_at: now - 1000 },
@@ -325,7 +343,7 @@ describe('GET /admin/debug/oauth', () => {
   it('summarises clients, tokens and codes without leaking secrets', async () => {
     const env = { STORAGE: new FakeStorage() as any, DB: makeOAuthDb({ clients, tokens, codes }) };
     const app = createServer(env);
-    const res = await app.request('http://localhost/admin/debug/oauth', { method: 'GET' }, env);
+    const res = await app.request('http://localhost/debug/oauth', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as any;
@@ -340,7 +358,7 @@ describe('GET /admin/debug/oauth', () => {
   });
 });
 
-describe('GET /admin/debug/echo', () => {
+describe('GET /debug/echo', () => {
   const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
   let app: ReturnType<typeof createServer>;
 
@@ -350,7 +368,7 @@ describe('GET /admin/debug/echo', () => {
 
   it('echoes the request and redacts auth headers', async () => {
     const res = await app.request(
-      'http://localhost/admin/debug/echo?path=/storage/alice/documents/note.txt',
+      'http://localhost/debug/echo?path=/storage/alice/documents/note.txt',
       { method: 'GET', headers: { Authorization: 'Bearer adminsecret', Cookie: 'a=b', 'X-Test': 'yes' } },
       env,
     );
@@ -369,7 +387,7 @@ describe('GET /admin/debug/echo', () => {
 
   it('reports the write scope and public flag', async () => {
     const res = await app.request(
-      'http://localhost/admin/debug/echo?path=/storage/alice/public/documents/x.txt&method=PUT',
+      'http://localhost/debug/echo?path=/storage/alice/public/documents/x.txt&method=PUT',
       { method: 'POST' },
       env,
     );
@@ -382,7 +400,7 @@ describe('GET /admin/debug/echo', () => {
   it('introspects a token from the query and redacts it from the echo', async () => {
     const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
-      `http://localhost/admin/debug/echo?token=${encodeURIComponent(token)}`,
+      `http://localhost/debug/echo?token=${encodeURIComponent(token)}`,
       { method: 'GET' },
       env,
     );
@@ -395,7 +413,7 @@ describe('GET /admin/debug/echo', () => {
   it('previews a textual body and flags truncation', async () => {
     const body = 'x'.repeat(3000);
     const res = await app.request(
-      'http://localhost/admin/debug/echo',
+      'http://localhost/debug/echo',
       { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body },
       env,
     );

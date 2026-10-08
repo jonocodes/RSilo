@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
-import { hashPassword, signSessionToken } from '../src/services/auth';
-import { PRODUCTION_INSTANCE } from './helpers/instance';
-
-const SESSION_SECRET = 'test-session-secret';
-const SESSION_EXPIRY = 28800;
+// Requests go to http://localhost in dev mode (vitest sets RSILO_DEV_MODE), so
+// the dev identity signs them in as the Owner; see identity.test.ts for the
+// production resolver. State changes carry the header a browser sends for a
+// same-origin form post or fetch.
+const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin' };
 
 const storage = new Map<string, { body: ArrayBufferLike; contentType: string; etag: string }>();
 
@@ -48,172 +48,21 @@ function makeDb(userRow: any = null, tokens: any[] = []) {
   } as any;
 }
 
-async function makeSessionCookie(username: string): Promise<string> {
-  const token = await signSessionToken(username, SESSION_SECRET, SESSION_EXPIRY);
-  return `rsilo_session=${token}`;
-}
-
-describe('Files — login', () => {
-  let app: ReturnType<typeof createServer>;
-  let passwordHash: string;
-
-  beforeAll(async () => {
-    passwordHash = await hashPassword('correctpass');
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-  });
-
-  it('GET /account shows login page when not authenticated', async () => {
-    const res = await app.request('http://localhost/account', { method: 'GET' }, { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('Sign in');
-    expect(html).toContain('type="password"');
-  });
-
-  it('GET /account redirects to browse when already authenticated', async () => {
-    const cookie = await makeSessionCookie('alice');
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account', { method: 'GET', headers: { Cookie: cookie } }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/browse');
-  });
-
-  it('POST /account/login redirects to browse on correct credentials', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET } as any;
-    const body = new URLSearchParams({ username: 'alice', password: 'correctpass' });
-    const res = await app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/browse');
-    expect(res.headers.get('Set-Cookie')).toContain('rsilo_session=');
-  });
-
-  it('rejects a forged fallback-secret cookie when SESSION_SECRET is missing', async () => {
-    const token = await signSessionToken('alice', 'dev-session-secret-change-in-production', SESSION_EXPIRY);
-    const env = { STORAGE: mockStorage, DB: makeDb(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE } as any;
-    const res = await app.request('http://localhost/account/browse', {
-      method: 'GET',
-      headers: { Cookie: `rsilo_session=${token}` },
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
-  });
-
-  it('returns 503 for a valid login when SESSION_SECRET is missing', async () => {
-    const env = {
-      STORAGE: mockStorage,
-      DB: makeDb({ username: 'alice', password_hash: passwordHash }),
-      RSILO_DEV_MODE: 'false',
-      ...PRODUCTION_INSTANCE,
-    } as any;
-    const body = new URLSearchParams({ username: 'alice', password: 'correctpass' });
-    const res = await app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }, env);
-    expect(res.status).toBe(503);
-    expect(res.headers.get('Set-Cookie')).toBeNull();
-  });
-
-  it('POST /account/login redirects with error on wrong password', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET } as any;
-    const body = new URLSearchParams({ username: 'alice', password: 'wrongpass' });
-    const res = await app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=1');
-  });
-
-  it('POST /account/login redirects with error for unknown user', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(null), SESSION_SECRET } as any;
-    const body = new URLSearchParams({ username: 'nobody', password: 'pass' });
-    const res = await app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('error=1');
-  });
-
-  it('temporarily locks out repeated login attempts', async () => {
-    let attempts = 0;
-    const env = {
-      STORAGE: mockStorage,
-      DB: makeDb(null),
-      SESSION_SECRET,
-      RSILO_DEV_MODE: 'false',
-      ...PRODUCTION_INSTANCE,
-      LOGIN_LIMITER: { limit: async () => ({ success: ++attempts <= 5 }) },
-    } as any;
-    const request = () => app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'CF-Connecting-IP': '203.0.113.10',
-      },
-      body: new URLSearchParams({ username: 'alice', password: 'wrong' }).toString(),
-    }, env);
-
-    for (let attempt = 0; attempt < 5; attempt++) expect((await request()).status).toBe(302);
-    const blocked = await request();
-    expect(blocked.status).toBe(429);
-    expect(blocked.headers.get('Retry-After')).toBeTruthy();
-  });
-
-  it('POST /account/logout clears session cookie', async () => {
-    const cookie = await makeSessionCookie('alice');
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/logout', {
-      method: 'POST',
-      headers: { Cookie: cookie },
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Set-Cookie')).toContain('Max-Age=0');
-  });
-});
-
-describe('Files — auth redirect', () => {
-  let app: ReturnType<typeof createServer>;
-
-  beforeAll(() => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-  });
-
-  for (const path of ['/account/browse', '/account/tokens']) {
-    it(`GET ${path} redirects to login when unauthenticated`, async () => {
-      const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-      const res = await app.request(`http://localhost${path}`, { method: 'GET' }, env);
-      expect(res.status).toBe(302);
-      expect(res.headers.get('Location')).toBe('/account/');
-    });
-  }
-});
-
 describe('Files — browse', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => storage.clear());
 
   it('GET /account/browse shows empty state when no files', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/browse', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/browse', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('RSilo Files');
+    expect(html).toContain('<title>Files — RSilo</title>');
     expect(html).toContain('No files yet');
   });
 
@@ -223,8 +72,8 @@ describe('Files — browse', () => {
       contentType: 'text/plain',
       etag: '"abc"',
     });
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/browse', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/browse', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('documents');
@@ -236,8 +85,8 @@ describe('Files — browse', () => {
       contentType: 'text/plain',
       etag: '"def"',
     });
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/browse/documents', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/browse/documents', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('notes.txt');
@@ -251,8 +100,8 @@ describe('Files — browse', () => {
       contentType: 'text/plain',
       etag: '"quoted"',
     });
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/browse/documents', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/browse/documents', { method: 'GET' }, env);
     const html = await res.text();
 
     expect(res.status).toBe(200);
@@ -262,8 +111,8 @@ describe('Files — browse', () => {
   });
 
   it('breadcrumb shows correct path segments', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/browse/documents/sub', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/browse/documents/sub', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Home');
@@ -274,11 +123,9 @@ describe('Files — browse', () => {
 
 describe('Files — download', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
     storage.set('users/alice/storage/documents/hello.txt', {
       body: new TextEncoder().encode('hello world').buffer,
       contentType: 'text/plain',
@@ -292,8 +139,8 @@ describe('Files — download', () => {
   });
 
   it('GET /account/download serves file with correct content', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/download/documents/hello.txt', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/download/documents/hello.txt', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/plain');
     expect(res.headers.get('Content-Disposition')).toContain('hello.txt');
@@ -302,21 +149,15 @@ describe('Files — download', () => {
   });
 
   it('GET /account/download returns 404 for missing file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/download/documents/missing.txt', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/download/documents/missing.txt', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
 
-  it('GET /account/download redirects to login when unauthenticated', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/download/documents/hello.txt', { method: 'GET' }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
-  });
 
   it('GET /account/download serves nested path file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/download/documents/sub/nested.md', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/download/documents/sub/nested.md', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Disposition')).toContain('nested.md');
     expect(await res.text()).toBe('# nested');
@@ -325,11 +166,9 @@ describe('Files — download', () => {
 
 describe('Files — view', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
     storage.set('users/alice/storage/documents/readme.md', {
       body: new TextEncoder().encode('# Hello World').buffer,
       contentType: 'text/plain',
@@ -348,8 +187,8 @@ describe('Files — view', () => {
   });
 
   it('GET /account/view renders text file as HTML', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/view/documents/readme.md', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/view/documents/readme.md', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('# Hello World');
@@ -357,8 +196,8 @@ describe('Files — view', () => {
   });
 
   it('renders script terminators as inert text under a restrictive CSP', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/view/documents/malicious.txt', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/view/documents/malicious.txt', { method: 'GET' }, env);
     const html = await res.text();
 
     expect(res.status).toBe(200);
@@ -371,7 +210,7 @@ describe('Files — view', () => {
   });
 
   it('serves account behavior as same-origin JavaScript', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const res = await app.request('http://localhost/account/client.js', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('text/javascript');
@@ -379,33 +218,24 @@ describe('Files — view', () => {
   });
 
   it('GET /account/view redirects binary file to download', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/view/documents/data.bin', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/view/documents/data.bin', { method: 'GET' }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toContain('/account/download/');
   });
 
   it('GET /account/view returns 404 for missing file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/view/documents/missing.txt', { method: 'GET', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/view/documents/missing.txt', { method: 'GET' }, env);
     expect(res.status).toBe(404);
-  });
-
-  it('GET /account/view redirects to login when unauthenticated', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/view/documents/readme.md', { method: 'GET' }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
   });
 });
 
 describe('Files — delete', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => {
@@ -417,143 +247,123 @@ describe('Files — delete', () => {
   });
 
   it('POST /account/delete removes file and redirects', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
     expect(res.status).toBe(302);
     expect(storage.has('users/alice/storage/documents/todelete.txt')).toBe(false);
   });
 
   it('POST /account/delete redirects to parent folder', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: { Cookie: cookie } }, env);
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
     expect(res.headers.get('Location')).toContain('/account/browse');
-  });
-
-  it('POST /account/delete redirects to login when unauthenticated', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST' }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
   });
 });
 
-describe('Files — tokens', () => {
+describe('Dashboard', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
-
+  const now = Math.floor(Date.now() / 1000);
   const mockTokens = [
-    { id: 'tok-1', client_id: 'my-app', scopes: 'documents:rw', user_id: 'alice', expires_at: Math.floor(Date.now() / 1000) + 3600, created_at: Math.floor(Date.now() / 1000) },
-    { id: 'tok-2', client_id: 'another-app', scopes: 'pictures:r', user_id: 'alice', expires_at: Math.floor(Date.now() / 1000) - 1, created_at: Math.floor(Date.now() / 1000) },
+    { id: 'tok-1', client_id: 'https://notes.example', scopes: 'documents:rw', user_id: 'alice', expires_at: now + 3600, created_at: now - 86400 * 3 },
+    { id: 'tok-2', client_id: 'https://notes.example', scopes: 'pictures:r', user_id: 'alice', expires_at: now - 1, created_at: now },
+    { id: 'tok-3', client_id: 'another-app', scopes: 'music:r', user_id: 'alice', expires_at: now + 3600, created_at: now },
   ];
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(null, mockTokens), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any);
   });
 
-  it('GET /account/tokens lists active tokens', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(null, mockTokens), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/tokens', { method: 'GET', headers: { Cookie: cookie } }, env);
+  it('GET /account shows the Storage address, usage and sign-out', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', storage_quota_bytes: 10737418240, used_storage_bytes: 1048576 }, []) } as any;
+    const res = await app.request('http://localhost/account', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('my-app');
-    expect(html).toContain('documents:rw');
-    expect(html).toContain('Expired');
+    expect(html).toContain('alice@localhost:8787');
+    expect(html).toContain('data-copy-target="storage-address"');
+    expect(html).toContain('1.0 MB of 10.0 GB used');
+    expect(html).toContain('name="quota_gb"');
+    expect(html).toContain('href="/cdn-cgi/access/logout"');
+    expect(html).toContain('<h2>Public files</h2>');
+    expect(html).toContain('No apps have access yet');
   });
 
-  it('GET /account/tokens shows empty state when no tokens', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(null, []), SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/tokens', { method: 'GET', headers: { Cookie: cookie } }, env);
-    expect(res.status).toBe(200);
+  it('GET /account lists apps grouped by client, shown by origin host', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any;
+    const res = await app.request('http://localhost/account', { method: 'GET' }, env);
     const html = await res.text();
-    expect(html).toContain('No active tokens');
+    expect(html.split('action="/account/apps/revoke"')).toHaveLength(3);
+    expect(html).toContain('<strong>notes.example</strong>');
+    expect(html).toContain('documents:rw pictures:r');
+    expect(html).toContain(new Date((now - 86400 * 3) * 1000).toISOString().slice(0, 10));
+    expect(html).toContain('<strong>another-app</strong>');
   });
 
-  it('POST /account/tokens/:id/revoke redirects to tokens page', async () => {
-    const revokeDb = {
-      prepare: (_sql: string) => ({
-        bind: (..._args: any[]) => ({ run: async () => ({}), first: async () => ({ username: 'alice' }) }),
-      }),
-    } as any;
-    const env = { STORAGE: mockStorage, DB: revokeDb, SESSION_SECRET } as any;
-    const res = await app.request('http://localhost/account/tokens/tok-1/revoke', { method: 'POST', headers: { Cookie: cookie } }, env);
+  it('GET /account/tokens redirects to the dashboard', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/tokens', { method: 'GET' }, env);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/tokens');
+    expect(res.headers.get('Location')).toBe('/account');
+  });
+
+  it('serves the copy button behaviour from client.js', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/client.js', { method: 'GET' }, env);
+    expect(await res.text()).toContain('navigator.clipboard.writeText');
   });
 });
 
 describe('Files — upload', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => storage.clear());
 
   it('POST /account/upload stores file and redirects', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const formData = new FormData();
     formData.append('files', new File(['hello upload'], 'test.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/documents', {
       method: 'POST',
       body: formData,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
     expect(storage.has('users/alice/storage/documents/test.txt')).toBe(true);
   });
 
   it('POST /account/upload with no file redirects without storing', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const formData = new FormData();
     const res = await app.request('http://localhost/account/upload/documents', {
       method: 'POST',
       body: formData,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
     expect(storage.size).toBe(0);
   });
-
-  it('POST /account/upload redirects to login when unauthenticated', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const formData = new FormData();
-    formData.append('files', new File(['data'], 'x.txt', { type: 'text/plain' }));
-    const res = await app.request('http://localhost/account/upload/documents', {
-      method: 'POST',
-      body: formData,
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
-  });
 });
 
-describe('Files — session cookie flags', () => {
+describe('Account routing', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
-  it('POST /account/login sets HttpOnly SameSite cookie', async () => {
-    const passwordHash = await (await import('../src/services/auth')).hashPassword('correctpass');
-    const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', password_hash: passwordHash }), SESSION_SECRET } as any;
-    const body = new URLSearchParams({ username: 'alice', password: 'correctpass' });
-    const res = await app.request('http://localhost/account/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }, env);
-    const setCookie = res.headers.get('Set-Cookie') || '';
-    expect(setCookie).toContain('HttpOnly');
-    expect(setCookie).toContain('SameSite=Lax');
-  });
+  for (const path of ['/admin', '/admin/', '/admin/users', '/admin/debug/env']) {
+    it(`GET ${path} redirects to /account with 301`, async () => {
+      const res = await app.request(`http://localhost${path}`, { method: 'GET' }, { STORAGE: mockStorage, DB: makeDb() } as any);
+      expect(res.status).toBe(301);
+      expect(res.headers.get('Location')).toBe('/account');
+    });
+  }
 
   it('GET /account/ redirects to /account (no trailing slash) with 301', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const res = await app.request('http://localhost/account/', { method: 'GET' }, env);
     expect(res.status).toBe(301);
     expect(res.headers.get('Location')).toBe('/account');
@@ -562,11 +372,9 @@ describe('Files — session cookie flags', () => {
 
 describe('Files — save (edit)', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => {
@@ -579,13 +387,13 @@ describe('Files — save (edit)', () => {
   });
 
   it('POST /account/save updates file content', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const form = new FormData();
     form.append('content', 'updated content');
     const res = await app.request('http://localhost/account/save/documents/note.txt', {
       method: 'POST',
       body: form,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(204);
     const stored = storage.get('users/alice/storage/documents/note.txt');
@@ -593,37 +401,23 @@ describe('Files — save (edit)', () => {
   });
 
   it('POST /account/save preserves content type', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const form = new FormData();
     form.append('content', 'new');
     await app.request('http://localhost/account/save/documents/note.txt', {
       method: 'POST',
       body: form,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(storage.get('users/alice/storage/documents/note.txt')?.contentType).toBe('text/plain');
-  });
-
-  it('POST /account/save redirects to login when unauthenticated', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
-    const form = new FormData();
-    form.append('content', 'x');
-    const res = await app.request('http://localhost/account/save/documents/note.txt', {
-      method: 'POST',
-      body: form,
-    }, env);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
   });
 });
 
 describe('Files — root browse listing', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => {
@@ -641,10 +435,10 @@ describe('Files — root browse listing', () => {
   });
 
   it('root browse shows full folder names without truncation', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const res = await app.request('http://localhost/account/browse', {
       method: 'GET',
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -657,36 +451,34 @@ describe('Files — root browse listing', () => {
 
 describe('Files — nested path upload', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
   });
 
   beforeEach(() => storage.clear());
 
   it('POST /account/upload/a/b/c stores file at full nested path', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const form = new FormData();
     form.append('files', new File(['data'], 'file.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/photos/2024/summer', {
       method: 'POST',
       body: form,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
     expect(storage.has('users/alice/storage/photos/2024/summer/file.txt')).toBe(true);
   });
 
   it('POST /account/upload redirects to correct nested browse path', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const form = new FormData();
     form.append('files', new File(['x'], 'x.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/photos/2024', {
       method: 'POST',
       body: form,
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.headers.get('Location')).toBe('/account/browse/photos/2024');
   });
@@ -694,11 +486,9 @@ describe('Files — nested path upload', () => {
 
 describe('Files — view binary redirect URL', () => {
   let app: ReturnType<typeof createServer>;
-  let cookie: string;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any);
-    cookie = await makeSessionCookie('alice');
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
     storage.set('users/alice/storage/photos/2024/img.png', {
       body: new Uint8Array([0x89, 0x50]).buffer,
       contentType: 'image/png',
@@ -707,10 +497,10 @@ describe('Files — view binary redirect URL', () => {
   });
 
   it('view redirects binary to download using real path separators', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(), SESSION_SECRET } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
     const res = await app.request('http://localhost/account/view/photos/2024/img.png', {
       method: 'GET',
-      headers: { Cookie: cookie },
+      headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
     const location = res.headers.get('Location') || '';

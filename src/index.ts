@@ -1,10 +1,6 @@
 import { Hono } from 'hono';
-import { storageRouter } from './routes/storage';
-import { webfingerRouter } from './routes/webfinger';
-import { oauthRouter } from './routes/oauth';
-import { adminRouter } from './routes/admin';
-import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
+import { mountRoutes } from './routes/mount';
 import { mountDocs } from './routes/docs';
 export { buildKey, R2Storage } from './services/r2';
 export type { AppEnv } from './types';
@@ -13,13 +9,7 @@ const app = new Hono();
 
 app.use('*', corsMiddleware());
 
-app.route('/storage', storageRouter);
-app.route('/oauth', oauthRouter);
-app.get('/admin/', (c) => c.redirect('/admin', 301));
-app.route('/admin', adminRouter);
-app.get('/account/', (c) => c.redirect('/account', 301));
-app.route('/account', accountRouter);
-app.route('/', webfingerRouter);
+mountRoutes(app);
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 

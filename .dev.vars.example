@@ -1,21 +1,19 @@
 # Copy this file to .dev.vars and fill in values for local `wrangler dev`.
 # For offline dev (bun run dev:offline), set these as shell env vars instead.
 
-# Required in production: signs file manager and OAuth session cookies.
-SESSION_SECRET=change-me-to-a-random-string
-
-# Required in production: protects /admin/* endpoints.
-ADMIN_SECRET=change-me-to-a-different-random-string
-
-# Required in production: the one Account this Instance serves, and the origin
-# every advertised URL is built from. In dev mode they default to the values
-# below, so these lines are optional locally.
+# Required in production: the one Account this Instance serves, the Owner's
+# email (the only identity allowed into /account), and the origin every
+# advertised URL is built from. In dev mode they default to the values below,
+# so these lines are optional locally.
 ACCOUNT_USERNAME=alice
+OWNER_EMAIL=alice@example.com
 PUBLIC_BASE_URL=http://localhost:8787
 
 # Optional maximum object size in bytes (defaults to 10 MiB).
 MAX_OBJECT_SIZE_BYTES=10485760
 
-# Local development only. Allows fallback sessions and open admin access when
-# ADMIN_SECRET is blank.
+# Local development only. Signs requests to localhost in as a dev identity when
+# Cloudflare Access is absent, and enables /debug/*. RSILO_DEV_EMAIL (default:
+# OWNER_EMAIL) sets that identity's email, e.g. to preview the "not allowed" page.
 RSILO_DEV_MODE=true
+# RSILO_DEV_EMAIL=someone-else@example.com

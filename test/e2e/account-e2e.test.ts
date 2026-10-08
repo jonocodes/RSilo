@@ -9,6 +9,8 @@ const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-account');
 const DB_PATH = join(DATA_DIR, 'test.db');
 const STORAGE_DIR = join(DATA_DIR, 'storage');
 
+// The offline server is dev mode without Cloudflare Access, so requests to
+// localhost are signed in as the dev identity (the Owner).
 describe('Account E2E', () => {
   let server: ReturnType<typeof spawn>;
 
@@ -23,8 +25,6 @@ describe('Account E2E', () => {
       STORAGE_DIR,
       DB_PATH,
       PORT: '8790',
-      SESSION_SECRET: 'test-session-secret',
-      ADMIN_SECRET: 'admin',
     };
 
     server = spawn('bun', ['run', 'src/server-offline.ts'], {
@@ -47,132 +47,71 @@ describe('Account E2E', () => {
     await new Promise(r => setTimeout(r, 100));
   });
 
-  async function createUser(username: string, password: string) {
-    const res = await fetch(`${SERVER_URL}/admin/users`, {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer admin',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username, password }),
-    });
-    return res.json();
-  }
-
-  async function login(username: string, password: string) {
-    const res = await fetch(`${SERVER_URL}/account/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ username, password }),
-      redirect: 'manual',
-    });
-    return res;
-  }
-
-  it('GET /account/ shows login page', async () => {
-    const res = await fetch(`${SERVER_URL}/account/`);
+  it('GET /account shows the dashboard for the dev identity', async () => {
+    const res = await fetch(`${SERVER_URL}/account`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('RSilo Files');
-    expect(html).toContain('name="username"');
-    expect(html).toContain('name="password"');
+    expect(html).toContain('alice@localhost:8790');
+    expect(html).toContain('alice@example.com');
+    expect(html).toContain('/cdn-cgi/access/logout');
+    expect(html).not.toContain('name="password"');
   });
 
-  it('GET /account/browse redirects to login when not authenticated', async () => {
-    const res = await fetch(`${SERVER_URL}/account/browse`, {
+  it('GET /admin redirects to /account', async () => {
+    const res = await fetch(`${SERVER_URL}/admin`, { redirect: 'manual' });
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('/account');
+  });
+
+  it('uploads, browses, downloads and deletes a file', async () => {
+    const form = new FormData();
+    form.append('files', new File(['hello e2e'], 'note.txt', { type: 'text/plain' }));
+    const upload = await fetch(`${SERVER_URL}/account/upload/documents`, {
+      method: 'POST',
+      headers: { 'Sec-Fetch-Site': 'same-origin' },
+      body: form,
+      redirect: 'manual',
+    });
+    expect(upload.status).toBe(302);
+
+    const browse = await fetch(`${SERVER_URL}/account/browse/documents`);
+    expect(browse.status).toBe(200);
+    expect(await browse.text()).toContain('note.txt');
+
+    const download = await fetch(`${SERVER_URL}/account/download/documents/note.txt`);
+    expect(await download.text()).toBe('hello e2e');
+
+    const remove = await fetch(`${SERVER_URL}/account/delete/documents/note.txt`, {
+      method: 'POST',
+      headers: { 'Sec-Fetch-Site': 'same-origin' },
+      redirect: 'manual',
+    });
+    expect(remove.status).toBe(302);
+    expect((await fetch(`${SERVER_URL}/account/download/documents/note.txt`)).status).toBe(404);
+  });
+
+  it('refuses a cross-site delete', async () => {
+    const res = await fetch(`${SERVER_URL}/account/delete/documents/note.txt`, {
+      method: 'POST',
+      headers: { 'Sec-Fetch-Site': 'cross-site' },
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('updates the quota from the dashboard', async () => {
+    const res = await fetch(`${SERVER_URL}/account/quota`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: SERVER_URL },
+      body: new URLSearchParams({ quota_gb: '2' }),
       redirect: 'manual',
     });
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/');
+    expect(await (await fetch(`${SERVER_URL}/account`)).text()).toContain('of 2.0 GB used');
   });
 
-  it('login with wrong password redirects to error', async () => {
-    await createUser('testuser1', 'password123');
-
-    const res = await fetch(`${SERVER_URL}/account/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ username: 'testuser1', password: 'wrongpassword' }),
-      redirect: 'manual',
-    });
-
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/?error=1');
-  });
-
-  it('login with correct password sets cookie and redirects to browse', async () => {
-    await createUser('testuser2', 'password123');
-
-    const res = await fetch(`${SERVER_URL}/account/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ username: 'testuser2', password: 'password123' }),
-      redirect: 'manual',
-    });
-
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe('/account/browse');
-    const cookie = res.headers.get('Set-Cookie') || '';
-    expect(cookie).toContain('rsilo_session=');
-    expect(cookie).toContain('HttpOnly');
-  });
-
-  it('browse page shows files after login', async () => {
-    await createUser('browseuser', 'password123');
-
-    const loginRes = await login('browseuser', 'password123');
-    const cookie = loginRes.headers.get('Set-Cookie') || '';
-    const sessionToken = cookie.match(/rsilo_session=([^;]+)/)?.[1];
-    expect(sessionToken).toBeDefined();
-
-    const res = await fetch(`${SERVER_URL}/account/browse`, {
-      headers: { Cookie: `rsilo_session=${sessionToken}` },
-    });
-
+  it('/debug is available in dev mode on localhost', async () => {
+    const res = await fetch(`${SERVER_URL}/debug/env`);
     expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('RSilo Files');
-    expect(html).toContain('/account/browse');
-  });
-
-  it('logout clears cookie and redirects', async () => {
-    await createUser('logoutuser', 'password123');
-
-    const loginRes = await login('logoutuser', 'password123');
-    const cookie = loginRes.headers.get('Set-Cookie') || '';
-    const sessionToken = cookie.match(/rsilo_session=([^;]+)/)?.[1];
-
-    const logoutRes = await fetch(`${SERVER_URL}/account/logout`, {
-      method: 'POST',
-      headers: { Cookie: `rsilo_session=${sessionToken}` },
-      redirect: 'manual',
-    });
-
-    expect(logoutRes.status).toBe(302);
-    expect(logoutRes.headers.get('Location')).toBe('/account/');
-    const logoutCookie = logoutRes.headers.get('Set-Cookie') || '';
-    expect(logoutCookie).toContain('Max-Age=0');
-  });
-
-  it('tokens page shows after login', async () => {
-    await createUser('tokensuser', 'password123');
-
-    const loginRes = await login('tokensuser', 'password123');
-    const cookie = loginRes.headers.get('Set-Cookie') || '';
-    const sessionToken = cookie.match(/rsilo_session=([^;]+)/)?.[1];
-
-    const res = await fetch(`${SERVER_URL}/account/tokens`, {
-      headers: { Cookie: `rsilo_session=${sessionToken}` },
-    });
-
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('OAuth Tokens');
   });
 });

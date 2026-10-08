@@ -9,10 +9,6 @@ export class D1Adapter {
     return results;
   }
 
-  async deleteUserData(username: string): Promise<void> {
-    await this.db.deleteUserData(username);
-  }
-
   async adjustStorageUsage(username: string, delta: number, enforceQuota = true): Promise<boolean> {
     return this.db.adjustStorageUsage(username, delta, enforceQuota);
   }
@@ -62,7 +58,7 @@ export class D1Adapter {
           if (sql.includes('INSERT OR IGNORE INTO users')) {
             await self.db.createUserIfAbsent(values[0], values[1]);
           } else if (sql.includes('INSERT INTO users')) {
-            await self.db.createUser(values[0], values[1], values[2]);
+            await self.db.createUser(values[0], values[1]);
           } else if (sql.includes('INSERT INTO oauth_tokens')) {
             await self.db.createToken({
               id: values[0],
@@ -91,26 +87,26 @@ export class D1Adapter {
               expires_at: values[5],
               created_at: Math.floor(Date.now() / 1000),
             });
-          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('id = ?') && sql.includes('user_id')) {
+          } else if (sql.includes('DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ?')) {
+            await self.db.deleteTokensByClient(values[0], values[1]);
+          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('WHERE id = ?') && sql.includes('user_id')) {
             await self.db.deleteTokenByIdAndUser(values[0], values[1]);
           } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('user_id')) {
             await self.db.deleteTokensByUser(values[0]);
-          } else if (sql.includes('DELETE FROM oauth_tokens') && sql.includes('client_id')) {
-            await self.db.deleteTokensByClient(values[0]);
           } else if (sql.includes('DELETE FROM oauth_tokens')) {
             await self.db.deleteToken(values[0]);
           } else if (sql.includes('DELETE FROM oauth_clients') && sql.includes('user_id')) {
             await self.db.deleteClientsByUser(values[0]);
           } else if (sql.includes('DELETE FROM oauth_clients')) {
             await self.db.deleteClient(values[0]);
+          } else if (sql.includes('DELETE FROM oauth_codes WHERE client_id = ? AND user_id = ?')) {
+            await self.db.deleteCodesByClient(values[0], values[1]);
           } else if (sql.includes('DELETE FROM oauth_codes') && sql.includes('user_id')) {
             await self.db.deleteCodesByUser(values[0]);
           } else if (sql.includes('DELETE FROM oauth_codes')) {
             await self.db.deleteCode(values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('storage_quota_bytes')) {
             await self.db.updateUserQuota(values[1], values[0]);
-          } else if (sql.includes('UPDATE users') && sql.includes('password_hash')) {
-            await self.db.updatePasswordHash(values[2], values[0]);
           } else if (sql.includes('UPDATE users') && sql.includes('used_storage_bytes')) {
             await self.db.updateStorageUsage(values[1], values[0]);
           } else if (sql.includes('DELETE FROM users') && sql.includes('username')) {

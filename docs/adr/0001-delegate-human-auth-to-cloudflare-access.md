@@ -12,6 +12,7 @@ Status: accepted
 ## Consequences
 
 - Password hashing, session tokens, `SESSION_SECRET`, and `ADMIN_SECRET` are removed.
-- `ACCESS_TEAM_DOMAIN` and `ACCESS_POLICY_AUD` become configuration; the Worker validates a single Access application's JWT.
-- Local dev and tests require a dev-only identity resolver, guarded by `RSILO_DEV_MODE` and impossible to enable in production.
+- Configuration is `OWNER_EMAIL`, `ACCOUNT_USERNAME` and `PUBLIC_BASE_URL`. The Worker reads the Owner's identity from the platform-provided `ctx.access.getIdentity()` (confirmed on a path-based self-hosted Access app over `<worker>.workers.dev/account`) and admits only `OWNER_EMAIL`, case-insensitively. It parses no JWT, holds no JWKS, and ignores the `Cf-Access-Jwt-Assertion` header and `CF_Authorization` cookie, so there is no `ACCESS_TEAM_DOMAIN` or `ACCESS_POLICY_AUD`; the email check is what makes an over-broad policy or another Access application on the account harmless.
+- Local dev and tests use a dev-only identity resolver, reachable only when `RSILO_DEV_MODE=true`, `ctx.access` is absent, and the request host is local; an Access identity always wins.
+- Without Access in front of `/account` the Instance shows a finish-setup page; state-changing `/account` requests must be same-origin (`Sec-Fetch-Site`, else `Origin`), since there is no RSilo session to bind a CSRF token to.
 - The `auth-dialog` credential step is out of scope per remoteStorage protocol §10, so replacing the password with an Access login is spec-compliant.

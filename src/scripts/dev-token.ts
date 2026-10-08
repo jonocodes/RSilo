@@ -41,7 +41,7 @@ async function insertOffline(): Promise<void> {
   const db = new LocalDatabase(process.env.DB_PATH || 'data/remotestorage.db');
   try {
     if (!await db.getUserByUsername(username)) {
-      await db.createUser(crypto.randomUUID(), username, null);
+      await db.createUser(crypto.randomUUID(), username);
       console.error(`Created user ${username}`);
     }
     if (!await db.getClient(clientId)) {

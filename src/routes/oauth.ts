@@ -1,8 +1,7 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
-import { generateToken, verifyPassword, signSessionToken, verifySessionToken } from '../services/auth';
-import { getSessionSecret } from '../config';
-import { loginRateLimit } from '../services/rate-limit';
+import { generateToken } from '../services/auth';
+import { isSameOriginRequest, resolveOwner } from '../services/identity';
 import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { accountUrls } from '../services/discovery';
 
@@ -45,7 +44,7 @@ oauthRouter.get('/:user/authorize', ...forAccount, async (c) => {
     client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(clientId)?.first?.();
   } catch { /* best effort */ }
 
-  return new Response(renderLoginForm({ user, clientId, redirectUri, responseType, scope, state, clientName: client?.name }), {
+  return new Response(renderConsentForm({ user, client, clientId, redirectUri, responseType, scope, state }), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 });
@@ -53,7 +52,13 @@ oauthRouter.get('/:user/authorize', ...forAccount, async (c) => {
 oauthRouter.post('/:user/authorize', ...forAccount, async (c) => {
   const user = c.get('instance').accountUsername;
   const body = await c.req.parseBody() as any;
-  const { client_id, redirect_uri, response_type, scope, state, action, password, session_token } = body;
+  const { client_id, redirect_uri, response_type, scope, state, action } = body;
+
+  // The consent form carries no secret of its own, so a cross-site POST must
+  // not be able to approve (or deny) on the Owner's behalf.
+  if (!isSameOriginRequest(c, c.get('instance').publicBaseUrl)) {
+    return c.json({ error: 'access_denied', error_description: 'Cross-site request refused' }, 403);
+  }
 
   if (action === 'deny') {
     const denyUrl = new URL(redirect_uri);
@@ -64,55 +69,13 @@ oauthRouter.post('/:user/authorize', ...forAccount, async (c) => {
 
   const db = (c.env as any).DB;
 
-  if (action === 'login') {
-    const rateLimited = await loginRateLimit(c, 'oauth-login', user);
-    if (rateLimited) return rateLimited;
-    if (!password) {
-      return new Response(renderLoginForm({ user, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, error: 'Password is required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    const userRow = await db?.prepare?.('SELECT * FROM users WHERE username = ?')?.bind?.(user)?.first?.();
-
-    if (!userRow || !userRow.password_hash) {
-      return new Response(renderLoginForm({ user, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, error: 'Invalid username or password' }), {
-        status: 401,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    const valid = await verifyPassword(password, userRow.password_hash);
-    if (!valid) {
-      return new Response(renderLoginForm({ user, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, error: 'Invalid username or password' }), {
-        status: 401,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    const secret = getSessionSecret(c.env);
-    if (!secret) return c.json({ error: 'server_error', error_description: 'Server authentication is not configured' }, 503);
-
-    const client = await db?.prepare?.('SELECT * FROM oauth_clients WHERE id = ?')?.bind?.(client_id)?.first?.();
-    const token = await signSessionToken(user, secret);
-
-    return new Response(renderConsentForm({ user, client, clientId: client_id, redirectUri: redirect_uri, responseType: response_type, scope, state, sessionToken: token }), {
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
-  }
-
   if (action === 'approve') {
-    if (!session_token) {
-      return c.json({ error: 'invalid_request', error_description: 'Missing session token' }, 400);
-    }
-
-    const secret = getSessionSecret(c.env);
-    if (!secret) return c.json({ error: 'server_error', error_description: 'Server authentication is not configured' }, 503);
-
-    const authedUser = await verifySessionToken(session_token, secret);
-    if (!authedUser || authedUser !== user) {
-      return c.json({ error: 'access_denied', error_description: 'Session expired, please log in again' }, 401);
+    // Approval needs the Owner (services/identity.ts). Until the consent dialog
+    // moves under the Access-guarded /account prefix, production requests here
+    // carry no Access identity and are refused.
+    const owner = await resolveOwner(c);
+    if (owner.status !== 'owner') {
+      return c.json({ error: 'access_denied', error_description: 'Sign in as the Owner to approve apps' }, 401);
     }
 
     if (!client_id || !redirect_uri) {
@@ -338,71 +301,14 @@ const CSS = `
   .client-name { font-weight: 600; }
   .scope-list { margin: 1rem 0; }
   .scope-item { padding: 0.5rem; background: #e8f4ff; border-radius: 4px; margin: 0.25rem 0; font-size: 0.875rem; }
-  .field { margin-bottom: 1rem; }
-  label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
-  input[type=password] { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
-  input[type=password]:focus { outline: none; border-color: #0066cc; box-shadow: 0 0 0 2px rgba(0,102,204,0.2); }
   .buttons { display: flex; gap: 1rem; margin-top: 1.5rem; }
   button { flex: 1; padding: 0.75rem; border-radius: 4px; border: none; font-size: 1rem; cursor: pointer; }
   .approve { background: #0066cc; color: white; }
   .approve:hover { background: #0052a3; }
   .deny { background: #dc3545; color: white; }
   .deny:hover { background: #c82333; }
-  .error { color: #dc3545; font-size: 0.875rem; margin-bottom: 1rem; padding: 0.5rem; background: #fff5f5; border-radius: 4px; }
   .user-badge { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
 `;
-
-interface LoginFormParams {
-  user: string;
-  clientId: string;
-  redirectUri: string;
-  responseType: string;
-  scope: string;
-  state: string;
-  clientName?: string;
-  error?: string;
-}
-
-function renderLoginForm({ user, clientId, redirectUri, responseType, scope, state, clientName, error }: LoginFormParams): string {
-  let clientHost = redirectUri;
-  try { clientHost = new URL(redirectUri).host; } catch { /* keep raw */ }
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in — ${escapeHtml(user)}</title>
-  <style>${CSS}</style>
-</head>
-<body>
-  <div class="container">
-    <h1>Authorize Access</h1>
-    <p class="user-badge">Signing in as <strong>${escapeHtml(user)}</strong></p>
-    <div class="client-info">
-      <p class="client-name">${escapeHtml(clientName || clientId)}</p>
-      <p>is requesting access to your storage.</p>
-      <p><strong>Redirects to:</strong> ${escapeHtml(clientHost)}</p>
-    </div>
-    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
-    <form method="POST" action="/oauth/${escapeHtml(user)}/authorize">
-      <input type="hidden" name="action" value="login">
-      <input type="hidden" name="client_id" value="${escapeHtml(clientId)}">
-      <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
-      <input type="hidden" name="response_type" value="${escapeHtml(responseType)}">
-      <input type="hidden" name="scope" value="${escapeHtml(scope)}">
-      <input type="hidden" name="state" value="${escapeHtml(state)}">
-      <div class="field">
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" autofocus autocomplete="current-password">
-      </div>
-      <div class="buttons">
-        <button type="submit" class="approve">Sign in</button>
-      </div>
-    </form>
-  </div>
-</body>
-</html>`;
-}
 
 interface ConsentFormParams {
   user: string;
@@ -412,10 +318,9 @@ interface ConsentFormParams {
   responseType: string;
   scope: string;
   state: string;
-  sessionToken: string;
 }
 
-function renderConsentForm({ user, client, clientId, redirectUri, responseType, scope, state, sessionToken }: ConsentFormParams): string {
+function renderConsentForm({ user, client, clientId, redirectUri, responseType, scope, state }: ConsentFormParams): string {
   const scopes = scope.split(/\s+/).filter(Boolean);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -428,7 +333,7 @@ function renderConsentForm({ user, client, clientId, redirectUri, responseType, 
 <body>
   <div class="container">
     <h1>Authorize Access</h1>
-    <p class="user-badge">Signed in as <strong>${escapeHtml(user)}</strong></p>
+    <p class="user-badge">Account <strong>${escapeHtml(user)}</strong></p>
     <div class="client-info">
       <p class="client-name">${escapeHtml(client?.name || clientId)}</p>
       <p><strong>Client ID:</strong> ${escapeHtml(clientId)}</p>
@@ -440,7 +345,6 @@ function renderConsentForm({ user, client, clientId, redirectUri, responseType, 
     </div>
     <form method="POST" action="/oauth/${escapeHtml(user)}/authorize">
       <input type="hidden" name="action" value="approve">
-      <input type="hidden" name="session_token" value="${escapeHtml(sessionToken)}">
       <input type="hidden" name="client_id" value="${escapeHtml(clientId)}">
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
       <input type="hidden" name="response_type" value="${escapeHtml(responseType)}">

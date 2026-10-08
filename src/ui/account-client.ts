@@ -35,6 +35,19 @@ export const ACCOUNT_CLIENT_SCRIPT = String.raw`
     button.addEventListener('click', () => submitUpload(button));
   }
 
+  for (const button of document.querySelectorAll('[data-copy-target]')) {
+    button.addEventListener('click', async () => {
+      const text = document.getElementById(button.dataset.copyTarget)?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = 'Copied';
+      } catch {
+        button.textContent = 'Copy failed';
+      }
+      setTimeout(() => { button.textContent = 'Copy'; }, 2000);
+    });
+  }
+
   for (const form of document.querySelectorAll('form[data-confirm-message]')) {
     form.addEventListener('submit', (event) => {
       if (!confirm(form.dataset.confirmMessage)) event.preventDefault();

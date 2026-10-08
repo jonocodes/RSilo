@@ -25,12 +25,11 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 
 # For admins: run your own server
 
-This is for the person who owns the server. You deploy it once, create your account, then connect apps. You do not need to be technical or understand Cloudflare internals — the sections below walk you through it, and `bun run setup` does most of the work.
+This is for the person who owns the server. You deploy it once, protect `/account` with Cloudflare Access, then connect apps. You do not need to be technical or understand Cloudflare internals — the sections below walk you through it, and `bun run setup` does most of the work. There is no RSilo password: Cloudflare Access signs you in.
 
 ## What you get
 
-- **Web file manager** at `/account` — browse, upload, download, delete, and view files
-- **Admin dashboard** at `/admin` — create users, set storage quotas, and review/revoke app access
+- **Your account area** at `/account` — a dashboard with your storage address, quota usage and setting, and the apps you have granted access (revocable), plus a file manager to browse, upload, download, view, edit, and delete files
 - **API reference** at `/api` — a generated page listing every endpoint the server exposes
 - **OAuth + WebFinger** so RemoteStorage apps can connect
 - **Public sharing** through the `public` module
@@ -44,7 +43,7 @@ The service runs as a single Cloudflare Worker with two provisioned resources: *
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jonocodes/RSilo)
 
-Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2 and D1 automatically**, runs migrations, deploys, and lets you set the secrets on the setup page. This is the friendliest path if you have never used Cloudflare before.
+Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2 and D1 automatically**, runs migrations, and deploys. This is the friendliest path if you have never used Cloudflare before.
 
 The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance).
 
@@ -52,7 +51,7 @@ The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare c
 
 Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file), plus `bun` and `wrangler`.
 
-The easiest way is the bundled setup script, which logs in, creates the resources, writes a gitignored `wrangler.prod.toml` with their real IDs, runs migrations, generates secrets, and deploys:
+The easiest way is the bundled setup script, which logs in, creates the resources, writes a gitignored `wrangler.prod.toml` with their real IDs, runs migrations, and deploys:
 
 ```bash
 bun install
@@ -60,7 +59,7 @@ wrangler login
 bun run setup
 ```
 
-It prints your server URL and the generated admin secret at the end. Prefer to drive it yourself? See the manual steps below.
+It prints your server URL at the end. Prefer to drive it yourself? See the manual steps below.
 
 <details>
 <summary>Manual CLI steps</summary>
@@ -77,34 +76,26 @@ wrangler d1 create remotestorage-db
 
 # Migrate and deploy (bun run deploy auto-detects wrangler.prod.toml)
 bun run deploy
-
-# Secrets
-wrangler secret put SESSION_SECRET   # bun run secret
-wrangler secret put ADMIN_SECRET     # bun run secret
 ```
 
-Then set `ACCOUNT_USERNAME` and `PUBLIC_BASE_URL` as described in [Instance configuration](#instance-configuration).
+Then set `ACCOUNT_USERNAME`, `OWNER_EMAIL` and `PUBLIC_BASE_URL` as described in [Instance configuration](#instance-configuration).
 
 Alternatively, let wrangler provision the resources: delete the `database_id` line from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy it from `wrangler d1 list` if you need them later.
 
 </details>
 
-| Secret | Purpose |
-|--------|---------|
-| `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
-| `ADMIN_SECRET` | Protects `/admin/*` endpoints — required |
-
-Generate each secret with `bun run secret`. Production requests fail with `503` when the relevant secret is missing; insecure bypasses are available only when `RSILO_DEV_MODE=true` is explicitly set for local development. Storage access tokens need no secret: they are opaque values stored in D1 (see [Authentication](#authentication)).
+RSilo needs no secrets. Cloudflare Access signs you in to `/account`, and storage access tokens are opaque values stored in D1 (see [Authentication](#authentication)).
 
 `MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
 
 ### Instance configuration
 
-Two plain (non-secret) variables identify the Instance. Both are **required in production**; set them in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets**, type *Text*) or under `[vars]` in your `wrangler.prod.toml`. Without them every discovery, OAuth, storage and `/account` request returns `503` with a message naming what is missing.
+Three plain (non-secret) variables identify the Instance. All are **required in production**; set them in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets**, type *Text*) or under `[vars]` in your `wrangler.prod.toml`. Without them every discovery, OAuth and storage request returns `503` with a message naming what is missing, and `/account` shows a *finish setup* page listing them.
 
 | Variable | Purpose | Dev-mode default |
 |----------|---------|------------------|
 | `ACCOUNT_USERNAME` | The one Account this Instance serves (`[a-z0-9_.-]+`). It names the storage root `/storage/<ACCOUNT_USERNAME>/` and is never derived from an email address. | `alice` |
+| `OWNER_EMAIL` | Your email address, exactly as your Cloudflare Access sign-in method reports it (the one-time-PIN address, or your Google/GitHub email — not necessarily your Cloudflare login). Only this identity (case-insensitive) may use `/account`. | `alice@example.com` |
 | `PUBLIC_BASE_URL` | The origin apps reach the Instance at, e.g. `https://rsilo.<subdomain>.workers.dev` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it, never from the request's `Host` or `X-Forwarded-Proto`. | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
 
 The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value (for example a `PUBLIC_BASE_URL` with a path) is rejected even in dev mode.
@@ -139,36 +130,36 @@ To release on every push to `main`, connect the repository to your Worker using 
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
-## Create your account and sign in
+## Protect `/account` with Cloudflare Access and sign in
 
-1. Set `ACCOUNT_USERNAME` and `PUBLIC_BASE_URL` (see [Instance configuration](#instance-configuration)).
-2. Open `https://<your-worker>.workers.dev/admin/` and sign in with `ADMIN_SECRET`.
-3. Give your Account a password: create a user with the **same username as `ACCOUNT_USERNAME`** (password ≥ 8 characters), or set the password on it if it already exists.
-4. Go to `/account` and sign in with that username and password.
+RSilo stores no passwords. Cloudflare Access (part of Zero Trust, free for a single person, no payment method needed) signs you in, and RSilo checks that the signed-in email is `OWNER_EMAIL`.
 
-## Change a password
+1. Set `ACCOUNT_USERNAME`, `OWNER_EMAIL` and `PUBLIC_BASE_URL` (see [Instance configuration](#instance-configuration)).
+2. In the Cloudflare dashboard open **Zero Trust** and pick the free plan if asked.
+3. **Access → Applications → Add an application → Self-hosted.** Set the domain to `<worker>.<subdomain>.workers.dev` and the path to `account`. No custom domain is needed.
+4. Add an **Allow** policy that includes exactly your email (the same as `OWNER_EMAIL`), and choose an identity method — a one-time PIN sent to your email works.
+5. Open `https://<worker>.<subdomain>.workers.dev/account`, sign in through Access, and you land on your dashboard.
 
-There is no self-service form yet, so passwords are changed with the admin API. On a single-user instance you are the admin, so this is how you change your own:
+Do **not** use the Worker-level "protect this Worker" toggle: it gates the whole Worker, including `/storage` and WebFinger, so apps could no longer reach your data.
 
-```bash
-curl -X PATCH https://<your-worker>.workers.dev/admin/users/alice/password \
-  -H "Authorization: Bearer <ADMIN_SECRET>" \
-  -H "Content-Type: application/json" \
-  -d '{"password":"newpass123"}'   # at least 8 characters
-```
+Until Access is in place, `/account` shows a *finish setup* page with these steps. If you sign in with an email other than `OWNER_EMAIL` you get a "not allowed" page; if you changed the email you sign in with, update `OWNER_EMAIL` (and the Access policy) in the Cloudflare dashboard. Recovery depends only on your Cloudflare account.
 
-Existing app tokens (authorizations) keep working after a password change — revoke any you no longer want from `/admin` (Authorized apps) or `/account/tokens`.
+**Sign out** (in the `/account` header) goes to `/cdn-cgi/access/logout`. It ends your RSilo Access session, not your login at your email or identity provider.
+
+Every state-changing `/account` request must come from the page itself (`Sec-Fetch-Site: same-origin`, or an `Origin` equal to `PUBLIC_BASE_URL`); cross-site posts get `403`.
 
 ## Connect a RemoteStorage app
 
-Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears in the admin dashboard.
+Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears on your `/account` dashboard.
 
 1. In the app, enter your storage address: either `<ACCOUNT_USERNAME>@<your-worker>.workers.dev` or, if the app supports it, just the server URL `https://<your-worker>.workers.dev`.
 2. The app discovers your endpoints via WebFinger and sends you to the OAuth consent page.
-3. Sign in, check the app name and **where it redirects to**, and approve the requested module permissions.
+3. Check the app and **where it redirects to**, and approve the requested module permissions. Approving requires your identity as the Owner.
 4. The app gets a token and starts syncing into that module.
 
-You can review and revoke an app's access from `/admin` (Authorized apps) or `/account/tokens`.
+Your `/account` dashboard lists each app once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
+
+> **Transitional:** the consent page still lives at `/oauth/<user>/authorize`, outside the Access-protected `/account` path, so in production approval is refused (`401`) until it moves under `/account` (issue #18). Local development is unaffected.
 
 ## Share a file publicly
 
@@ -214,7 +205,7 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
 │                    Cloudflare Worker                      │
 │                                                           │
 │  ┌──────────┐ ┌───────┐ ┌─────────┐ ┌───────┐ ┌───────┐ │
-│  │WebFinger │ │ OAuth │ │ Storage │ │ Admin │ │Account│ │
+│  │WebFinger │ │ OAuth │ │ Storage │ │Account│ │ Debug │ │
 │  └──────────┘ └───────┘ └─────────┘ └───────┘ └───────┘ │
 └──────────────────────────────────────────────────────────┘
          │                    │                │
@@ -237,7 +228,7 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin`, the session secret has a local-only fallback, and the Instance serves the Account `alice` at `http://localhost:8787` (set `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
+`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure it and explicit local-development mode.
 
 ## API reference
 
@@ -256,7 +247,7 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 1. App queries WebFinger to discover auth and storage endpoints (see [Discovery](#discovery))
 2. App redirects user to `/oauth/<ACCOUNT_USERNAME>/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw`
-3. User enters password, reviews scope, approves
+3. The Owner reviews the requested scopes and approves (their identity comes from Cloudflare Access; see [Protect `/account`](#protect-account-with-cloudflare-access-and-sign-in))
 4. Server redirects back with `?code=...`
 5. App exchanges code at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
@@ -292,7 +283,7 @@ TOKEN="$(bun run dev-token alice 'documents:rw pictures:rw')"
 TOKEN="$(bun run dev-token --d1 alice 'documents:rw pictures:rw')"
 ```
 
-Revoke a dev token like any other: from `/admin` (Authorized apps) or by deleting its row.
+Revoke a dev token like any other app: from the `/account` dashboard (its client is `dev-token:<username>`) or by deleting its row.
 
 ## Storage scopes
 
@@ -320,42 +311,18 @@ curl -X PUT http://localhost:8787/storage/alice/public/documents/shared.txt \
 curl http://localhost:8787/storage/alice/public/documents/shared.txt
 # → Cache-Control: no-cache
 ```
-
-### User management (admin API)
-
-```bash
-# Create user
-curl -X POST http://localhost:8787/admin/users \
-  -H "Authorization: Bearer $ADMIN_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"secretpass"}'
-
-# Change password
-curl -X PATCH http://localhost:8787/admin/users/alice/password \
-  -H "Authorization: Bearer $ADMIN_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"password":"newpass123"}'
-
-# Update quota (bytes)
-curl -X PATCH http://localhost:8787/admin/users/alice/quota \
-  -H "Authorization: Bearer $ADMIN_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"quota":10737418240}'
-```
-
-## Project layout
-
-```
 src/
   index.ts            Worker entry (Hono app)
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
-  routes/             storage, webfinger, oauth, admin, account, debug
-  config.ts           per-Instance config (ACCOUNT_USERNAME, PUBLIC_BASE_URL) and dev defaults
-  services/           auth, account (Account row lifecycle), discovery (advertised URLs,
-                      WebFinger matching), r2 (+ getStorage adapter), local-storage, db/
-  middleware/         auth, cors, instance (config + Account gates)
+  routes/             storage, webfinger, oauth, account, debug, mount (shared route table)
+  config.ts           per-Instance config (ACCOUNT_USERNAME, OWNER_EMAIL, PUBLIC_BASE_URL) and dev defaults
+  services/           auth, identity (Owner resolver: Cloudflare Access or dev identity; CSRF check),
+                      account (Account row lifecycle), discovery (advertised URLs, WebFinger
+                      matching), r2 (+ getStorage adapter), local-storage, db/
+  middleware/         auth, cors, instance (config + Account gates), owner (/account gate + CSRF)
+  ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation, path validation)
-  scripts/            setup, deploy, secret, dev-token, setup-local-db
+  scripts/            setup, deploy, dev-token, setup-local-db
 drizzle/migrations/   D1 migrations
 test/                 unit, compliance and E2E suites
 ```
@@ -371,12 +338,11 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**531 tests** across 28 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth, admin, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**523 tests** across 27 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
-- **No self-registration** — users are created via admin API or dashboard
-- **Rate limiting is per Cloudflare location** — the native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Logins (account, OAuth, admin) allow 5 attempts per 60s per IP and account; storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7)
+- **Rate limiting is per Cloudflare location** — the native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7)
 - **Buffered uploads** — upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately; downloads stream
 
 ## References
