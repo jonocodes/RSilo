@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { authMiddleware, requireScope } from '../middleware/auth';
+import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { TokenPayload } from '../services/auth';
@@ -46,6 +47,14 @@ storageRouter.use('/*', async (c, next) => {
     if (rateLimited) c.res = rateLimited;
   }
 });
+
+// Storage serves only the Account: any other username is a 404 before auth, so
+// other users can't be probed and their legacy tokens stop working. It also
+// needs the Account row (quota counter); in the username-mismatch state every
+// storage request is refused with 503.
+storageRouter.use('/*', requireInstanceConfig());
+storageRouter.use('/:username/*', requireAccountPath('username'));
+storageRouter.use('/*', requireAccountRow());
 
 storageRouter.use('/*', authMiddleware());
 

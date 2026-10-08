@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken, deleteToken } from './helpers/tokens';
+import { PRODUCTION_INSTANCE } from './helpers/instance';
 
 // ADR-0003: storage accepts only opaque bearer tokens stored in oauth_tokens.
 
@@ -85,7 +86,7 @@ describe('Opaque bearer tokens', () => {
   });
 
   it('authorizes a seeded token row in production mode without any secret', async () => {
-    const env = createEnv({ RSILO_DEV_MODE: 'false', STORAGE_LIMITER: allowAll });
+    const env = createEnv({ RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, STORAGE_LIMITER: allowAll });
     const token = seedToken(env, 'alice', 'documents:rw');
 
     const res = await getDocument(env, token);
@@ -125,14 +126,14 @@ describe('Opaque bearer tokens', () => {
   });
 
   it('rejects a signed JWT in production mode, even with JWT_SECRET set', async () => {
-    const env = createEnv({ RSILO_DEV_MODE: 'false', STORAGE_LIMITER: allowAll, JWT_SECRET: 'jwt-secret' });
+    const env = createEnv({ RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, STORAGE_LIMITER: allowAll, JWT_SECRET: 'jwt-secret' });
     seedToken(env, 'alice', 'documents:rw');
 
     expectInvalidToken(await getDocument(env, await signedJwt('alice', 'jwt-secret')));
   });
 
   it('returns 503 when the DB binding is missing', async () => {
-    const env = { STORAGE: createStorage(), RSILO_DEV_MODE: 'false' };
+    const env = { STORAGE: createStorage(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
 
     const res = await getDocument(env, 'anything');
 

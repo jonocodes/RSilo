@@ -37,6 +37,8 @@ const TEST_ENV = {
     },
   } as any,
   DB: {} as any,
+  // The Instance serves one Account; these tests use it under this name.
+  ACCOUNT_USERNAME: 'testuser',
 };
 
 describe('RemoteStorage.js client compatibility', () => {
@@ -52,7 +54,7 @@ describe('RemoteStorage.js client compatibility', () => {
 
   it('WebFinger returns remoteStorage link with api: simple', async () => {
     const res = await app.request(
-      'http://localhost/.well-known/webfinger?resource=acct:testuser@example.com',
+      'http://localhost/.well-known/webfinger?resource=acct:testuser@localhost:8787',
       { method: 'GET' },
       TEST_ENV
     );
@@ -561,6 +563,7 @@ describe('Error handling compatibility', () => {
           })
         })
       } as any,
+      ACCOUNT_USERNAME: 'quotauser',
     };
 
     const quotaApp = createServer(quotaEnv);

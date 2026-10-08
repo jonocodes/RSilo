@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { hashPassword, signSessionToken } from '../src/services/auth';
+import { PRODUCTION_INSTANCE } from './helpers/instance';
 
 const SESSION_SECRET = 'test-session-secret';
 const SESSION_EXPIRY = 28800;
@@ -92,7 +93,7 @@ describe('Files — login', () => {
 
   it('rejects a forged fallback-secret cookie when SESSION_SECRET is missing', async () => {
     const token = await signSessionToken('alice', 'dev-session-secret-change-in-production', SESSION_EXPIRY);
-    const env = { STORAGE: mockStorage, DB: makeDb(), RSILO_DEV_MODE: 'false' } as any;
+    const env = { STORAGE: mockStorage, DB: makeDb(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE } as any;
     const res = await app.request('http://localhost/account/browse', {
       method: 'GET',
       headers: { Cookie: `rsilo_session=${token}` },
@@ -106,6 +107,7 @@ describe('Files — login', () => {
       STORAGE: mockStorage,
       DB: makeDb({ username: 'alice', password_hash: passwordHash }),
       RSILO_DEV_MODE: 'false',
+      ...PRODUCTION_INSTANCE,
     } as any;
     const body = new URLSearchParams({ username: 'alice', password: 'correctpass' });
     const res = await app.request('http://localhost/account/login', {
@@ -148,6 +150,7 @@ describe('Files — login', () => {
       DB: makeDb(null),
       SESSION_SECRET,
       RSILO_DEV_MODE: 'false',
+      ...PRODUCTION_INSTANCE,
       LOGIN_LIMITER: { limit: async () => ({ success: ++attempts <= 5 }) },
     } as any;
     const request = () => app.request('http://localhost/account/login', {
@@ -469,7 +472,7 @@ describe('Files — tokens', () => {
   it('POST /account/tokens/:id/revoke redirects to tokens page', async () => {
     const revokeDb = {
       prepare: (_sql: string) => ({
-        bind: (..._args: any[]) => ({ run: async () => ({}) }),
+        bind: (..._args: any[]) => ({ run: async () => ({}), first: async () => ({ username: 'alice' }) }),
       }),
     } as any;
     const env = { STORAGE: mockStorage, DB: revokeDb, SESSION_SECRET } as any;

@@ -7,6 +7,12 @@ SESSION_SECRET=change-me-to-a-random-string
 # Required in production: protects /admin/* endpoints.
 ADMIN_SECRET=change-me-to-a-different-random-string
 
+# Required in production: the one Account this Instance serves, and the origin
+# every advertised URL is built from. In dev mode they default to the values
+# below, so these lines are optional locally.
+ACCOUNT_USERNAME=alice
+PUBLIC_BASE_URL=http://localhost:8787
+
 # Optional maximum object size in bytes (defaults to 10 MiB).
 MAX_OBJECT_SIZE_BYTES=10485760
 

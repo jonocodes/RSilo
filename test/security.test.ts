@@ -69,6 +69,21 @@ describe('Security Tests', () => {
     it('rejects user impersonation via path', async () => {
       const env = createTestEnv();
       const app = createServer(env);
+      // A token whose subject is not the Account (e.g. a pre-migration token).
+      const token = seedToken(env, 'bob', 'documents:rw');
+
+      const res = await app.request(
+        'http://localhost/storage/alice/documents/test.txt',
+        { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+        env
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it('does not reveal storage of users other than the Account', async () => {
+      const env = createTestEnv();
+      const app = createServer(env);
       const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
@@ -77,7 +92,7 @@ describe('Security Tests', () => {
         env
       );
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(404);
     });
   });
 
@@ -140,6 +155,7 @@ describe('Security Tests', () => {
             })
           })
         } as any,
+        ACCOUNT_USERNAME: 'quotauser',
       };
       const app = createServer(env);
       const token = seedToken(env, 'quotauser', 'documents:rw');

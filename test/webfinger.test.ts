@@ -52,7 +52,7 @@ describe('WebFinger endpoint', () => {
 
   it('GET /.well-known/webfinger returns JRD with storage href', async () => {
     const res = await app.request(
-      'http://localhost/.well-known/webfinger?resource=acct:alice@example.com',
+      'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
       { method: 'GET' },
       TEST_ENV
     );
@@ -61,7 +61,7 @@ describe('WebFinger endpoint', () => {
     expect(res.headers.get('Content-Type')).toContain('application/jrd+json');
 
     const json = await res.json() as any;
-    expect(json.subject).toBe('acct:alice@example.com');
+    expect(json.subject).toBe('acct:alice@localhost:8787');
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink).toBeDefined();
     expect(storageLink.href).toContain('/storage/alice');
@@ -70,7 +70,7 @@ describe('WebFinger endpoint', () => {
 
   it('WebFinger returns correct auth endpoint URL', async () => {
     const res = await app.request(
-      'http://localhost/.well-known/webfinger?resource=acct:bob@example.com',
+      'http://localhost/.well-known/webfinger?resource=acct:alice@localhost:8787',
       { method: 'GET' },
       TEST_ENV
     );
@@ -79,7 +79,17 @@ describe('WebFinger endpoint', () => {
     const json = await res.json() as any;
     const storageLink = json.links?.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(storageLink.properties).toBeDefined();
-    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toContain('/oauth/bob/authorize');
+    expect(storageLink.properties['http://tools.ietf.org/html/rfc6749#section-4.2']).toBe('http://localhost:8787/oauth/alice/authorize');
+  });
+
+  it('WebFinger returns 404 for a user other than the Account', async () => {
+    const res = await app.request(
+      'http://localhost/.well-known/webfinger?resource=acct:bob@localhost:8787',
+      { method: 'GET' },
+      TEST_ENV
+    );
+
+    expect(res.status).toBe(404);
   });
 });
 

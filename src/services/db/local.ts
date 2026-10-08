@@ -44,6 +44,10 @@ export class LocalDatabase {
     stmt.run(id, username, passwordHash);
   }
 
+  async createUserIfAbsent(id: string, username: string): Promise<void> {
+    this.db.prepare('INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)').run(id, username);
+  }
+
   async getStorageUsage(userId: string): Promise<number> {
     const stmt = this.db.prepare('SELECT used_storage_bytes FROM users WHERE id = ?');
     const result = stmt.get(userId) as { used_storage_bytes: number } | undefined;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
+import { PRODUCTION_INSTANCE } from '../helpers/instance';
 
 interface StorageMock {
   get: (key: string) => Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string } } | null>;
@@ -71,7 +72,7 @@ describe('RemoteStorage Protocol Compliance', () => {
 
       it('returns 503 when the DB binding is missing in production mode', async () => {
         const storage = createTestStorage();
-        const env = { STORAGE: storage, RSILO_DEV_MODE: 'false' };
+        const env = { STORAGE: storage, RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
         const app = createServer(env as any);
         const token = 'opaque-token';
 
@@ -652,6 +653,22 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
+      // bob is not the Account, so his token cannot touch the Account's storage.
+      const bobToken = seedToken(env, 'bob');
+
+      const res = await app.request(
+        'http://localhost/storage/alice/documents/bob-writing.txt',
+        { method: 'PUT', headers: { Authorization: `Bearer ${bobToken}`, 'Content-Type': 'text/plain' }, body: 'bob tries to write to alice' },
+        env
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it('storage of a user other than the Account is unreachable', async () => {
+      const storage = createTestStorage();
+      const env = createEnv(storage);
+      const app = createServer(env);
       const aliceToken = seedToken(env, 'alice');
 
       const res = await app.request(
@@ -660,7 +677,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         env
       );
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(404);
     });
   });
 
