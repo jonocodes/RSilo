@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -65,7 +66,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('storage endpoint returns CORS headers for cross-origin requests', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/cors-test.txt',
@@ -99,7 +100,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('handles GET with folder trailing slash', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/folder/file.txt',
@@ -125,7 +126,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('immutable GET returns 304 with ETag when unchanged', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/immutable.txt',
@@ -162,7 +163,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('PUT creates resource with 201 status', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     const res = await app.request(
       'http://localhost/storage/testuser/documents/new-resource.txt',
@@ -182,7 +183,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('PUT to existing resource updates with 200 status', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/existing.txt',
@@ -208,7 +209,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('DELETE returns 200 on success', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/to-delete.txt',
@@ -233,7 +234,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('GET returns proper Content-Length for text content', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
     const content = 'Hello, RemoteStorage!';
 
     await app.request(
@@ -260,7 +261,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   it('folder listing items have ETag property', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/etag-folder/file.txt',
@@ -315,7 +316,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('returns 412 Precondition Failed for stale If-Match', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/stale-test.txt',
@@ -345,7 +346,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('returns 400 Bad Request for invalid path', async () => {
-    const token = createTestToken('testuser', '*');
+    const token = seedToken(TEST_ENV, 'testuser', '*');
 
     const res = await app.request(
       'http://localhost/storage/testuser/../etc/passwd',
@@ -360,7 +361,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('returns 400 Bad Request for folder write attempt', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     const res = await app.request(
       'http://localhost/storage/testuser/documents/folder-path/',
@@ -376,7 +377,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('HEAD request returns headers without body', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/documents/head-test.txt',
@@ -405,7 +406,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('PUT with no explicit Content-Type uses default', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     const res = await app.request(
       'http://localhost/storage/testuser/documents/no-content-type.txt',
@@ -433,7 +434,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('GET returns Content-Type header correctly', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     await app.request(
       'http://localhost/storage/testuser/pictures/image.jpg',
@@ -459,7 +460,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('multiple files in folder listing shows all items', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     for (const name of ['file1.txt', 'file2.txt', 'file3.txt']) {
       await app.request(
@@ -491,7 +492,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('DELETE non-existent file returns 404', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
 
     const res = await app.request(
       'http://localhost/storage/testuser/documents/never-exists.txt',
@@ -506,7 +507,7 @@ describe('Error handling compatibility', () => {
   });
 
   it('PUT then GET returns identical content', async () => {
-    const token = createTestToken('testuser');
+    const token = seedToken(TEST_ENV, 'testuser');
     const content = 'Hello, World! This is test content.';
 
     await app.request(
@@ -563,7 +564,7 @@ describe('Error handling compatibility', () => {
     };
 
     const quotaApp = createServer(quotaEnv);
-    const quotaToken = createTestToken('quotauser');
+    const quotaToken = seedToken(quotaEnv, 'quotauser');
 
     const res = await quotaApp.request(
       'http://localhost/storage/quotauser/documents/oversize.txt',
@@ -594,7 +595,7 @@ describe('Error handling compatibility', () => {
         }),
       } as any,
     };
-    const quotaToken = createTestToken('alice');
+    const quotaToken = seedToken(quotaEnv, 'alice');
     const res = await app.request(
       'http://localhost/storage/alice/documents/exact-fit.txt',
       {
@@ -636,7 +637,7 @@ it('repeated invalid-token requests are rate limited with 429', async () => {
 
     const res = await rateApp.request(
       'http://localhost/storage/testuser/documents/',
-      { method: 'GET', headers: { 'Authorization': `Bearer ${createTestToken('testuser')}` } },
+      { method: 'GET', headers: { 'Authorization': `Bearer ${seedToken(TEST_ENV, 'testuser')}` } },
       rateLimitEnv
     );
 

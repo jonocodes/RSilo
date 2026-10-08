@@ -8,7 +8,6 @@ export interface AppEnv {
   STORAGE_LIMITER?: RateLimit;
   ADMIN_SECRET?: string;
   SESSION_SECRET?: string;
-  JWT_SECRET?: string;
   RSILO_DEV_MODE?: string;
   PUBLIC_BASE_URL?: string;
   MAX_OBJECT_SIZE_BYTES?: string;

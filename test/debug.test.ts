@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
-import { createTestToken } from '../src/services/auth';
+import { seedToken } from './helpers/tokens';
 
 class FakeStorage {
   objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
@@ -82,8 +82,8 @@ describe('GET /admin/debug/token', () => {
     app = createServer(env);
   });
 
-  it('introspects a valid dev token', async () => {
-    const token = createTestToken('alice', 'documents:rw pictures:r');
+  it('introspects a valid opaque token', async () => {
+    const token = seedToken(env, 'alice', 'documents:rw pictures:r');
     const res = await app.request(
       `http://localhost/admin/debug/token?token=${encodeURIComponent(token)}`,
       { method: 'GET' },
@@ -94,12 +94,12 @@ describe('GET /admin/debug/token', () => {
     const json = await res.json() as any;
     expect(json.valid).toBe(true);
     expect(json.sub).toBe('alice');
-    expect(json.source).toBe('dev_token');
+    expect(json.source).toBe('oauth_token');
     expect(json.parsed_scopes).toContainEqual({ raw: 'documents:rw', module: 'documents', permissions: 'rw' });
   });
 
   it('reports scope checks against the token scopes', async () => {
-    const token = createTestToken('alice', 'documents:rw');
+    const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
       `http://localhost/admin/debug/token?token=${encodeURIComponent(token)}&scope=documents:rw&scope=pictures:r`,
       { method: 'GET' },
@@ -123,8 +123,23 @@ describe('GET /admin/debug/token', () => {
     expect(json.valid).toBe(false);
   });
 
+  it('reports an unsigned JWT as invalid', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ sub: 'alice', scopes: '*:rw', exp: 9999999999 })).toString('base64url');
+    const res = await app.request(
+      `http://localhost/admin/debug/token?token=${header}.${payload}.`,
+      { method: 'GET' },
+      env,
+    );
+
+    const json = await res.json() as any;
+    expect(json.valid).toBe(false);
+    expect(json.source).toBeNull();
+    expect(json).not.toHaveProperty('jwt_secret_set');
+  });
+
   it('accepts a token in a POST body', async () => {
-    const token = createTestToken('alice', 'documents:rw');
+    const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
       'http://localhost/admin/debug/token',
       {
@@ -250,7 +265,7 @@ describe('GET /admin/debug/env', () => {
     expect(json.bindings.STORAGE_LIMITER).toBe(false);
     expect(json.storage_backend).toBe('local');
     expect(json.secrets_set.ADMIN_SECRET).toBe(true);
-    expect(json.secrets_set.JWT_SECRET).toBe(false);
+    expect(json.secrets_set).not.toHaveProperty('JWT_SECRET');
 
     const text = await new Response(JSON.stringify(json)).text();
     expect(text).not.toContain('super-secret-value');
@@ -365,7 +380,7 @@ describe('GET /admin/debug/echo', () => {
   });
 
   it('introspects a token from the query and redacts it from the echo', async () => {
-    const token = createTestToken('alice', 'documents:rw');
+    const token = seedToken(env, 'alice', 'documents:rw');
     const res = await app.request(
       `http://localhost/admin/debug/echo?token=${encodeURIComponent(token)}`,
       { method: 'GET' },

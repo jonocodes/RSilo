@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createServer, createTestToken } from '../../src/index';
+import { createServer } from '../../src/index';
+import { seedToken } from '../helpers/tokens';
 
 interface StorageMock {
   get: (key: string) => Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string } } | null>;
@@ -54,7 +55,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode('hello'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -68,11 +69,11 @@ describe('RemoteStorage Protocol Compliance', () => {
         expect(await res.text()).toBe('hello');
       });
 
-      it('rejects unsigned tokens when JWT_SECRET is missing in production mode', async () => {
+      it('returns 503 when the DB binding is missing in production mode', async () => {
         const storage = createTestStorage();
-        const env = { ...createEnv(storage), RSILO_DEV_MODE: 'false' };
+        const env = { STORAGE: storage, RSILO_DEV_MODE: 'false' };
         const app = createServer(env as any);
-        const token = createTestToken('alice');
+        const token = 'opaque-token';
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/test.txt',
@@ -87,7 +88,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/does-not-exist.txt',
@@ -102,7 +103,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/pictures/photo.jpg', new ArrayBuffer(10), { httpMetadata: { contentType: 'image/jpeg' } });
 
@@ -119,7 +120,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
         const content = 'Hello, World!';
         await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode(content), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -136,7 +137,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode('test'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -156,7 +157,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/new.txt',
@@ -171,7 +172,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/existing.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -188,7 +189,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/etag-test.txt',
@@ -218,7 +219,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/folder/',
@@ -233,7 +234,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/immutable.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -250,7 +251,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/match-test.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -272,7 +273,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/to-delete.txt', new TextEncoder().encode('delete me'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -289,7 +290,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/never-existed.txt',
@@ -304,7 +305,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/folder/',
@@ -321,7 +322,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         await storage.put('users/alice/storage/documents/head-test.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -341,7 +342,7 @@ describe('RemoteStorage Protocol Compliance', () => {
         const storage = createTestStorage();
         const env = createEnv(storage);
         const app = createServer(env);
-        const token = createTestToken('alice');
+        const token = seedToken(env, 'alice');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/does-not-exist.txt',
@@ -359,7 +360,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -378,7 +379,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -397,7 +398,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/subfolder/file.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -416,7 +417,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/empty/',
@@ -432,7 +433,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -465,7 +466,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/alice/pictures/photo.jpg',
@@ -480,7 +481,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/does-not-exist.txt',
@@ -495,7 +496,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/stale.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -512,7 +513,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/existing.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -529,7 +530,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/alice/../etc/passwd',
@@ -563,7 +564,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/cors-test.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -582,7 +583,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/immutable.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -607,7 +608,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice');
+      const token = seedToken(env, 'alice');
 
       await storage.put('users/alice/storage/documents/etag-change.txt', new TextEncoder().encode('v1'), { httpMetadata: { contentType: 'text/plain' } });
       const res1 = await app.request(
@@ -634,7 +635,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const bobToken = createTestToken('bob');
+      const bobToken = seedToken(env, 'bob');
 
       await storage.put('users/alice/storage/documents/private.txt', new TextEncoder().encode('alice secret'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -651,7 +652,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const aliceToken = createTestToken('alice');
+      const aliceToken = seedToken(env, 'alice');
 
       const res = await app.request(
         'http://localhost/storage/bob/documents/alice-writing.txt',
@@ -668,7 +669,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const putRes = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -689,7 +690,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:r');
+      const token = seedToken(env, 'alice', 'documents:r');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -704,7 +705,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:r');
+      const token = seedToken(env, 'alice', 'documents:r');
 
       await storage.put('users/alice/storage/documents/readable.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
 
@@ -721,7 +722,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = createTestToken('alice', '*');
+      const token = seedToken(env, 'alice', '*');
 
       const docRes = await app.request(
         'http://localhost/storage/alice/documents/test.txt',

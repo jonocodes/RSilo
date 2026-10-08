@@ -1,33 +1,30 @@
 import type { Context, Next } from '../types';
-import { parseAuthHeader, verifyToken, hasScope, scopeFromPath } from '../services/auth';
+import { parseAuthHeader, hasScope, scopeFromPath } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
-import { getJwtSecret, isLocalDevelopment } from '../config';
 
+// Access tokens are opaque bearer tokens: a token is valid exactly while its
+// unexpired row exists in oauth_tokens (ADR-0003).
 async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayload | null> {
   const db = (c.env as any)?.DB;
-  if (db && typeof db.prepare === 'function') {
-    const row = await db.prepare(
-      'SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?'
-    ).bind(token, Math.floor(Date.now() / 1000)).first() as any;
+  if (!db || typeof db.prepare !== 'function') return null;
 
-    if (row) {
-      return {
-        sub: row.user_id,
-        scopes: row.scopes,
-        iat: row.created_at,
-        exp: row.expires_at,
-      };
-    }
-  }
+  const row = await db.prepare(
+    'SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?'
+  ).bind(token, Math.floor(Date.now() / 1000)).first() as any;
 
-  const jwtSecret = getJwtSecret(c.env);
-  if (jwtSecret) return verifyToken(token, jwtSecret);
-  return isLocalDevelopment(c.env) ? verifyToken(token) : null;
+  if (!row) return null;
+  return {
+    sub: row.user_id,
+    scopes: row.scopes,
+    iat: row.created_at,
+    exp: row.expires_at,
+  };
 }
 
 export function authMiddleware() {
   return async (c: Context, next: Next) => {
-    if (!getJwtSecret(c.env) && !isLocalDevelopment(c.env)) {
+    // Tokens live in D1, so storage auth is configured once the DB is bound.
+    if (!(c.env as any)?.DB) {
       return c.text('Server authentication is not configured', 503);
     }
 

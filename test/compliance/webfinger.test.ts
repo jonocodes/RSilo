@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createServer, createTestToken } from '../../src/index';
+import { createServer } from '../../src/index';
+import { seedToken } from '../helpers/tokens';
 
 function createTestEnv() {
   return {
@@ -228,7 +229,7 @@ describe('ETag Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -252,7 +253,7 @@ describe('ETag Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -275,7 +276,7 @@ describe('ETag Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -298,7 +299,7 @@ describe('ETag Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -323,7 +324,7 @@ describe('Content-Type Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/custom.txt',
@@ -346,7 +347,7 @@ describe('Content-Type Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/data.json',
@@ -369,7 +370,7 @@ describe('Content-Type Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/no-type.txt',
@@ -394,7 +395,7 @@ describe('Folder Listing Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',
@@ -421,7 +422,7 @@ describe('Folder Listing Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',
@@ -449,7 +450,7 @@ describe('Folder Listing Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',
@@ -473,7 +474,7 @@ describe('Folder Listing Compliance', () => {
     };
     const env = { STORAGE: storage, DB: {} } as any;
     const app = createServer(env);
-    const token = createTestToken('alice');
+    const token = seedToken(env, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/',

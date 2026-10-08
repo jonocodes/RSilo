@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 function createTestEnv() {
   const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
@@ -54,7 +55,7 @@ describe('Security Tests', () => {
     it('rejects path with .. segments', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/alice/../bob/documents/test.txt',
@@ -68,7 +69,7 @@ describe('Security Tests', () => {
     it('rejects user impersonation via path', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/bob/documents/test.txt',
@@ -84,7 +85,7 @@ describe('Security Tests', () => {
     it('rejects read-only scope for write operation', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:r');
+      const token = seedToken(env, 'alice', 'documents:r');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/test.txt',
@@ -105,7 +106,7 @@ describe('Security Tests', () => {
     it('rejects module scope bypass', async () => {
       const env = createTestEnv();
       const app = createServer(env);
-      const token = createTestToken('alice', 'documents:rw');
+      const token = seedToken(env, 'alice', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/alice/pictures/test.txt',
@@ -141,7 +142,7 @@ describe('Security Tests', () => {
         } as any,
       };
       const app = createServer(env);
-      const token = createTestToken('quotauser', 'documents:rw');
+      const token = seedToken(env, 'quotauser', 'documents:rw');
 
       const res = await app.request(
         'http://localhost/storage/quotauser/documents/large.txt',

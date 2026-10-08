@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { waitForServer } from './helpers';
@@ -9,15 +9,22 @@ const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-storage');
 const DB_PATH = join(DATA_DIR, 'test.db');
 const STORAGE_DIR = join(DATA_DIR, 'storage');
 
+let devToken = '';
+
+// Issues an opaque token row in the server's offline DB via `bun run dev-token`.
+function createDevToken(): string {
+  const res = spawnSync('bun', ['run', 'src/scripts/dev-token.ts', 'alice', 'documents:rw pictures:rw public:rw'], {
+    env: { ...process.env, DB_PATH },
+    encoding: 'utf8',
+  });
+  if (res.status !== 0) {
+    throw new Error(`dev-token failed: ${res.stderr}`);
+  }
+  return res.stdout.trim();
+}
+
 function createTestToken(): string {
-  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-  const payload = Buffer.from(JSON.stringify({
-    sub: 'alice',
-    scopes: 'documents:rw pictures:rw public:rw',
-    iat: Math.floor(Date.now() / 1000),
-    exp: 9999999999,
-  })).toString('base64url');
-  return `${header}.${payload}.`;
+  return devToken;
 }
 
 describe('Storage E2E', () => {
@@ -54,6 +61,8 @@ describe('Storage E2E', () => {
     if (createUserResponse.status !== 201) {
       throw new Error(`Failed to create E2E user: ${createUserResponse.status} ${await createUserResponse.text()}`);
     }
+
+    devToken = createDevToken();
   });
 
   afterAll(async () => {
@@ -164,6 +173,18 @@ describe('Storage E2E', () => {
     });
 
     expect(res.status).toBe(404);
+  });
+
+  it('rejects an unsigned JWT with 401 invalid_token', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ sub: 'alice', scopes: '*:rw', exp: 9999999999 })).toString('base64url');
+
+    const res = await fetch(`${SERVER_URL}/storage/alice/documents/test.txt`, {
+      headers: { 'Authorization': `Bearer ${header}.${payload}.` },
+    });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
   });
 
   it('PUT without auth returns 401', async () => {

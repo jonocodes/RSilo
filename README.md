@@ -81,7 +81,6 @@ bun run deploy
 # Secrets
 wrangler secret put SESSION_SECRET   # bun run secret
 wrangler secret put ADMIN_SECRET     # bun run secret
-wrangler secret put JWT_SECRET       # bun run secret
 ```
 
 Alternatively, let wrangler provision the resources: delete the `database_id` line from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy it from `wrangler d1 list` if you need them later.
@@ -92,9 +91,8 @@ Alternatively, let wrangler provision the resources: delete the `database_id` li
 |--------|---------|
 | `SESSION_SECRET` | Signs file manager and OAuth session cookies — required |
 | `ADMIN_SECRET` | Protects `/admin/*` endpoints — required |
-| `JWT_SECRET` | Verifies signed JWT access tokens — required |
 
-Generate each secret with `bun run secret`. Production requests fail with `503` when the relevant secret is missing; unsigned tokens and other insecure bypasses are available only when `RSILO_DEV_MODE=true` is explicitly set for local development.
+Generate each secret with `bun run secret`. Production requests fail with `503` when the relevant secret is missing; insecure bypasses are available only when `RSILO_DEV_MODE=true` is explicitly set for local development. Storage access tokens need no secret: they are opaque values stored in D1 (see [Authentication](#authentication)).
 
 `MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
 
@@ -223,7 +221,7 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin`, the session secret has a local-only fallback, and unsigned test tokens are accepted when `JWT_SECRET` is unset. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
+`bun run dev:offline` explicitly enables local-development mode: `ADMIN_SECRET` defaults to `admin` and the session secret has a local-only fallback. Set the secrets in `.dev.vars` or the environment to override those defaults. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure its secrets and explicit local-development mode.
 
 ## API reference
 
@@ -250,15 +248,21 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported.
 
+Access tokens are **opaque bearer tokens**: random strings stored as rows in the D1 `oauth_tokens` table. A token is valid exactly while its unexpired row exists, so revoking an app (deleting its row) takes effect on the very next request. JWTs — signed or unsigned — are never accepted, in production or in local-development mode ([ADR-0003](docs/adr/0003-opaque-bearer-tokens-only.md)).
+
 ### Dev tokens (testing only)
 
-Unsigned JWTs, accepted only when `JWT_SECRET` is **not** set. Setting `JWT_SECRET` disables them entirely — never rely on them in production. Generate one with:
+`bun run dev-token` inserts an opaque token row (30-day expiry) into a local database and prints the token. It creates the user and a `dev-token:<username>` client if they do not exist yet.
 
 ```bash
+# Offline DB used by `bun run dev:offline` (DB_PATH, default data/remotestorage.db)
 TOKEN="$(bun run dev-token alice 'documents:rw pictures:rw')"
+
+# Local D1 used by `bun run dev` (run `bun run db:migrate` once first)
+TOKEN="$(bun run dev-token --d1 alice 'documents:rw pictures:rw')"
 ```
 
-`createTestToken(username, scopes)` is also exported from `src/index.ts` if you need it in code.
+Revoke a dev token like any other: from `/admin` (Authorized apps) or by deleting its row.
 
 ## Storage scopes
 

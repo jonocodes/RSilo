@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -50,7 +51,7 @@ describe('PUT + GET storage', () => {
   });
 
   it('PUT a document and GET it back', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
     const body = 'hello remote storage';
 
     const putRes = await app.request(
@@ -83,7 +84,7 @@ describe('PUT + GET storage', () => {
   });
 
   it('GET returns ETag header', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/etag-test',
@@ -114,7 +115,7 @@ describe('PUT + GET storage', () => {
   });
 
   it('GET missing document returns 404', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/does-not-exist',
@@ -159,7 +160,7 @@ describe('PUT + GET storage', () => {
 describe('Object size limits', () => {
   it('rejects an oversized upload before storing it', async () => {
     const app = createServer(TEST_ENV);
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
     const env = { ...TEST_ENV, MAX_OBJECT_SIZE_BYTES: '4' };
     const res = await app.request('http://localhost/storage/alice/documents/large.txt', {
       method: 'PUT',
@@ -188,7 +189,7 @@ describe('DELETE storage', () => {
   });
 
   it('DELETE removes file', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/to-delete',
@@ -224,7 +225,7 @@ describe('DELETE storage', () => {
   });
 
   it('DELETE missing file returns 404', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/never-existed',
@@ -239,7 +240,7 @@ describe('DELETE storage', () => {
   });
 
   it('DELETE returns ETag header', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/delete-with-etag',
@@ -278,7 +279,7 @@ describe('HEAD storage', () => {
   });
 
   it('HEAD returns headers without body', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/head-test',
@@ -306,7 +307,7 @@ describe('HEAD storage', () => {
   });
 
   it('HEAD missing file returns 404', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/never-existed',
@@ -333,7 +334,7 @@ describe('Folder listing', () => {
   });
 
   it('GET folder listing returns JSON with items', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/folder-test/file1.txt',
@@ -374,7 +375,7 @@ describe('Folder listing', () => {
   });
 
   it('GET folder listing includes direct children only', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/nested-test/level1/level2/file.txt',
@@ -403,7 +404,7 @@ describe('Folder listing', () => {
   });
 
   it('GET empty folder listing returns empty items', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const getRes = await app.request(
       'http://localhost/storage/alice/documents/empty-folder/',
@@ -428,7 +429,7 @@ describe('Path validation', () => {
   });
 
   it('path with double dots returns 400 or 404', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/../../../etc/passwd',
@@ -443,7 +444,7 @@ describe('Path validation', () => {
   });
 
   it('path with null byte returns 400', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/file\u0000name',
@@ -458,7 +459,7 @@ describe('Path validation', () => {
   });
 
   it('PUT to folder path returns 400', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/folder-path/',
@@ -475,7 +476,7 @@ describe('Path validation', () => {
   });
 
   it('DELETE folder path returns 400', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/folder-path/',
@@ -498,7 +499,7 @@ describe('If-Match / If-None-Match', () => {
   });
 
   it('PUT with correct If-Match succeeds', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const putRes = await app.request(
       'http://localhost/storage/alice/documents/if-match-test',
@@ -531,7 +532,7 @@ describe('If-Match / If-None-Match', () => {
   });
 
   it('PUT with stale If-Match returns 412', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/stale-if-match',
@@ -561,7 +562,7 @@ describe('If-Match / If-None-Match', () => {
   });
 
   it('PUT with If-None-Match:* on existing file returns 412', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/existing-file',
@@ -591,7 +592,7 @@ describe('If-Match / If-None-Match', () => {
   });
 
   it('GET with If-None-Match returns 304 when matching', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     await app.request(
       'http://localhost/storage/alice/documents/304-test',
@@ -636,7 +637,7 @@ describe('Public storage', () => {
   });
 
   it('GET public file without auth returns 200', async () => {
-    const token = createTestToken('alice', 'documents:rw');
+    const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
     await app.request(
       'http://localhost/storage/alice/public/documents/public-file.txt',
       {
@@ -679,7 +680,7 @@ describe('Public storage', () => {
   });
 
   it('GET /storage/:user/public (no trailing slash) with auth redirects to /public/', async () => {
-    const token = createTestToken('alice', 'public:rw');
+    const token = seedToken(TEST_ENV, 'alice', 'public:rw');
     const res = await app.request(
       'http://localhost/storage/alice/public',
       { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
@@ -767,7 +768,6 @@ describe('DB-backed OAuth token auth', () => {
 
 describe('Storage quota — tracking', () => {
   let app: ReturnType<typeof createServer>;
-  const token = createTestToken('alice');
 
   beforeEach(() => {
     storage.clear();
@@ -795,6 +795,7 @@ describe('Storage quota — tracking', () => {
         }),
       } as any,
     };
+    const token = seedToken(dbEnv, 'alice');
 
     const body = 'hello storage';
     await app.request('http://localhost/storage/alice/documents/track.txt', {
@@ -831,6 +832,7 @@ describe('Storage quota — tracking', () => {
         }),
       } as any,
     };
+    const token = seedToken(dbEnv, 'alice');
 
     await app.request('http://localhost/storage/alice/documents/todelete.txt', {
       method: 'DELETE',

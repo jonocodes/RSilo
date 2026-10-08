@@ -39,7 +39,7 @@ export class LocalDatabase {
     return result || null;
   }
 
-  async createUser(id: string, username: string, passwordHash: string): Promise<void> {
+  async createUser(id: string, username: string, passwordHash: string | null): Promise<void> {
     const stmt = this.db.prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)');
     stmt.run(id, username, passwordHash);
   }

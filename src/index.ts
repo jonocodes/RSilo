@@ -7,7 +7,6 @@ import { accountRouter } from './routes/account';
 import { corsMiddleware } from './middleware/cors';
 import { mountDocs } from './routes/docs';
 export { buildKey, R2Storage } from './services/r2';
-export { createTestToken, verifyToken } from './services/auth';
 export type { AppEnv } from './types';
 
 const app = new Hono();

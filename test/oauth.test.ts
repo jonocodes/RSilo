@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createServer, createTestToken } from '../src/index';
+import { createServer } from '../src/index';
+import { seedToken } from './helpers/tokens';
 import { hashPassword, signSessionToken } from '../src/services/auth';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
@@ -253,7 +254,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   });
 
   it('OAuth endpoint works with dev token for storage', async () => {
-    const token = createTestToken('alice');
+    const token = seedToken(TEST_ENV, 'alice');
 
     const res = await app.request(
       'http://localhost/oauth/alice',
