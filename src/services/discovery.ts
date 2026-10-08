@@ -1,9 +1,12 @@
 import type { InstanceConfig } from '../config';
 
-// Every URL the Instance advertises is built here, from PUBLIC_BASE_URL only.
-// The request's Host / X-Forwarded-Proto are never consulted: Cloudflare Access
-// applications are hostname-bound, so advertising another host could route the
-// Owner around the Access gate.
+// Every URL the Instance advertises is built here, from the resolved public
+// origin only (config.ts getInstanceConfig: PUBLIC_BASE_URL, or the request's
+// own origin when unset). The raw Host header and X-Forwarded-Host / -Proto are
+// never consulted. Cloudflare Access applications are hostname-bound; on a
+// hostname Access does not cover, /account has no ctx.access and fails closed
+// to the finish-setup page, so advertising the request's host cannot route
+// the Owner around the Access gate.
 
 export interface AccountUrls {
   base: string;
@@ -44,7 +47,8 @@ function normaliseHost(host: string, protocol: string): string | null {
  * - `acct:<ACCOUNT_USERNAME>@<host>` (scheme, username and host case-insensitive);
  *   the port may be omitted, since clients often build it from the bare hostname
  * - `http://<host>` / `https://<host>`, with or without a trailing slash
- * where `<host>` equals the PUBLIC_BASE_URL host, including a non-default port.
+ * where `<host>` equals the resolved public host (PUBLIC_BASE_URL's, or the
+ * request's own when unset), including a non-default port.
  */
 export function isAccountResource(resource: string, config: InstanceConfig): boolean {
   const { protocol, hostname } = new URL(config.publicBaseUrl);

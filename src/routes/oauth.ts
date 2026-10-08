@@ -17,7 +17,8 @@ const forAccount = [requireInstanceConfig(), requireAccountPath(), requireAccoun
 // and remoteStorage.js cache discovery results, so the old URL stays as a
 // redirect passing the query string through byte-for-byte: it is sliced from
 // the raw request URL, never parsed and re-serialised. The target comes from
-// PUBLIC_BASE_URL so the Owner lands on the Access-protected hostname.
+// resolved public origin (PUBLIC_BASE_URL when set) so the Owner lands on the
+// Access-protected hostname.
 oauthRouter.get('/:user/authorize', requireInstanceConfig(), requireAccountPath(), (c) => {
   const url = c.req.url;
   const queryStart = url.indexOf('?');

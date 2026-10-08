@@ -1,7 +1,8 @@
 import type { Context, Next } from '../types';
 import { configurationMessage, getInstanceConfig, isLocalDevelopment } from '../config';
 import type { InstanceConfig } from '../config';
-import { ensureAccount, usernameMismatchMessage } from '../services/account';
+import { ensureAccount, storedUsernames, usernameMismatchMessage } from '../services/account';
+import type { UsernameMismatch } from '../ui/setup-pages';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -9,10 +10,10 @@ declare module 'hono' {
   }
 }
 
-/** Resolves ACCOUNT_USERNAME / PUBLIC_BASE_URL, or answers 503 naming what is wrong. */
+/** Resolves ACCOUNT_USERNAME / PUBLIC_BASE_URL for this request, or answers 503 naming an invalid value. */
 export function requireInstanceConfig() {
   return async (c: Context, next: Next) => {
-    const result = getInstanceConfig(c.env);
+    const result = getInstanceConfig(c.env, c.req.url);
     if ('problems' in result) return c.text(configurationMessage(result.problems), 503);
     c.set('instance', result.config);
     await next();
@@ -22,10 +23,11 @@ export function requireInstanceConfig() {
 /**
  * Ensures the Account row exists before a route that reads or writes it runs.
  * In the username-mismatch state the request is refused with 503 and a setup
- * message (plain text, or `render(message)` for human surfaces). Must run
+ * message: plain text naming no stored usernames, or, for the Owner-gated
+ * human surfaces only, `render(mismatch)` with the stored usernames. Must run
  * after requireInstanceConfig() or requireOwner().
  */
-export function requireAccountRow(render?: (message: string) => string) {
+export function requireAccountRow(render?: (mismatch: UsernameMismatch) => string) {
   return async (c: Context, next: Next) => {
     const { accountUsername } = c.get('instance');
     const db = (c.env as any)?.DB;
@@ -37,8 +39,9 @@ export function requireAccountRow(render?: (message: string) => string) {
 
     const status = await ensureAccount(db, accountUsername);
     if (status === 'username_mismatch') {
-      const message = usernameMismatchMessage(accountUsername);
-      return render ? c.html(render(message), 503) : c.text(message, 503);
+      if (!render) return c.text(usernameMismatchMessage(accountUsername), 503);
+      const stored = await storedUsernames(db);
+      return c.html(render({ configured: accountUsername, stored, host: new URL(c.req.url).host }), 503);
     }
     await next();
   };

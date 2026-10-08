@@ -1,10 +1,11 @@
 # Copy this file to .dev.vars and fill in values for local `wrangler dev`.
 # For offline dev (bun run dev:offline), set these as shell env vars instead.
 
-# Required in production: the one Account this Instance serves, the Owner's
-# email (the only identity allowed into /account), and the origin every
-# advertised URL is built from. In dev mode they default to the values below,
-# so these lines are optional locally.
+# OWNER_EMAIL (the only identity allowed into /account) is the one setting
+# required in production. ACCOUNT_USERNAME (production default "me") and
+# PUBLIC_BASE_URL (production default: the request's origin) are optional.
+# In dev mode all three default to the values below, so these lines are
+# optional locally.
 ACCOUNT_USERNAME=alice
 OWNER_EMAIL=alice@example.com
 PUBLIC_BASE_URL=http://localhost:8787

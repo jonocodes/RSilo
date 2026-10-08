@@ -47,8 +47,19 @@ async function resolveAccount(db: D1Like, username: string): Promise<AccountStat
   return 'ready';
 }
 
+/** Usernames already in the users table (a few, sorted). Owner-only information. */
+export async function storedUsernames(db: D1Like, limit = 10): Promise<string[]> {
+  const result = await db.prepare('SELECT username FROM users ORDER BY username LIMIT ?').bind(limit).all() as
+    { results?: { username: string }[] } | null;
+  return (result?.results ?? []).slice(0, limit).map((row) => row.username);
+}
+
+/**
+ * Public (unauthenticated) text for the mismatch state. Names the config
+ * variable but never the stored usernames; the Owner sees those at /account.
+ */
 export function usernameMismatchMessage(username: string): string {
   return `Username mismatch: ACCOUNT_USERNAME is "${username}", but no account with that username exists `
-    + 'and the users table already holds other accounts. Set ACCOUNT_USERNAME to an existing account '
-    + "in the Worker's settings.";
+    + 'and the users table already holds other accounts. The owner can see how to fix this at /account '
+    + "(set ACCOUNT_USERNAME to the existing account in the Worker's settings).";
 }

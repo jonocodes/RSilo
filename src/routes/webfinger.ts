@@ -42,7 +42,8 @@ webfingerRouter.get('/', (c) => {
 </html>`);
 });
 
-// Discovery for the one Account. Every URL comes from PUBLIC_BASE_URL (see
+// Discovery for the one Account. Every URL comes from the resolved public
+// origin, PUBLIC_BASE_URL or the request's own (see
 // services/discovery.ts); any resource other than the Account is a 404.
 
 const JRD = { 'Content-Type': 'application/jrd+json' };

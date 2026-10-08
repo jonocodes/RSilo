@@ -9,7 +9,7 @@ One deployed RSilo — a single Worker with its own R2, D1, and KV — serving e
 _Avoid_: server, deployment (ambiguous)
 
 **Account**:
-The single storage identity on an Instance, named by its username and addressed as `username@host`. All data is keyed under this identity.
+The single storage identity on an Instance, named by its username (default `me`) and addressed as `username@host`. All data is keyed under this identity.
 _Avoid_: user, tenant
 
 **Owner**:

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
-import { setupMessagePage } from '../ui/setup-pages';
+import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 import { requireAccountRow } from '../middleware/instance';
@@ -37,7 +37,7 @@ accountRouter.use('*', async (c, next) => {
 // signs them in, and requireOwner() checks the identity against OWNER_EMAIL on
 // every request, whatever paths the Access application covers. State changes
 // must also be same-origin.
-accountRouter.use('*', requireOwner(), requireSameOrigin(), requireAccountRow(setupMessagePage));
+accountRouter.use('*', requireOwner(), requireSameOrigin(), requireAccountRow(usernameMismatchPage));
 
 accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
   headers: {
@@ -301,7 +301,16 @@ accountRouter.get('/', async (c) => {
       </div>
     </div>
     <div class="section">
-      <p class="muted"><a href="/cdn-cgi/access/logout">Sign out</a> ends your RSilo sign-in (the Cloudflare Access session). It does not sign you out of your email or identity provider.</p>
+      <h2>Sign-in</h2>
+      <div class="card panel">
+        <p>Signed in as <strong>${escapeHtml(c.get('ownerEmail'))}</strong></p>
+        <details style="margin-top:.5rem">
+          <summary>Change your sign-in email</summary>
+          <p style="margin-top:.5rem">Update it in two places in the Cloudflare dashboard, then sign in with the new email:</p>
+          ${changeSignInEmailSteps(new URL(c.req.url).host)}
+        </details>
+        <p class="muted" style="margin-top:.5rem"><a href="/cdn-cgi/access/logout">Sign out</a> ends your RSilo sign-in (the Cloudflare Access session). It does not sign you out of your email or identity provider.</p>
+      </div>
     </div>
   </div>`;
 

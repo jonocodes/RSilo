@@ -39,13 +39,11 @@ This is for the person who owns the server. You deploy it once, protect `/accoun
 
 The service runs as a single Cloudflare Worker with two provisioned resources: **R2** (file storage) and **D1** (your account record and app tokens). Rate limiting uses Cloudflare's native rate-limit bindings, which are declared in `wrangler.toml` and need no setup.
 
-Every Instance needs three settings, all plain text (RSilo has no secrets):
+Every Instance needs one setting, plain text (RSilo has no secrets):
 
-- `ACCOUNT_USERNAME` — your storage username, e.g. `jono`
 - `OWNER_EMAIL` — your email; only you may open `/account`
-- `PUBLIC_BASE_URL` — your Worker's address, e.g. `https://rsilo.<your-subdomain>.workers.dev`
 
-Both deploy options below ask for them. Afterwards you do one manual step in the Cloudflare dashboard: [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
+Everything else has a default: your storage address is `me@<your Worker's host>`, and every URL RSilo advertises uses the address the Worker was reached at. Both deploy options below ask only for your email; the optional settings are in [Instance configuration](#instance-configuration). Afterwards you do one manual step in the Cloudflare dashboard: [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
 
 ### Option A — Deploy to Cloudflare button (no CLI)
 
@@ -53,11 +51,11 @@ Both deploy options below ask for them. Afterwards you do one manual step in the
 
 Clicking the button clones the repo into your account, asks you to name the Worker and its resources, **provisions R2 and D1 automatically**, runs migrations, and deploys. This is the friendliest path if you have never used Cloudflare before.
 
-On the setup page, fill in the three settings above. For `PUBLIC_BASE_URL`, use `https://<worker name>.<your subdomain>.workers.dev`: the worker name is the one you choose on that page, and your `workers.dev` subdomain is shown under **Workers & Pages** in the dashboard. If you are not sure, leave it empty and add it afterwards in **Workers & Pages → your Worker → Settings → Variables and Secrets** (type *Text*); until then, `/account` shows a *finish setup* page saying it is missing.
+On the setup page, fill in `OWNER_EMAIL` with your email. If you skip it, add it afterwards (see [Change your sign-in email](#change-your-sign-in-email) for the click path); until then, `/account` shows a *finish setup* page that tells you exactly what to enter.
 
 Then [set up Cloudflare Access](#set-up-cloudflare-access).
 
-The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance). Its three settings are empty on purpose: an empty value is never accepted, so a deploy that skipped them shows the *finish setup* page and serves no data.
+The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance). Its `OWNER_EMAIL` is empty on purpose: an empty value is never accepted, so a deploy that skipped it keeps `/account` closed behind the *finish setup* page.
 
 ### Option B — Command line
 
@@ -71,14 +69,15 @@ wrangler login
 bun run setup
 ```
 
-It asks for your username and email. It does not ask for `PUBLIC_BASE_URL`: your `workers.dev` address is only known once the Worker exists, so setup deploys once, reads the address from the deploy output, saves it, and deploys again. It then prints your storage address and the numbered Access steps with your hostname filled in.
+It asks for one thing, your email. It deploys once, reads your `workers.dev` address from the deploy output, and prints your storage address (`me@<your-worker>.<subdomain>.workers.dev`), the numbered Access steps with your hostname filled in, and how to change your email later.
 
-Re-running `bun run setup` is safe: it offers your saved values as defaults (press Enter to keep them) and only deploys once. To run it without prompts, pass the values as flags or environment variables of the same name:
+Re-running `bun run setup` is safe: it offers your saved email as the default (press Enter to keep it) and keeps any other saved settings. To run it without prompts, pass the email as a flag or environment variable. `--account-username` and `--public-base-url` are optional overrides (for example a custom domain); they are never prompted for:
 
 ```bash
-bun run setup --account-username=jono --owner-email=me@example.com
-# optional: --public-base-url=https://rsilo.<subdomain>.workers.dev (skips the second deploy)
-ACCOUNT_USERNAME=jono OWNER_EMAIL=me@example.com bun run setup
+bun run setup --owner-email=me@example.com
+OWNER_EMAIL=me@example.com bun run setup
+# optional overrides
+bun run setup --owner-email=me@example.com --account-username=jono --public-base-url=https://rs.example.com
 ```
 
 Then [set up Cloudflare Access](#set-up-cloudflare-access).
@@ -94,7 +93,7 @@ wrangler login          # or export CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
 wrangler r2 bucket create remotestorage
 wrangler d1 create remotestorage-db
 # copy wrangler.toml to wrangler.prod.toml (gitignored), put the printed
-# database_id there, and fill in the three settings under [vars]
+# database_id there, and fill in OWNER_EMAIL under [vars]
 
 # Migrate and deploy (bun run deploy auto-detects wrangler.prod.toml)
 bun run deploy
@@ -110,19 +109,19 @@ Storage access tokens are opaque values stored in D1 (see [Authentication](#auth
 
 ### Instance configuration
 
-All three settings are **required in production**. Set them under `[vars]` in your `wrangler.prod.toml` (what `bun run setup` does) or in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets**, type *Text*). Without them every discovery, OAuth and storage request returns `503` with a message naming what is missing, and `/account` shows a *finish setup* page listing them.
+Only `OWNER_EMAIL` is **required**. Set settings under `[vars]` in your `wrangler.prod.toml` (what `bun run setup` does) or in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, type *Text*). A missing or invalid `OWNER_EMAIL` closes only the human pages: `/account` and the consent page show a *finish setup* page, while storage, WebFinger and the OAuth token endpoint keep working, so apps already connected keep syncing. An *invalid* optional setting (for example a `PUBLIC_BASE_URL` with a path) makes every request `503` with a message naming it; delete it to go back to the default.
 
-| Variable | Purpose | Dev-mode default |
-|----------|---------|------------------|
-| `ACCOUNT_USERNAME` | The one Account this Instance serves (`[a-z0-9_.-]+`). It names the storage root `/storage/<ACCOUNT_USERNAME>/` and is never derived from an email address. | `alice` |
-| `OWNER_EMAIL` | Your email address, exactly as your Cloudflare Access sign-in method reports it (the one-time-PIN address, or your Google/GitHub email — not necessarily your Cloudflare login). Only this identity (case-insensitive) may use `/account`. | `alice@example.com` |
-| `PUBLIC_BASE_URL` | The origin apps reach the Instance at, e.g. `https://rsilo.<subdomain>.workers.dev` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it, never from the request's `Host` or `X-Forwarded-Proto`. | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
+| Variable | Required | Purpose | Default | Dev-mode default |
+|----------|----------|---------|---------|------------------|
+| `OWNER_EMAIL` | **yes** | Your email address, exactly as your Cloudflare Access sign-in method reports it (the one-time-PIN address, or your Google/GitHub email — not necessarily your Cloudflare login). Only this identity (case-insensitive) may use `/account`. See [Change your sign-in email](#change-your-sign-in-email). | none | `alice@example.com` |
+| `ACCOUNT_USERNAME` | no | The one Account this Instance serves (`[a-z0-9_.-]+`). It names the storage root `/storage/<ACCOUNT_USERNAME>/` and the storage address `<ACCOUNT_USERNAME>@<host>`, and is never derived from an email address. Set it only to keep an existing username (see [The Account row](#instance-configuration)). | `me` | `alice` |
+| `PUBLIC_BASE_URL` | no | A canonical origin, e.g. a custom domain `https://rs.example.com` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it. Unset, they are built from the origin the request arrived at, which on Cloudflare is always one of your Worker's own hostnames (Cloudflare's edge refuses any other `Host` with a `403` before the Worker runs). `X-Forwarded-Host` / `X-Forwarded-Proto` are never consulted. | the request's origin | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
 
-The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value (for example a `PUBLIC_BASE_URL` with a path) is rejected even in dev mode.
+The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value is rejected even in dev mode. Dev mode keeps `alice` so local tooling and the spec-check run unchanged.
 
 `bun run deploy` (and `bun run setup`) never blank a value you set in the dashboard: they leave empty `[vars]` entries out of the deploy and pass `--keep-vars`, so dashboard values the config does not mention survive. A non-empty value in your config wins over the dashboard. A bare `wrangler deploy` of the committed `wrangler.toml` would overwrite them with the empty placeholders, so deploy with `bun run deploy`.
 
-**The Account row.** The first request that needs it creates the `users` row for `ACCOUNT_USERNAME` (an idempotent insert; the check is cached per Worker isolate). If that row is missing **and** the table already holds other users — you changed `ACCOUNT_USERNAME`, or migrated a multi-user deployment — RSilo will not create a second row: storage returns `503` and `/account` and the consent page show a *username mismatch* message. Set `ACCOUNT_USERNAME` to the existing account you want to keep. Other rows are ignored, not deleted.
+**The Account row.** The first request that needs it creates the `users` row for `ACCOUNT_USERNAME` (an idempotent insert; the check is cached per Worker isolate). If that row is missing **and** the table already holds other users — you changed `ACCOUNT_USERNAME`, or migrated a multi-user deployment — RSilo will not create a second row: storage returns `503` and `/account` and the consent page show a *username mismatch* message. Set `ACCOUNT_USERNAME` to the existing account you want to keep: the `/account` page (shown only to you, the Owner) names the stored username and gives the exact click path; the public storage `503` never names it. Other rows are ignored, not deleted. Because the default is `me`, an Instance created before `ACCOUNT_USERNAME` became optional keeps its username only while the setting stays in place; if it was removed, the mismatch page tells you what to set it back to.
 
 ### Deploying updates to your own instance
 
@@ -149,7 +148,7 @@ To release on every push to `main`, connect the repository to your Worker using 
    ```
 
 4. Under **Build variables**, add `D1_DATABASE_ID` (the value from your `wrangler.prod.toml`), marked as a secret. This is the only thing not in git; `bun run deploy` materialises `wrangler.prod.toml` from it, applies D1 migrations, and deploys.
-5. Keep `ACCOUNT_USERNAME`, `OWNER_EMAIL` and `PUBLIC_BASE_URL` in the Worker's **Variables and Secrets** (type *Text*); builds keep them.
+5. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
@@ -158,7 +157,7 @@ To release on every push to `main`, connect the repository to your Worker using 
 RSilo has no password of its own. **Cloudflare Access** signs you in to your account area (`/account`), for example with a one-time code sent to your email, and RSilo then checks that the signed-in email is your `OWNER_EMAIL`. Access is part of Cloudflare **Zero Trust**, whose free plan covers a single person and needs no payment method. You do this once, after either deploy option; `bun run setup` prints these steps with your address filled in.
 
 1. Open the Zero Trust dashboard, [one.dash.cloudflare.com](https://one.dash.cloudflare.com/). If it is your first time, pick a team name and the **Free** plan.
-2. Go to **Access → Applications → Add an application** and choose **Self-hosted**.
+2. Go to **Access → Applications → Add an application**, choose **Self-hosted**, and name it **RSilo**.
 3. Add a public hostname: the **domain** is your Worker's address without `https://`, e.g. `rsilo.<your-subdomain>.workers.dev`, and the **path** is `account`. No custom domain is needed.
 4. Add a policy: action **Allow**, include **Emails**, and enter exactly your email (the same as `OWNER_EMAIL`).
 5. Under login methods, keep **One-time PIN** (or choose another identity provider, such as Google or GitHub).
@@ -171,13 +170,25 @@ Nothing needs to be set in RSilo after creating the Access application.
 
 **What the pages you might see mean:**
 
-- ***Finish setup.*** Shown on `/account` when the Instance is not ready: a setting is missing or invalid (the page names it), or Access is not in front of `/account` yet (repeat the steps above, and check the domain and the `account` path). While a setting is missing the Instance serves no data and issues no tokens, and while Access is missing nobody can open `/account` or approve an app, so a fresh deploy is safe.
-- ***Not allowed* (403).** You signed in through Access, but with an email other than `OWNER_EMAIL`; the page shows the email it saw. If you changed the email you sign in with, update `OWNER_EMAIL` in the Worker's settings (**Variables and Secrets**) and the email in the Access policy. Getting back in depends only on your Cloudflare account; there is no RSilo password to recover.
-- ***Username mismatch.*** `ACCOUNT_USERNAME` does not match the account already stored; see [The Account row](#instance-configuration).
+- ***Finish setup* (503).** Shown on `/account` (and the consent page) when they are not ready yet. It has up to three parts:
+  - **Set your sign-in email (OWNER_EMAIL)** — `OWNER_EMAIL` is missing or not an email address. If you are already signed in through Access, the page says *"You're signed in through Cloudflare Access as …"* and shows that email ready to copy: set `OWNER_EMAIL` to exactly that. It gives the click path (**Workers & Pages → \<worker name\> → Settings → Variables and Secrets → Add → Type: Text, Variable name: OWNER_EMAIL, Value: your email → Deploy**; for an invalid value, edit the existing one instead). It never repeats an invalid value back. Apps already connected keep syncing meanwhile.
+  - **Turn on Cloudflare Access** — Access is not in front of `/account` yet: repeat the steps above, and check the domain and the `account` path. Until then nobody can open `/account` or approve an app, so a fresh deploy is safe. When both parts apply, the email part comes first.
+  - **Invalid settings** — an optional setting such as `ACCOUNT_USERNAME` or `PUBLIC_BASE_URL` is set to an invalid value (named, not repeated); fix or delete it.
+- ***Not allowed* (403).** You signed in through Access, but with an email other than `OWNER_EMAIL`; the page shows the email it saw (never the configured one) and the two places to update if you changed your sign-in email (see [Change your sign-in email](#change-your-sign-in-email)). Getting back in depends only on your Cloudflare account; there is no RSilo password to recover.
+- ***Username mismatch* (503).** `ACCOUNT_USERNAME` (default `me`) does not match the account already stored. The page names the stored username and the click path to set `ACCOUNT_USERNAME` to it; see [The Account row](#instance-configuration).
 
 **Sign out** (in the `/account` header) goes to `/cdn-cgi/access/logout`. It ends your RSilo Access session, not your login at your email or identity provider.
 
-Every state-changing `/account` request must come from the page itself (`Sec-Fetch-Site: same-origin`, or an `Origin` equal to `PUBLIC_BASE_URL`); cross-site posts get `403`.
+Every state-changing `/account` request must come from the page itself (`Sec-Fetch-Site: same-origin`, or an `Origin` equal to the public origin — `PUBLIC_BASE_URL`, or the request's own origin when unset); cross-site posts get `403`.
+
+## Change your sign-in email
+
+Your dashboard shows **Signed in as \<email\>** and a **Change your sign-in email** section with these steps. The email lives in two places, and both must change, in the Cloudflare dashboard:
+
+1. **The Worker's `OWNER_EMAIL`:** **Workers & Pages → \<worker name\> → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy** (or re-run `bun run setup --owner-email=new@example.com`).
+2. **The Access application's Allow policy:** **Zero Trust → Access → Applications → RSilo app → Policies**, and include the new email. Otherwise Access will not let the new email through at all.
+
+If you update only the policy, you will see the *Not allowed* page, which shows the email you signed in with. If you unset `OWNER_EMAIL`, `/account` shows the *finish setup* page again (apps keep syncing) and, once you sign in through Access, offers your signed-in email to copy.
 
 ## Change your storage quota
 
@@ -187,7 +198,7 @@ Your `/account` dashboard shows how much you have stored against your quota (10 
 
 Older RSilo versions had their own usernames and passwords, an admin console and admin secret, and could hold several users. To move such a deployment to Cloudflare Access:
 
-1. Set the three settings in the Worker's **Variables and Secrets** (or under `[vars]` in `wrangler.prod.toml`, or by re-running `bun run setup`). `ACCOUNT_USERNAME` must be the **existing** username whose data you want to keep; `OWNER_EMAIL` is your email; `PUBLIC_BASE_URL` is your Worker's address.
+1. Set the settings in the Worker's **Variables and Secrets** (or under `[vars]` in `wrangler.prod.toml`, or by re-running `bun run setup --owner-email=… --account-username=…`). `OWNER_EMAIL` is your email; `ACCOUNT_USERNAME` must be the **existing** username whose data you want to keep (unless it is already `me`). `PUBLIC_BASE_URL` is optional; an existing value keeps working.
 2. [Set up Cloudflare Access](#set-up-cloudflare-access).
 3. Deploy with `bun run deploy`. It applies migration `0003`, which drops the stored passwords.
 
@@ -197,7 +208,7 @@ Apps you already connected keep working: their tokens are unchanged, and apps th
 
 Apps do **not** need any setup on your side — there is no client registration step. The first time an app asks for access it is registered automatically and appears on your `/account` dashboard.
 
-1. In the app, enter your storage address: either `<ACCOUNT_USERNAME>@<your-worker>.workers.dev` or, if the app supports it, just the server URL `https://<your-worker>.workers.dev`.
+1. In the app, enter your storage address, shown on your dashboard: `me@<your-worker>.<subdomain>.workers.dev` (or `<ACCOUNT_USERNAME>@…` if you set one) or, if the app supports it, just the server URL `https://<your-worker>.<subdomain>.workers.dev`.
 2. The app discovers your endpoints via WebFinger and sends you to the consent page, `/account/oauth/authorize`. It is part of `/account`, so Cloudflare Access signs you in first if you are not already.
 3. The page shows the app (by its origin host), the modules it asks for and whether it wants read-only or read-write access, and **where it will send you back to**. Allow or deny.
 4. The app gets a token and starts syncing into that module.
@@ -311,7 +322,7 @@ WebFinger (`/.well-known/webfinger`, `/webfinger/jrd`, `/webfinger/xrd`) accepts
 - `acct:<ACCOUNT_USERNAME>@<host>` — username and host compared case-insensitively
 - the host-only form `http://<host>` or `https://<host>`, with or without a trailing slash
 
-`<host>` must equal the `PUBLIC_BASE_URL` host, including any non-default port (`acct:alice@localhost:8787` in dev); `acct:` resources may also omit the port (`acct:alice@localhost`). Any other resource returns `404` on every discovery route, as does `/oauth/:user` for any user but the Account. All advertised URLs come from `PUBLIC_BASE_URL`, never the request's `Host` header.
+`<host>` must equal the public host — the `PUBLIC_BASE_URL` host when set, otherwise the host the request arrived at — including any non-default port (`acct:alice@localhost:8787` in dev); `acct:` resources may also omit the port (`acct:alice@localhost`). Any other resource returns `404` on every discovery route, as does `/oauth/:user` for any user but the Account. All advertised URLs come from that public origin (one resolver, `getInstanceConfig` in `src/config.ts`), never from `X-Forwarded-Host` / `X-Forwarded-Proto`. Without `PUBLIC_BASE_URL` the request's origin is trusted because Cloudflare's edge rejects a request whose `Host` is not one of the Worker's own hostnames (`403`) before the Worker runs; the offline Node server, which has no such edge, pins its origin to `http://localhost:$PORT`.
 
 ```bash
 curl 'http://localhost:8787/.well-known/webfinger?resource=acct:alice@localhost:8787'
@@ -365,7 +376,7 @@ src/
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
   routes/             storage, webfinger, oauth (discovery, token, legacy consent redirect), account,
                       consent (/account/oauth/authorize), debug, mount (shared route table)
-  config.ts           per-Instance config (ACCOUNT_USERNAME, OWNER_EMAIL, PUBLIC_BASE_URL) and dev defaults
+  config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL defaults) and dev defaults
   services/           auth, identity (Owner resolver: Cloudflare Access or dev identity; CSRF check),
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger
                       matching), r2 (+ getStorage adapter), local-storage, db/
@@ -388,7 +399,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**602 tests** across 30 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**626 tests** across 31 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
