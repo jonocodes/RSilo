@@ -38,6 +38,16 @@
     "hono": "^4.7.5"
   },
   "cloudflare": {
-    "bindings": {}
+    "bindings": {
+      "ACCOUNT_USERNAME": {
+        "description": "Your storage username, e.g. `jono`: lowercase letters, digits, `.`, `_` or `-`. Apps connect as `<username>@<your Worker's host>`. Keep it once chosen."
+      },
+      "OWNER_EMAIL": {
+        "description": "Your email address. Only this email may open `/account`; it must match the email you allow in the Cloudflare Access policy (see the README, **Set up Cloudflare Access**)."
+      },
+      "PUBLIC_BASE_URL": {
+        "description": "Your Worker's address: `https://<worker-name>.<your-subdomain>.workers.dev` (your subdomain is shown under **Workers & Pages** in the dashboard). Origin only, no path. Until it is set, `/account` shows a **finish setup** page."
+      }
+    }
   }
 }

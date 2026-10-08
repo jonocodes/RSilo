@@ -50,6 +50,25 @@ function parsePublicBaseUrl(value: string): URL | null {
   return url;
 }
 
+// Per-field rules for a present (trimmed, non-empty) value: each returns the
+// problem, or null if valid. The setup script reuses them so it accepts exactly
+// what the Worker accepts.
+export function accountUsernameProblem(value: string): string | null {
+  return ACCOUNT_USERNAME_PATTERN.test(value) && value !== '.' && value !== '..'
+    ? null
+    : 'ACCOUNT_USERNAME must match [a-z0-9_.-]+';
+}
+
+export function ownerEmailProblem(value: string): string | null {
+  return OWNER_EMAIL_PATTERN.test(value) ? null : 'OWNER_EMAIL must be an email address';
+}
+
+export function publicBaseUrlProblem(value: string): string | null {
+  return parsePublicBaseUrl(value)
+    ? null
+    : 'PUBLIC_BASE_URL must be an http(s) origin such as https://rsilo.example.workers.dev';
+}
+
 export function getInstanceConfig(env?: unknown): InstanceConfigResult {
   const bindings = (typeof env === 'object' && env !== null ? env : {}) as InstanceEnv;
   const dev = isLocalDevelopment(env);
@@ -58,15 +77,17 @@ export function getInstanceConfig(env?: unknown): InstanceConfigResult {
   const accountUsername = bindings.ACCOUNT_USERNAME?.trim() || (dev ? DEV_ACCOUNT_USERNAME : '');
   if (!accountUsername) {
     problems.push('ACCOUNT_USERNAME is not set');
-  } else if (!ACCOUNT_USERNAME_PATTERN.test(accountUsername) || accountUsername === '.' || accountUsername === '..') {
-    problems.push('ACCOUNT_USERNAME must match [a-z0-9_.-]+');
+  } else {
+    const problem = accountUsernameProblem(accountUsername);
+    if (problem) problems.push(problem);
   }
 
   const ownerEmail = (bindings.OWNER_EMAIL?.trim() || (dev ? DEV_OWNER_EMAIL : '')).toLowerCase();
   if (!ownerEmail) {
     problems.push('OWNER_EMAIL is not set');
-  } else if (!OWNER_EMAIL_PATTERN.test(ownerEmail)) {
-    problems.push('OWNER_EMAIL must be an email address');
+  } else {
+    const problem = ownerEmailProblem(ownerEmail);
+    if (problem) problems.push(problem);
   }
 
   const rawBaseUrl = bindings.PUBLIC_BASE_URL?.trim() || (dev ? DEV_PUBLIC_BASE_URL : '');
@@ -74,7 +95,7 @@ export function getInstanceConfig(env?: unknown): InstanceConfigResult {
   if (!rawBaseUrl) {
     problems.push('PUBLIC_BASE_URL is not set');
   } else if (!baseUrl) {
-    problems.push('PUBLIC_BASE_URL must be an http(s) origin such as https://rsilo.example.workers.dev');
+    problems.push(publicBaseUrlProblem(rawBaseUrl) ?? 'PUBLIC_BASE_URL is invalid');
   }
 
   if (problems.length > 0 || !baseUrl) return { ok: false, problems };
