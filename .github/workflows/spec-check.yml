@@ -40,9 +40,9 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{"username":"alice","password":"ci-password"}'
 
-          RW=$(bun run dev-token alice 'api-test-suite:rw' | tail -1)
-          RO=$(bun run dev-token alice 'api-test-suite:r' | tail -1)
-          GL=$(bun run dev-token alice '*:rw' | tail -1)
+          RW=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice 'api-test-suite:rw' | tail -1)
+          RO=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice 'api-test-suite:r' | tail -1)
+          GL=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice '*:rw' | tail -1)
 
           git clone https://github.com/0dataapp/spec-check /tmp/spec-check
           cd /tmp/spec-check
