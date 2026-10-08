@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { getInstanceConfig } from '../src/config';
+import { getInstanceConfig, getOwnerEmail } from '../src/config';
 import {
   INSTANCE_VARS,
+  REQUIRED_VARS,
   accessSteps,
   parseSetupArgs,
   readVars,
@@ -179,20 +180,23 @@ describe('committed deploy config', () => {
   const toml = readFileSync('wrangler.toml', 'utf8');
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
-  it('declares every Instance var so the deploy button asks for it', () => {
-    expect(Object.keys(readVars(toml)).sort()).toEqual([...INSTANCE_VARS].sort());
+  it('declares only the required var, so the deploy button asks for exactly that', () => {
+    expect(Object.keys(readVars(toml)).sort()).toEqual([...REQUIRED_VARS].sort());
   });
 
-  it('ships placeholders that never pass validation', () => {
-    const placeholders = readVars(toml);
-    const result = getInstanceConfig({ ...placeholders, RSILO_DEV_MODE: 'false' });
-    expect(result).toEqual({ ok: false, problems: INSTANCE_VARS.map((name) => `${name} is not set`) });
+  it('ships an OWNER_EMAIL placeholder that never passes validation; the rest default', () => {
+    const env = { ...readVars(toml), RSILO_DEV_MODE: 'false' };
+    expect(getOwnerEmail(env)).toEqual({ ok: false, problem: 'OWNER_EMAIL is not set', missing: true });
+    expect(getInstanceConfig(env, 'https://rsilo.me.workers.dev/x')).toEqual({
+      ok: true,
+      config: { accountUsername: 'me', publicBaseUrl: 'https://rsilo.me.workers.dev', publicHost: 'rsilo.me.workers.dev' },
+    });
   });
 
-  it('describes each Instance var, and no secret, for the deploy button', () => {
+  it('describes the required var, and no secret, for the deploy button', () => {
     const bindings = pkg.cloudflare.bindings as Record<string, { description: string }>;
-    expect(Object.keys(bindings).sort()).toEqual([...INSTANCE_VARS].sort());
-    for (const name of INSTANCE_VARS) expect(bindings[name].description.length).toBeGreaterThan(20);
+    expect(Object.keys(bindings).sort()).toEqual([...REQUIRED_VARS].sort());
+    for (const name of REQUIRED_VARS) expect(bindings[name].description.length).toBeGreaterThan(20);
   });
 
   it('declares no secrets', () => {

@@ -18,11 +18,12 @@ const HTML = { 'Content-Type': 'text/html; charset=utf-8' };
 export function requireOwner() {
   return async (c: Context, next: Next) => {
     const result = await resolveOwner(c);
+    const host = new URL(c.req.url).host;
     if (result.status === 'not_configured') {
-      return new Response(finishSetupPage(result.problems, new URL(c.req.url).host), { status: 503, headers: HTML });
+      return new Response(finishSetupPage(result.setup, host), { status: 503, headers: HTML });
     }
     if (result.status === 'forbidden') {
-      return new Response(forbiddenPage(result.email), { status: 403, headers: HTML });
+      return new Response(forbiddenPage(result.email, host), { status: 403, headers: HTML });
     }
     c.set('instance', result.config);
     c.set('ownerEmail', result.email);

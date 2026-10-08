@@ -1,5 +1,5 @@
 // Drives `bun run setup` end to end against a fake wrangler, so the script's
-// flow (vars, two-pass PUBLIC_BASE_URL, idempotent re-run) is tested without
+// flow (one prompt, one deploy, optional overrides, idempotent re-run) is tested without
 // touching Cloudflare.
 import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -62,26 +62,30 @@ afterEach(() => {
 });
 
 describe('bun run setup (fake wrangler)', () => {
-  it('writes the vars, learns PUBLIC_BASE_URL from the first deploy, and prints the Access steps', () => {
-    const res = setup(['--account-username=jono', '--owner-email', 'Me@Example.com']);
+  it('with only --owner-email: writes just OWNER_EMAIL, deploys once, and prints the summary and Access steps', () => {
+    const res = setup(['--owner-email', 'Me@Example.com']);
     expect(res.status, res.out).toBe(0);
 
-    expect(prodVars()).toEqual({
-      ACCOUNT_USERNAME: 'jono',
-      OWNER_EMAIL: 'Me@Example.com',
-      PUBLIC_BASE_URL: 'https://rsilo.test-sub.workers.dev',
-    });
+    expect(prodVars()).toEqual({ OWNER_EMAIL: 'Me@Example.com' });
     expect(readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8')).toContain('11111111-2222-3333-4444-555555555555');
 
-    // First deploy has no PUBLIC_BASE_URL at all (never an empty one); the second has it.
-    expect(deployed(0)).toEqual({ ACCOUNT_USERNAME: 'jono', OWNER_EMAIL: 'Me@Example.com' });
-    expect(deployed(1).PUBLIC_BASE_URL).toBe('https://rsilo.test-sub.workers.dev');
-    expect(calls().filter((c) => c.startsWith('deploy'))).toEqual(Array(2).fill(expect.stringContaining('--keep-vars')));
+    expect(deployed(0)).toEqual({ OWNER_EMAIL: 'Me@Example.com' });
+    expect(calls().filter((c) => c.startsWith('deploy'))).toEqual([expect.stringContaining('--keep-vars')]);
     expect(calls().some((c) => /secret/.test(c))).toBe(false);
 
-    expect(res.out).toContain('jono@rsilo.test-sub.workers.dev');
+    expect(res.out).toContain('Storage address: me@rsilo.test-sub.workers.dev');
+    expect(res.out).toContain('https://rsilo.test-sub.workers.dev/account');
     expect(res.out).toMatch(/1\. .*\n[\s\S]*domain rsilo\.test-sub\.workers\.dev, path account/);
     expect(res.out).toContain('https://one.dash.cloudflare.com/');
+    expect(res.out).toContain('Workers & Pages → rsilo → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy');
+    expect(res.out).toContain('Zero Trust → Access → Applications → RSilo app → Policies');
+  });
+
+  it('accepts --account-username as an optional override', () => {
+    const res = setup(['--account-username=jono', '--owner-email=me@example.com']);
+    expect(res.status, res.out).toBe(0);
+    expect(prodVars()).toEqual({ ACCOUNT_USERNAME: 'jono', OWNER_EMAIL: 'me@example.com' });
+    expect(res.out).toContain('jono@rsilo.test-sub.workers.dev');
   });
 
   it('keeps existing vars on a re-run and deploys once', () => {

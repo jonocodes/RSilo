@@ -32,7 +32,9 @@ const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
 const DB_PATH = process.env.DB_PATH || 'data/remotestorage.db';
 const port = parseInt(process.env.PORT || '8787');
 // Offline mode is dev mode: unset values fall back to the dev defaults, with
-// the public origin following the port actually listened on. Requests to
+// the public origin following the port actually listened on. The origin is
+// set explicitly because, unlike Cloudflare's edge, a plain Node server does
+// not vet the Host header, so the request origin is not trusted here. Requests to
 // localhost are signed in as the dev identity (RSILO_DEV_EMAIL, default
 // OWNER_EMAIL), since there is no Cloudflare Access in front of this server.
 const ACCOUNT_USERNAME = process.env.ACCOUNT_USERNAME || DEV_ACCOUNT_USERNAME;

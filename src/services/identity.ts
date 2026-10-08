@@ -15,7 +15,7 @@
 // over-broad policy or another Access application from opening /account.
 
 import type { Context } from '../types';
-import { getInstanceConfig, isLocalDevelopment } from '../config';
+import { getInstanceConfig, getOwnerEmail, isLocalDevelopment } from '../config';
 import type { InstanceConfig } from '../config';
 
 /** The part of the Workers `ctx.access` RSilo uses. */
@@ -24,12 +24,26 @@ export interface AccessContext {
   getIdentity(): Promise<{ email?: string } | undefined>;
 }
 
+/**
+ * What the finish-setup page needs to know. Holds only config names, problem
+ * descriptions that never echo a configured value, and the visitor's own
+ * Access email.
+ */
+export interface SetupState {
+  /** Invalid ACCOUNT_USERNAME / PUBLIC_BASE_URL values. */
+  configProblems: string[];
+  /** Why OWNER_EMAIL is unusable, or null when it is fine. */
+  ownerEmail: { problem: string; missing: boolean } | null;
+  /** No Cloudflare Access in front of /account (and no dev identity). */
+  accessMissing: boolean;
+  /** The visitor's email as Cloudflare Access reports it, when there is one. */
+  accessEmail: string | null;
+}
+
 export type OwnerResolution =
   | { status: 'owner'; email: string; config: InstanceConfig }
   | { status: 'forbidden'; email: string | null }
-  | { status: 'not_configured'; problems: string[] };
-
-export const ACCESS_NOT_CONFIGURED = 'Cloudflare Access is not protecting /account';
+  | { status: 'not_configured'; setup: SetupState };
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -56,7 +70,12 @@ export function devIdentityAllowed(c: Context): boolean {
   return LOCAL_HOSTNAMES.has(new URL(c.req.url).hostname);
 }
 
-async function identityEmail(c: Context, config: InstanceConfig): Promise<string | null | undefined> {
+/**
+ * The signed-in email: from Access, else the dev identity. `null` when Access
+ * is present but reports no email; `undefined` when there is no identity
+ * source at all (Access is not protecting this request).
+ */
+async function identityEmail(c: Context, ownerEmail: string | null): Promise<string | null | undefined> {
   const access = accessContext(c);
   if (access) {
     try {
@@ -68,29 +87,38 @@ async function identityEmail(c: Context, config: InstanceConfig): Promise<string
   }
   if (devIdentityAllowed(c)) {
     const devEmail = (c.env as { RSILO_DEV_EMAIL?: string } | undefined)?.RSILO_DEV_EMAIL?.trim();
-    return devEmail || config.ownerEmail;
+    return devEmail || ownerEmail;
   }
   return undefined;
 }
 
 export async function resolveOwner(c: Context): Promise<OwnerResolution> {
-  const result = getInstanceConfig(c.env);
-  if ('problems' in result) return { status: 'not_configured', problems: result.problems };
+  const instance = getInstanceConfig(c.env, c.req.url);
+  const owner = getOwnerEmail(c.env);
+  const ownerEmail = 'email' in owner ? owner.email : null;
+  const email = await identityEmail(c, ownerEmail);
 
-  const email = await identityEmail(c, result.config);
-  if (email === undefined) return { status: 'not_configured', problems: [ACCESS_NOT_CONFIGURED] };
-  if (email === null || email.toLowerCase() !== result.config.ownerEmail) {
+  const setup: SetupState = {
+    configProblems: 'problems' in instance ? instance.problems : [],
+    ownerEmail: 'problem' in owner ? { problem: owner.problem, missing: owner.missing } : null,
+    accessMissing: email === undefined,
+    accessEmail: accessContext(c) ? email ?? null : null,
+  };
+  if ('problems' in instance || !ownerEmail || email === undefined) return { status: 'not_configured', setup };
+
+  if (email === null || email.toLowerCase() !== ownerEmail) {
     return { status: 'forbidden', email };
   }
-  return { status: 'owner', email, config: result.config };
+  return { status: 'owner', email, config: instance.config };
 }
 
 /**
  * CSRF check for state-changing requests on the human surfaces: the browser
  * must say the request is same-origin, or, for browsers that do not send
- * Sec-Fetch-Site, send an Origin equal to PUBLIC_BASE_URL. The Access cookie's
- * SameSite setting is configurable in the Zero Trust dashboard, so it is not
- * relied on.
+ * Sec-Fetch-Site, send an Origin equal to the resolved public origin
+ * (PUBLIC_BASE_URL, or the request's own origin when unset). The Access
+ * cookie's SameSite setting is configurable in the Zero Trust dashboard, so it
+ * is not relied on.
  */
 export function isSameOriginRequest(c: Context, publicBaseUrl: string): boolean {
   const site = c.req.header('Sec-Fetch-Site');

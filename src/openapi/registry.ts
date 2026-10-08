@@ -19,7 +19,9 @@ export const BEARER = [{ bearerAuth: [] }];
 export const ACCESS = [{ cloudflareAccess: [] }];
 
 const ACCOUNT_RESOURCE = 'acct:<ACCOUNT_USERNAME>@<host>, or http(s)://<host> with or without a trailing slash, '
-  + 'where <host> is the PUBLIC_BASE_URL host (including a non-default port; acct: may omit it). Case-insensitive.';
+  + 'where <host> is the public host (PUBLIC_BASE_URL\'s, or the request\'s own when unset; including a non-default port; acct: may omit it). Case-insensitive.';
+
+const FROM_PUBLIC_ORIGIN = 'built from the public origin: PUBLIC_BASE_URL, or the request\'s own origin when unset';
 
 /**
  * Metadata keyed by "METHOD /normalized/path". The spec's paths and methods are
@@ -41,12 +43,12 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'GET /.well-known/host-meta': {
     summary: 'host-meta XRD document',
     tags: ['WebFinger'],
-    description: 'Legacy host-meta discovery, pointing at the JRD endpoint. Built from PUBLIC_BASE_URL.',
+    description: `Legacy host-meta discovery, pointing at the JRD endpoint, ${FROM_PUBLIC_ORIGIN}.`,
   },
   'GET /.well-known/webfinger': {
     summary: 'WebFinger discovery',
     tags: ['WebFinger'],
-    description: 'Resolves the Account to its storage root and consent URL, built from PUBLIC_BASE_URL. '
+    description: `Resolves the Account to its storage root and consent URL, ${FROM_PUBLIC_ORIGIN}. `
       + 'Without a resource, returns the lrdd template.',
     parameters: [{ name: 'resource', in: 'query', required: false, schema: { type: 'string' }, description: ACCOUNT_RESOURCE }],
     responses: {
@@ -76,13 +78,13 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'GET /oauth/{user}': {
     summary: 'OAuth discovery document',
     tags: ['OAuth'],
-    description: 'Advertises the auth and token endpoints plus supported scopes, built from PUBLIC_BASE_URL. '
+    description: `Advertises the auth and token endpoints plus supported scopes, ${FROM_PUBLIC_ORIGIN}. `
       + '404 unless {user} is ACCOUNT_USERNAME.',
   },
   'GET /oauth/{user}/authorize': {
     summary: 'Legacy consent URL (redirect)',
     tags: ['OAuth'],
-    description: 'Redirects to /account/oauth/authorize on PUBLIC_BASE_URL with the query string unchanged, '
+    description: 'Redirects to /account/oauth/authorize on the public origin (PUBLIC_BASE_URL, or the request\'s own) with the query string unchanged, '
       + 'for apps that cached the old discovery result.',
     responses: {
       '302': { description: 'To the consent page under /account.' },
@@ -156,7 +158,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     tags: ['Account'],
     security: ACCESS,
     description: 'Storage address, quota usage and setting, apps with access, and sign-out. '
-      + 'Shows a finish-setup page (503) until config and Cloudflare Access are in place, '
+      + 'Shows a finish-setup page (503) until OWNER_EMAIL is set and Cloudflare Access is in place '
+      + '(storage, discovery and the token endpoint do not wait for either), '
       + 'and a 403 page for a signed-in identity other than OWNER_EMAIL.',
   },
   'GET /account/client.js': {

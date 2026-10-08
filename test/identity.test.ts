@@ -85,14 +85,21 @@ describe('production identity (ctx.access)', () => {
     expect(await res.text()).not.toContain('alice@rsilo.example');
   });
 
-  it('lists missing config on the finish-setup page', async () => {
+  it('names a missing OWNER_EMAIL on the finish-setup page', async () => {
     const env = productionEnv();
     delete env.OWNER_EMAIL;
     const res = await app.request(`${BASE}/account`, {}, env, accessCtx({ email: 'owner@example.com' }));
     expect(res.status).toBe(503);
     const html = await res.text();
+    expect(html).toContain('<code>OWNER_EMAIL</code> is not set');
+  });
+
+  it('lists invalid config on the finish-setup page', async () => {
+    const res = await app.request(`${BASE}/account`, {}, productionEnv({ ACCOUNT_USERNAME: 'Bad' }), accessCtx({ email: 'owner@example.com' }));
+    expect(res.status).toBe(503);
+    const html = await res.text();
     expect(html).toContain('class="problems"');
-    expect(html).toContain('OWNER_EMAIL is not set');
+    expect(html).toContain('ACCOUNT_USERNAME must match');
   });
 
   for (const path of ['/account', '/account/browse', '/account/client.js', '/account/download/documents/a.txt', '/account/tokens']) {

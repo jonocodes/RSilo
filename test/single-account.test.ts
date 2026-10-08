@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 
-// An Instance serves one Account and advertises every URL from one configured
-// origin (PUBLIC_BASE_URL), never from the request's Host or forwarding headers.
+// An Instance serves one Account and advertises every URL from one origin:
+// PUBLIC_BASE_URL when set (these tests set it), else the request's own origin
+// (test/optional-config.test.ts); never from forwarding headers.
 
 const BASE = 'https://rs.example:8443';
 
@@ -281,46 +282,34 @@ describe('Storage serves only the Account', () => {
 describe('Instance configuration', () => {
   const production = { RSILO_DEV_MODE: 'false' };
 
-  it('outside dev mode, discovery refuses to answer without ACCOUNT_USERNAME and PUBLIC_BASE_URL', async () => {
+  it('outside dev mode, discovery defaults to the Account "me" at the request origin', async () => {
     const env = { ...createEnv(production) } as any;
     delete env.ACCOUNT_USERNAME;
     delete env.PUBLIC_BASE_URL;
 
-    const res = await app.request(`http://localhost/.well-known/webfinger?${q('acct:alice@localhost')}`, {}, env);
+    const res = await app.request(`https://rs.example/.well-known/webfinger?${q('acct:me@rs.example')}`, {}, env);
 
-    expect(res.status).toBe(503);
-    const text = await res.text();
-    expect(text).toContain('ACCOUNT_USERNAME');
-    expect(text).toContain('PUBLIC_BASE_URL');
+    expect(res.status).toBe(200);
+    expect(remoteStorageLink(await res.json()).href).toBe('https://rs.example/storage/me');
   });
 
-  it('outside dev mode, storage and OAuth refuse to answer without config', async () => {
+  it('outside dev mode, OAuth answers without PUBLIC_BASE_URL', async () => {
     const env = { ...createEnv(production) } as any;
     delete env.PUBLIC_BASE_URL;
 
-    const storage = await app.request('http://localhost/storage/alice/public/documents/x.txt', {}, env);
     const discovery = await app.request('http://localhost/oauth/alice', {}, env);
-    const token = await app.request('http://localhost/oauth/alice/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: 'x' }),
-    }, env);
 
-    expect(storage.status).toBe(503);
-    expect(discovery.status).toBe(503);
-    expect(token.status).toBe(503);
+    expect(discovery.status).toBe(200);
+    expect((await discovery.json() as any).www).toBe('http://localhost');
   });
 
-  it('outside dev mode, OWNER_EMAIL is required too', async () => {
+  it('outside dev mode, a missing OWNER_EMAIL does not stop discovery or OAuth', async () => {
     const env = { ...createEnv(production) } as any;
     delete env.OWNER_EMAIL;
 
-    const storage = await app.request('http://localhost/storage/alice/public/documents/x.txt', {}, env);
     const discovery = await app.request('http://localhost/oauth/alice', {}, env);
 
-    expect(storage.status).toBe(503);
-    expect(discovery.status).toBe(503);
-    expect(await discovery.text()).toContain('OWNER_EMAIL');
+    expect(discovery.status).toBe(200);
   });
 
   it('outside dev mode, configured values are used', async () => {

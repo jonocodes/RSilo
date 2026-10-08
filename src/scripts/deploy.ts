@@ -39,7 +39,7 @@ if (args.length > 0) {
   console.log('Using wrangler.toml (placeholders or Cloudflare-injected IDs)');
 }
 
-// Empty [vars] entries are placeholders (wrangler.toml ships the Instance vars
+// Empty [vars] entries are placeholders (wrangler.toml ships OWNER_EMAIL
 // empty for the deploy button). Deploying them would blank values the Owner set
 // in the dashboard, so deploy a copy without them, and --keep-vars keeps any
 // dashboard var the config does not mention.

@@ -124,7 +124,7 @@ debugRouter.post('/token', tokenHandler);
 // the denormalised counter the dashboard reads. Listing objects is a Class A
 // operation, so this is an on-demand action, not something to poll.
 debugRouter.get('/storage', async (c) => {
-  const config = getInstanceConfig(c.env);
+  const config = getInstanceConfig(c.env, c.req.url);
   if ('problems' in config) return c.json({ error: 'Instance is not configured', problems: config.problems }, 503);
   const username = config.config.accountUsername;
   const env = c.env as any;

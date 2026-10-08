@@ -28,20 +28,21 @@ simple = { limit = 20, period = 60 }
 [observability]
 enabled = true
 
-# Per-Instance configuration: plain-text vars, all required in production.
-# RSilo needs no secrets: Cloudflare Access signs the Owner in to /account.
-#   ACCOUNT_USERNAME — the one Account this Instance serves ([a-z0-9_.-]+)
-#   OWNER_EMAIL      — the Owner's email; only it may use /account
-#   PUBLIC_BASE_URL  — origin every advertised URL is built from, e.g.
-#                      https://rsilo.<your-subdomain>.workers.dev
-# They are empty here on purpose. The Deploy to Cloudflare button asks for
-# them; `bun run setup` writes real values into wrangler.prod.toml. An empty
-# value never passes validation: the Instance shows its "finish setup" page and
-# refuses storage and OAuth requests. `bun run deploy` drops empty entries
-# before deploying, so it never blanks values set in the Worker's dashboard.
-# Optional: MAX_OBJECT_SIZE_BYTES (default 10 MiB).
+# Per-Instance configuration: plain-text vars. RSilo needs no secrets:
+# Cloudflare Access signs the Owner in to /account.
+#   OWNER_EMAIL      — required: the Owner's email; only it may use /account.
+#                      Until it is set, /account shows a "finish setup" page;
+#                      storage, WebFinger and the token endpoint keep working.
+# Optional, set in the Worker's dashboard (Settings → Variables and Secrets):
+#   ACCOUNT_USERNAME — the one Account this Instance serves ([a-z0-9_.-]+);
+#                      default "me", so the storage address is me@<host>
+#   PUBLIC_BASE_URL  — canonical origin for every advertised URL, e.g. a
+#                      custom domain; default: the request's own origin
+#   MAX_OBJECT_SIZE_BYTES — default 10 MiB
+# OWNER_EMAIL is empty here on purpose: the Deploy to Cloudflare button asks
+# for it, and `bun run setup` writes the real value into wrangler.prod.toml.
+# `bun run deploy` drops empty entries before deploying (and deploys with
+# --keep-vars), so it never blanks a value set in the Worker's dashboard.
 # RSILO_DEV_MODE is only for local development and must never be deployed.
 [vars]
-ACCOUNT_USERNAME = ""
 OWNER_EMAIL = ""
-PUBLIC_BASE_URL = ""

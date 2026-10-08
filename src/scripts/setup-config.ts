@@ -2,9 +2,12 @@
 // Instance var validation, [vars] editing in wrangler TOML, and the manual
 // Cloudflare Access steps. No I/O here, so it is unit-tested without Cloudflare.
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem } from '../config';
+import { workerNameFromHost } from '../ui/setup-pages';
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
+/** The vars a fresh Instance must be given; the rest have defaults (src/config.ts). */
+export const REQUIRED_VARS = ['OWNER_EMAIL'] as const satisfies readonly InstanceVar[];
 export type InstanceSettings = Partial<Record<InstanceVar, string>>;
 
 const FIELD_RULES: Record<InstanceVar, (value: string) => string | null> = {
@@ -141,8 +144,8 @@ export function setVars(toml: string, vars: Record<string, string>): string {
 
 /**
  * Drops empty-string [vars] entries. The committed wrangler.toml declares the
- * Instance vars empty so the deploy button asks for them; deploying those
- * placeholders would blank values the Owner set in the dashboard.
+ * required OWNER_EMAIL empty so the deploy button asks for it; deploying that
+ * placeholder would blank the value the Owner set in the dashboard.
  */
 export function withoutEmptyVars(toml: string): string {
   const lines = toml.split('\n');
@@ -172,7 +175,7 @@ export function accessSteps(publicBaseUrl: string, ownerEmail?: string): string 
 Open ${ZERO_TRUST_DASHBOARD_URL} (Cloudflare Zero Trust), then:
 
   1. If asked, pick a team name and the Free plan.
-  2. Go to Access → Applications → Add an application → Self-hosted.
+  2. Go to Access → Applications → Add an application → Self-hosted, and name it RSilo.
   3. Add a public hostname: domain ${host}, path account
   4. Add a policy: action Allow, Include → Emails → ${email}
   5. Under login methods, keep One-time PIN (or choose another identity provider).
@@ -182,4 +185,18 @@ Open ${ZERO_TRUST_DASHBOARD_URL} (Cloudflare Zero Trust), then:
 Do not use the Worker-level "protect this Worker" / workers.dev Access toggle
 in the Worker's settings: it gates the whole Worker, including /storage and
 WebFinger, so your apps could no longer sync.`;
+}
+
+/**
+ * How to change the sign-in email later (plain text). `host` is the Worker's
+ * host when known, for the Worker name in the click path.
+ */
+export function changeOwnerEmailSteps(host: string | null): string {
+  const worker = (host && workerNameFromHost(host)) || 'your Worker';
+  return `To change your sign-in email later, update it in two places:
+
+  1. OWNER_EMAIL: Workers & Pages → ${worker} → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy
+     (or re-run: bun run setup --owner-email=new@example.com)
+  2. The Access Allow policy: Zero Trust → Access → Applications → RSilo app → Policies
+     (otherwise Cloudflare Access will not let the new email through at all)`;
 }

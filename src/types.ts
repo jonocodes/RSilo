@@ -8,11 +8,11 @@ export interface AppEnv {
   RSILO_DEV_MODE?: string;
   /** Dev mode only: email of the local dev identity. Defaults to OWNER_EMAIL. */
   RSILO_DEV_EMAIL?: string;
-  /** The one Account this Instance serves. Required outside dev mode. */
+  /** The one Account this Instance serves. Optional; defaults to "me" ("alice" in dev mode). */
   ACCOUNT_USERNAME?: string;
-  /** The Owner's email as Cloudflare Access reports it. Required outside dev mode. */
+  /** The Owner's email as Cloudflare Access reports it. The only required setting; gates /account only. */
   OWNER_EMAIL?: string;
-  /** Origin every advertised URL is built from. Required outside dev mode. */
+  /** Canonical origin for advertised URLs (e.g. a custom domain). Optional; defaults to the request's origin. */
   PUBLIC_BASE_URL?: string;
   MAX_OBJECT_SIZE_BYTES?: string;
 }
