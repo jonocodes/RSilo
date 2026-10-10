@@ -5,30 +5,53 @@ import { withoutEmptyVars } from './setup-config';
 import { DEPLOY_CONFIG, PROD_CONFIG, configArgs } from './wrangler-config';
 
 const ROOT = process.cwd();
-const WRANGLER = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
+// RSILO_WRANGLER lets tests substitute a fake wrangler (test/deploy-script.test.ts).
+const WRANGLER = process.env.RSILO_WRANGLER
+  ?? join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 const prodConfigPath = join(ROOT, PROD_CONFIG);
 
 const migrateOnly = process.argv.includes('--migrate-only');
+const onCi = process.env.WORKERS_CI === '1';
+
+const PLACEHOLDER_ID = '00000000-0000-0000-0000-000000000000';
+
+function findDatabaseId(name: string): string | undefined {
+  const res = spawnSync(WRANGLER, ['d1', 'list', '--json'], { encoding: 'utf8' });
+  if (res.status !== 0) return undefined;
+  try {
+    const list = JSON.parse(res.stdout.slice(res.stdout.indexOf('['))) as { name: string; uuid: string }[];
+    return list.find((d) => d.name === name)?.uuid;
+  } catch {
+    return undefined;
+  }
+}
 
 // On CI (Cloudflare Workers Builds) there is no local, gitignored prod config.
-// Materialise one from build variables so account-specific resource IDs stay
-// out of git while the deploy still targets the right D1 database.
+// Materialise one by looking the D1 database up by name, so no account-specific
+// ID lives in git or in a build variable that goes stale if the database is
+// recreated. RSILO_BUCKET / RSILO_DB name the resources, as for `bun run setup`.
 if (!existsSync(prodConfigPath)) {
-  const dbId = process.env.D1_DATABASE_ID;
+  const template = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8');
+  const dbName = process.env.RSILO_DB ?? template.match(/database_name\s*=\s*"([^"]*)"/)?.[1] ?? '';
+  const committedId = template.match(/database_id\s*=\s*"([^"]*)"/)?.[1];
+  // A Deploy to Cloudflare fork has its real ID committed; keep it if the lookup fails.
+  const dbId = findDatabaseId(dbName) ?? (committedId !== PLACEHOLDER_ID ? committedId : undefined);
 
-  if (process.env.WORKERS_CI === '1' && !dbId) {
+  if (onCi && !dbId) {
     console.error(
-      'Workers Builds: set build variable D1_DATABASE_ID ' +
-        '(Worker → Settings → Builds → Build variables), or provide a wrangler.prod.toml.'
+      `No D1 database named '${dbName}' was found in this account. Create it with ` +
+        '`bun run setup`, or set the build variable RSILO_DB to the name of your database.'
     );
     process.exit(1);
   }
 
   if (dbId) {
-    const toml = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8')
+    let toml = template
+      .replace(/(database_name\s*=\s*)"[^"]*"/, `$1"${dbName}"`)
       .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
+    if (process.env.RSILO_BUCKET) toml = toml.replace(/(bucket_name\s*=\s*)"[^"]*"/, `$1"${process.env.RSILO_BUCKET}"`);
     writeFileSync(prodConfigPath, toml);
-    console.log('Materialised wrangler.prod.toml from D1_DATABASE_ID');
+    console.log(`Materialised ${PROD_CONFIG} for D1 database '${dbName}' (${dbId})`);
   }
 }
 
