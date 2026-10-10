@@ -174,6 +174,12 @@ describe('accessSteps', () => {
     expect(text).toMatch(/OWNER_EMAIL/);
     expect(text).toMatch(/not.*Worker-level/i);
   });
+
+  it('suggests the longest session, in both places it is set', () => {
+    expect(text).toMatch(/optional/i);
+    expect(text).toMatch(/Session Duration[^\n]*1 month/i);
+    expect(text).toMatch(/Global session timeout[^\n]*1 month/i);
+  });
 });
 
 describe('committed deploy config', () => {

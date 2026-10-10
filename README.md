@@ -164,6 +164,13 @@ RSilo has no password of its own. **Cloudflare Access** signs you in to your acc
 6. Save the application.
 7. Open `https://rsilo.<your-subdomain>.workers.dev/account`. Access asks for your email, sends you a code, and you land on your dashboard.
 
+**Optional: sign in less often.** An Access session lasts 24 hours by default, after which you get a new code. To stretch it to the maximum of one month, set it in both places (the global session covers the sign-in that renews the app's session):
+
+- **Access → Applications → RSilo → Edit → Session Duration:** 1 month.
+- **Settings → Authentication → Global session timeout:** 1 month.
+
+The trade-off is that anyone using your unlocked browser can open `/account` for up to a month; **Sign out** ends the session at any time. The new length applies from your next sign-in.
+
 > **Do not** turn on the Worker-level Access toggle (the "protect this Worker" / `workers.dev` Access switch in the Worker's settings). It locks the *whole* Worker, including `/storage` and WebFinger, so your apps could no longer reach your data. Only `/account` should be behind Access; apps use their own tokens for everything else.
 
 Nothing needs to be set in RSilo after creating the Access application.
@@ -399,7 +406,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**626 tests** across 31 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**627 tests** across 31 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
