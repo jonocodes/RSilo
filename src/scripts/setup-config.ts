@@ -182,6 +182,10 @@ Open ${ZERO_TRUST_DASHBOARD_URL} (Cloudflare Zero Trust), then:
   6. Save the application.
   7. Open ${new URL('/account', publicBaseUrl).href} and sign in.
 
+Optional, to sign in less often (both default to 24 hours):
+  - Access → Applications → RSilo → Edit → Session Duration: 1 month
+  - Settings → Authentication → Global session timeout: 1 month
+
 Do not use the Worker-level "protect this Worker" / workers.dev Access toggle
 in the Worker's settings: it gates the whole Worker, including /storage and
 WebFinger, so your apps could no longer sync.`;
