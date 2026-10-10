@@ -147,7 +147,7 @@ To release on every push to `main`, connect the repository to your Worker using 
    bun run deploy
    ```
 
-4. Under **Build variables**, add `D1_DATABASE_ID` (the value from your `wrangler.prod.toml`), marked as a secret. This is the only thing not in git; `bun run deploy` materialises `wrangler.prod.toml` from it, applies D1 migrations, and deploys. If you ever delete and recreate the database (for example to start over), update this variable to the new ID, or the next build deploys against a database that no longer exists.
+4. No build variables are needed. On the build, `bun run deploy` finds your D1 database by name (`remotestorage-db`), materialises `wrangler.prod.toml` for it, applies D1 migrations, and deploys, so a recreated database is picked up automatically. If you gave `bun run setup` other names with `RSILO_BUCKET` / `RSILO_DB`, add the same two as **Build variables**. A `D1_DATABASE_ID` build variable from older instructions is ignored; you can delete it.
 5. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
