@@ -102,7 +102,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'POST /oauth/{user}/token': {
     summary: 'Exchange code or refresh token',
     tags: ['OAuth'],
-    description: 'Supports grant_type=authorization_code and grant_type=refresh_token. Tokens are issued for the Account only.',
+    description: 'Supports grant_type=authorization_code and grant_type=refresh_token. Tokens are issued for the Account only. '
+      + 'A code requested with a PKCE code_challenge needs the matching code_verifier; one requested without needs none, and is refused if one is sent.',
     responses: {
       '200': { description: 'Access token (and refresh token).' },
       '400': { description: 'invalid_grant.' },
@@ -201,6 +202,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
       { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated scopes, e.g. documents:rw. Defaults to documents:rw.' },
       { name: 'state', in: 'query', required: false, schema: { type: 'string' } },
+      { name: 'code_challenge', in: 'query', required: false, schema: { type: 'string' }, description: 'PKCE (RFC 7636): base64url SHA-256 of the code_verifier, 43 characters. Code flow only.' },
+      { name: 'code_challenge_method', in: 'query', required: false, schema: { type: 'string', enum: ['S256'] }, description: 'Required with code_challenge. plain is refused.' },
     ],
     responses: {
       '200': { description: 'The consent page.' },

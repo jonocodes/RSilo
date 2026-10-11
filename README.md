@@ -318,6 +318,8 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
 
+The code flow supports **PKCE** ([RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)), `S256` only, and it is optional. An app that adds `code_challenge` and `code_challenge_method=S256` to step 2 must send the matching `code_verifier` in step 5, or the exchange fails with `invalid_grant` and the code is used up. An app that sends no challenge redeems its code as before, but a `code_verifier` sent for such a code is refused, so a request stripped of its challenge cannot be completed. The `plain` method (or a challenge with no method) is a `400` on the consent page. The implicit flow ignores PKCE parameters. `/oauth/:user` advertises `code_challenge_methods_supported: ["S256"]`.
+
 Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
 
 The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) cache discovery results, so that URL still answers `GET` with a `302` to `/account/oauth/authorize`, passing the query string through unchanged. `POST` there returns `405`, and any `:user` other than the Account returns `404`.
