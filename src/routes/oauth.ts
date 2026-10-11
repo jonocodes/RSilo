@@ -3,6 +3,7 @@ import { PROTOCOL_VERSION } from '../protocol/constants';
 import { generateToken } from '../services/auth';
 import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { accountUrls } from '../services/discovery';
+import { PKCE_METHODS, verifyPkce } from '../services/pkce';
 
 export const oauthRouter = new Hono();
 
@@ -41,6 +42,7 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
   let code: string | undefined;
   let redirectUri: string | undefined;
   let refreshToken: string | undefined;
+  let codeVerifier: string | undefined;
 
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const params = new URLSearchParams(await c.req.text());
@@ -48,12 +50,14 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
     code = params.get('code') || undefined;
     redirectUri = params.get('redirect_uri') || undefined;
     refreshToken = params.get('refresh_token') || undefined;
+    codeVerifier = params.get('code_verifier') || undefined;
   } else {
     const json = await c.req.json() as any;
     grantType = json.grant_type || '';
     code = json.code;
     redirectUri = json.redirect_uri;
     refreshToken = json.refresh_token;
+    codeVerifier = json.code_verifier;
   }
 
   const db = (c.env as any).DB;
@@ -75,7 +79,18 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
       return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
     }
 
+    // Single use: burnt before the PKCE check, so a wrong verifier cannot be retried.
     await db?.prepare?.('DELETE FROM oauth_codes WHERE code = ?')?.bind?.(code)?.run?.();
+
+    if (codeData.code_challenge) {
+      if (typeof codeVerifier !== 'string' || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
+        return c.json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' }, 400);
+      }
+    } else if (codeVerifier !== undefined) {
+      // A verifier for a code requested without a challenge means the PKCE
+      // parameters were stripped from the authorization request.
+      return c.json({ error: 'invalid_grant', error_description: 'code_verifier sent for a code issued without code_challenge' }, 400);
+    }
 
     const accessToken = generateToken();
     const newRefreshToken = generateToken();
@@ -145,6 +160,7 @@ oauthRouter.get('/:user', requireInstanceConfig(), requireAccountPath(), async (
     api: PROTOCOL_VERSION,
     auth: urls.authorize,
     token_endpoint: urls.token,
+    code_challenge_methods_supported: PKCE_METHODS,
     storageapi: urls.storageRoot,
   }, 200, {
     'Access-Control-Allow-Origin': origin,

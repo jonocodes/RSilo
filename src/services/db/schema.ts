@@ -15,6 +15,8 @@ export interface OAuthCode {
   scope: string;
   expires_at: number;
   created_at: number;
+  code_challenge: string | null;
+  code_challenge_method: string | null;
 }
 
 export interface OAuthClient {

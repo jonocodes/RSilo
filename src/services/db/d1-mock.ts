@@ -86,6 +86,8 @@ export class D1Adapter {
               scope: values[4],
               expires_at: values[5],
               created_at: Math.floor(Date.now() / 1000),
+              code_challenge: values[6] ?? null,
+              code_challenge_method: values[7] ?? null,
             });
           } else if (sql.includes('DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ?')) {
             await self.db.deleteTokensByClient(values[0], values[1]);
