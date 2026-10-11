@@ -2,7 +2,8 @@ import type { R2Bucket, RateLimit } from '@cloudflare/workers-types';
 import type { TokenPayload } from './services/auth';
 
 export interface AppEnv {
-  STORAGE: R2Bucket;
+  /** R2 bucket. Unused, and may be absent, when the S3_* vars are set (ADR-0005). */
+  STORAGE?: R2Bucket;
   DB: D1Database;
   STORAGE_LIMITER?: RateLimit;
   RSILO_DEV_MODE?: string;
@@ -15,6 +16,13 @@ export interface AppEnv {
   /** Canonical origin for advertised URLs (e.g. a custom domain). Optional; defaults to the request's origin. */
   PUBLIC_BASE_URL?: string;
   MAX_OBJECT_SIZE_BYTES?: string;
+  /** S3-compatible storage instead of R2 (ADR-0005). All but S3_REGION are required once any is set. */
+  S3_ENDPOINT?: string;
+  S3_BUCKET?: string;
+  S3_REGION?: string;
+  S3_ACCESS_KEY_ID?: string;
+  /** The only secret RSilo reads; set with `wrangler secret put`, never in [vars]. */
+  S3_SECRET_ACCESS_KEY?: string;
 }
 
 export interface StorageInterface {

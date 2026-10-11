@@ -9,10 +9,18 @@
 //
 // Non-interactive use: pass --owner-email and optionally --account-username /
 // --public-base-url (or the env vars of the same names as the Worker vars).
+//
+// S3 mode (ADR-0005): --s3-endpoint, --s3-bucket, --s3-access-key-id and
+// optionally --s3-region store files in an S3-compatible bucket instead of R2.
+// R2 is then neither checked nor created, the R2 binding is left out of
+// wrangler.prod.toml, and the S3 key is set as the Worker secret
+// S3_SECRET_ACCESS_KEY: from that env var, else prompted for (input hidden)
+// when the Worker does not have it yet. It is never written to a file.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { Writable } from 'node:stream';
 import { DEFAULT_ACCOUNT_USERNAME } from '../config';
 import {
   accessSteps,
@@ -20,12 +28,15 @@ import {
   parseSetupArgs,
   readVars,
   resolveSetting,
+  S3_SETUP_VARS,
   setVars,
   validateSetting,
   withoutEmptyVars,
+  withoutR2Buckets,
   workersDevUrl,
   type InstanceSettings,
-  type InstanceVar,
+  type S3SetupVar,
+  type SetupVar,
 } from './setup-config';
 import { PROD_CONFIG } from './wrangler-config';
 
@@ -44,10 +55,11 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function wrangler(args: string[], capture = false): { status: number; out: string } {
+function wrangler(args: string[], capture = false, input?: string): { status: number; out: string } {
   const res = spawnSync(WRANGLER, args, {
     encoding: 'utf8',
-    stdio: capture ? 'pipe' : 'inherit',
+    input,
+    stdio: capture || input !== undefined ? 'pipe' : 'inherit',
   });
   return { status: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 }
@@ -75,7 +87,7 @@ const existingVars = existsSync(PROD_CONFIG_PATH) ? readVars(readFileSync(PROD_C
 const sources = { flags, env: process.env, existing: existingVars };
 const interactive = Boolean(process.stdin.isTTY);
 
-function flagName(name: InstanceVar): string {
+function flagName(name: SetupVar): string {
   return `--${name.toLowerCase().replace(/_/g, '-')}`;
 }
 
@@ -104,7 +116,7 @@ async function askOwnerEmail(): Promise<string> {
 
 // Optional overrides: never prompted for, written only when given (or kept
 // from an earlier run).
-function optionalSetting(name: 'ACCOUNT_USERNAME' | 'PUBLIC_BASE_URL'): string | undefined {
+function optionalSetting(name: 'ACCOUNT_USERNAME' | 'PUBLIC_BASE_URL' | S3SetupVar): string | undefined {
   const value = resolveSetting(name, sources);
   if (value === undefined) return undefined;
   const problem = validateSetting(name, value);
@@ -114,11 +126,55 @@ function optionalSetting(name: 'ACCOUNT_USERNAME' | 'PUBLIC_BASE_URL'): string |
 
 console.log('RSilo setup — provisioning Cloudflare resources and deploying.\n');
 
-const settings: Partial<Record<InstanceVar, string>> = {
+const settings: InstanceSettings = {
   OWNER_EMAIL: await askOwnerEmail(),
   ACCOUNT_USERNAME: optionalSetting('ACCOUNT_USERNAME'),
   PUBLIC_BASE_URL: optionalSetting('PUBLIC_BASE_URL'),
 };
+
+const S3_SECRET = 'S3_SECRET_ACCESS_KEY';
+for (const name of S3_SETUP_VARS) settings[name] = optionalSetting(name);
+const s3Mode = S3_SETUP_VARS.some((name) => settings[name]);
+if (s3Mode) {
+  const missing = (['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID'] as const).filter((name) => !settings[name]);
+  if (missing.length > 0) fail(`S3 storage needs ${missing.map(flagName).join(', ')} as well.`);
+  // A first S3 setup needs the key; fail before touching Cloudflare if it cannot be asked for.
+  const firstS3Setup = !existingVars.S3_ENDPOINT;
+  if (firstS3Setup && !process.env[S3_SECRET]?.trim() && !interactive) {
+    fail(`Set ${S3_SECRET} in the environment to the bucket's secret access key.`);
+  }
+}
+
+async function askHidden(question: string): Promise<string> {
+  process.stdout.write(question);
+  const muted = new Writable({ write: (_chunk, _encoding, done) => done() });
+  const rl = createInterface({ input: process.stdin, output: muted, terminal: true });
+  try {
+    return (await rl.question('')).trim();
+  } finally {
+    rl.close();
+    process.stdout.write('\n');
+  }
+}
+
+// Sets S3_SECRET_ACCESS_KEY on the deployed Worker: from the environment, or,
+// when the Worker does not have it yet, from a hidden prompt. Kept otherwise.
+async function ensureS3Secret(): Promise<void> {
+  let value = process.env[S3_SECRET]?.trim();
+  if (!value) {
+    const list = wrangler(['secret', 'list', '--format', 'json', '--config', PROD_CONFIG_PATH], true);
+    if (list.status === 0 && parseJsonArray(list.out).some((s) => s.name === S3_SECRET)) {
+      console.log(`• Worker secret ${S3_SECRET} already set (set ${S3_SECRET} in the environment to replace it)`);
+      return;
+    }
+    if (!interactive) fail(`The Worker has no ${S3_SECRET}. Set it in the environment and re-run.`);
+    while (!value) value = await askHidden(`Secret access key for S3 bucket ${settings.S3_BUCKET} (input hidden): `);
+  }
+  if (wrangler(['secret', 'put', S3_SECRET, '--config', PROD_CONFIG_PATH], true, value).status !== 0) {
+    fail(`Could not set the Worker secret ${S3_SECRET}.`);
+  }
+  console.log(`✓ Worker secret ${S3_SECRET} set`);
+}
 
 const who = wrangler(['whoami'], true);
 if (who.status !== 0 || /not authenticated/i.test(who.out)) {
@@ -126,15 +182,22 @@ if (who.status !== 0 || /not authenticated/i.test(who.out)) {
 }
 console.log('✓ Cloudflare authenticated');
 
-const buckets = wrangler(['r2', 'bucket', 'list'], true);
-if (/enable R2/i.test(buckets.out)) {
-  fail('R2 is not enabled on this account. Enable it in the Cloudflare dashboard (R2 → Enable) and re-run.');
-}
+if (s3Mode) {
+  console.log(`• Files go to S3 bucket '${settings.S3_BUCKET}' at ${settings.S3_ENDPOINT}; R2 is not used`);
+  if (existsSync(PROD_CONFIG_PATH) && !existingVars.S3_ENDPOINT) {
+    console.log('! This Instance used R2 until now. Files already in R2 are not copied to the S3 bucket (see README).');
+  }
+} else {
+  const buckets = wrangler(['r2', 'bucket', 'list'], true);
+  if (/enable R2/i.test(buckets.out)) {
+    fail('R2 is not enabled on this account. Enable it in the Cloudflare dashboard (R2 → Enable) and re-run, or use an S3 bucket instead (see README).');
+  }
 
-const r2 = wrangler(['r2', 'bucket', 'create', BUCKET], true);
-if (r2.status === 0) console.log(`✓ R2 bucket '${BUCKET}' ready`);
-else if (/already exists/i.test(r2.out)) console.log(`• R2 bucket '${BUCKET}' already exists`);
-else fail(`Could not create R2 bucket:\n${r2.out}`);
+  const r2 = wrangler(['r2', 'bucket', 'create', BUCKET], true);
+  if (r2.status === 0) console.log(`✓ R2 bucket '${BUCKET}' ready`);
+  else if (/already exists/i.test(r2.out)) console.log(`• R2 bucket '${BUCKET}' already exists`);
+  else fail(`Could not create R2 bucket:\n${r2.out}`);
+}
 
 let dbId = wrangler(['d1', 'create', DB_NAME], true).out.match(/database_id\s*=\s*"([0-9a-fA-F-]+)"/)?.[1];
 if (dbId) {
@@ -151,8 +214,10 @@ if (dbId) {
 // Empty entries are left out so a deploy never blanks a dashboard value.
 // The bucket and database names are written too, so RSILO_BUCKET / RSILO_DB
 // bind the Worker to the resources created above, not the committed defaults.
+// In S3 mode the R2 binding is dropped.
 function writeProdConfig(): void {
-  const template = readFileSync(CONFIG, 'utf8')
+  const committed = readFileSync(CONFIG, 'utf8');
+  const template = (s3Mode ? withoutR2Buckets(committed) : committed)
     .replace(/(bucket_name\s*=\s*)"[^"]*"/, `$1"${BUCKET}"`)
     .replace(/(database_name\s*=\s*)"[^"]*"/, `$1"${DB_NAME}"`)
     .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
@@ -178,6 +243,7 @@ const deployResult = wrangler(['deploy', '--config', PROD_CONFIG_PATH, '--keep-v
 console.log(deployResult.out);
 if (deployResult.status !== 0) fail('Deploy failed.');
 const deployedUrl = workersDevUrl(deployResult.out);
+if (s3Mode) await ensureS3Secret();
 
 const baseUrl = settings.PUBLIC_BASE_URL ?? deployedUrl;
 const username = settings.ACCOUNT_USERNAME ?? DEFAULT_ACCOUNT_USERNAME;

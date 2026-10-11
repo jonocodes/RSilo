@@ -18,6 +18,8 @@ case "$1 $2" in
   "r2 bucket") echo "ok";;
   "d1 create") echo 'database_id = "11111111-2222-3333-4444-555555555555"';;
   "d1 migrations") echo "migrated";;
+  "secret list") if [ -f "$dir/secrets" ]; then printf '[{"name":"%s","type":"secret_text"}]\\n' "$(cat "$dir/secrets")"; else echo "[]"; fi;;
+  "secret put") echo "$3" > "$dir/secrets"; cat > "$dir/secret-value";;
   "deploy "*)
     cfg=""; prev=""
     for a in "$@"; do [ "$prev" = "--config" ] && cfg="$a"; prev="$a"; done
@@ -134,6 +136,71 @@ describe('bun run setup (fake wrangler)', () => {
     const missing = setup(['--account-username=jono']);
     expect(missing.status).toBe(1);
     expect(missing.out).toMatch(/OWNER_EMAIL is not set/);
+
+    expect(existsSync(join(dir, 'calls.log'))).toBe(false);
+  });
+});
+
+describe('bun run setup with S3 storage (fake wrangler)', () => {
+  const S3_FLAGS = [
+    '--owner-email=me@example.com',
+    '--s3-endpoint=https://s3.us-west-004.backblazeb2.com',
+    '--s3-bucket=rsilo-files',
+    '--s3-access-key-id=004abc',
+  ];
+
+  it('skips R2, drops the R2 binding, writes the S3 vars and sets the key as a Worker secret', () => {
+    const res = setup(S3_FLAGS, { S3_SECRET_ACCESS_KEY: 'K004-very-secret' });
+    expect(res.status, res.out).toBe(0);
+
+    expect(calls().some((c) => c.startsWith('r2 '))).toBe(false);
+    const prod = readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8');
+    expect(prod).not.toMatch(/r2_buckets|bucket_name/);
+    expect(prod).toMatch(/\[\[d1_databases\]\]/);
+    expect(prodVars()).toEqual({
+      OWNER_EMAIL: 'me@example.com',
+      S3_ENDPOINT: 'https://s3.us-west-004.backblazeb2.com',
+      S3_BUCKET: 'rsilo-files',
+      S3_ACCESS_KEY_ID: '004abc',
+    });
+
+    expect(calls()).toContain('secret put S3_SECRET_ACCESS_KEY --config ' + join(dir, 'wrangler.prod.toml'));
+    expect(readFileSync(join(dir, 'secret-value'), 'utf8')).toBe('K004-very-secret');
+    expect(prod).not.toContain('K004-very-secret');
+    expect(readFileSync(join(dir, 'deployed-0.toml'), 'utf8')).not.toContain('K004-very-secret');
+    expect(res.out).not.toContain('K004-very-secret');
+  });
+
+  it('keeps the Worker secret on a re-run that does not pass one', () => {
+    expect(setup(S3_FLAGS, { S3_SECRET_ACCESS_KEY: 'K004-very-secret' }).status).toBe(0);
+    writeFileSync(join(dir, 'calls.log'), '');
+
+    const res = setup([]);
+    expect(res.status, res.out).toBe(0);
+    expect(prodVars()).toMatchObject({ S3_BUCKET: 'rsilo-files' });
+    expect(calls().some((c) => c.startsWith('secret put'))).toBe(false);
+    expect(res.out).toContain('S3_SECRET_ACCESS_KEY already set');
+  });
+
+  it('warns that switching an R2 Instance to S3 does not copy its files', () => {
+    expect(setup(['--owner-email=me@example.com']).status).toBe(0);
+    const res = setup(S3_FLAGS, { S3_SECRET_ACCESS_KEY: 'k' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toMatch(/Files already in R2 are not copied/);
+  });
+
+  it('refuses an incomplete S3 setup, or one with no key to set, before touching Cloudflare', () => {
+    const partial = setup(['--owner-email=me@example.com', '--s3-bucket=rsilo-files']);
+    expect(partial.status).toBe(1);
+    expect(partial.out).toMatch(/--s3-endpoint, --s3-access-key-id/);
+
+    const badEndpoint = setup([...S3_FLAGS, '--s3-endpoint=s3.example.com'], { S3_SECRET_ACCESS_KEY: 'k' });
+    expect(badEndpoint.status).toBe(1);
+    expect(badEndpoint.out).toMatch(/S3_ENDPOINT must be/);
+
+    const noKey = setup(S3_FLAGS);
+    expect(noKey.status).toBe(1);
+    expect(noKey.out).toMatch(/Set S3_SECRET_ACCESS_KEY/);
 
     expect(existsSync(join(dir, 'calls.log'))).toBe(false);
   });

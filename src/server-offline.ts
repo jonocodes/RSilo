@@ -7,7 +7,7 @@ import { LocalStorage } from './services/local-storage';
 import { LocalDatabase } from './services/db/local';
 import { D1Adapter } from './services/db/d1-mock';
 import { readFileSync } from 'fs';
-import { DEV_ACCOUNT_USERNAME, DEV_OWNER_EMAIL } from './config';
+import { DEV_ACCOUNT_USERNAME, DEV_OWNER_EMAIL, S3_VARS } from './config';
 
 function loadDevVars(path: string) {
   try {
@@ -57,6 +57,10 @@ app.use('*', async (c, next) => {
   (c.env as any).OWNER_EMAIL = OWNER_EMAIL;
   if (process.env.RSILO_DEV_EMAIL) (c.env as any).RSILO_DEV_EMAIL = process.env.RSILO_DEV_EMAIL;
   (c.env as any).PUBLIC_BASE_URL = PUBLIC_BASE_URL;
+  // S3_* in the environment (e.g. a local MinIO) replace the local directory.
+  for (const name of S3_VARS) {
+    if (process.env[name]) (c.env as any)[name] = process.env[name];
+  }
   await next();
 });
 
@@ -67,7 +71,7 @@ app.get('/health', (c) => c.json({ status: 'ok', mode: 'offline' }));
 mountDocs(app);
 
 console.log(`RemoteStorage Worker (offline mode)`);
-console.log(`Storage: ${STORAGE_DIR}`);
+console.log(`Storage: ${process.env.S3_ENDPOINT ? `S3 bucket ${process.env.S3_BUCKET} at ${process.env.S3_ENDPOINT}` : STORAGE_DIR}`);
 console.log(`Database: ${DB_PATH}`);
 console.log(`Account: ${ACCOUNT_USERNAME} at ${PUBLIC_BASE_URL} (owner ${OWNER_EMAIL})`);
 console.log(`Listening on http://localhost:${port}`);

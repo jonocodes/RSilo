@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { withoutEmptyVars } from './setup-config';
+import { withoutEmptyVars, withoutR2Buckets } from './setup-config';
 import { DEPLOY_CONFIG, PROD_CONFIG, configArgs } from './wrangler-config';
 
 const ROOT = process.cwd();
@@ -29,7 +29,9 @@ function findDatabaseId(name: string): string | undefined {
 // On CI (Cloudflare Workers Builds) there is no local, gitignored prod config.
 // Materialise one by looking the D1 database up by name, so no account-specific
 // ID lives in git or in a build variable that goes stale if the database is
-// recreated. RSILO_BUCKET / RSILO_DB name the resources, as for `bun run setup`.
+// recreated. RSILO_BUCKET / RSILO_DB name the resources, as for `bun run setup`;
+// RSILO_STORAGE=s3 leaves the R2 binding out, for an Instance whose files are
+// in an S3 bucket (ADR-0005) on an account without R2.
 if (!existsSync(prodConfigPath)) {
   const template = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8');
   const dbName = process.env.RSILO_DB ?? template.match(/database_name\s*=\s*"([^"]*)"/)?.[1] ?? '';
@@ -50,6 +52,7 @@ if (!existsSync(prodConfigPath)) {
       .replace(/(database_name\s*=\s*)"[^"]*"/, `$1"${dbName}"`)
       .replace(/(database_id\s*=\s*)"[^"]*"/, `$1"${dbId}"`);
     if (process.env.RSILO_BUCKET) toml = toml.replace(/(bucket_name\s*=\s*)"[^"]*"/, `$1"${process.env.RSILO_BUCKET}"`);
+    if (process.env.RSILO_STORAGE === 's3') toml = withoutR2Buckets(toml);
     writeFileSync(prodConfigPath, toml);
     console.log(`Materialised ${PROD_CONFIG} for D1 database '${dbName}' (${dbId})`);
   }

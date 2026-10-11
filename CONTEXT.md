@@ -5,8 +5,12 @@ RSilo is a remoteStorage-compatible personal storage server that runs on Cloudfl
 ## Language
 
 **Instance**:
-One deployed RSilo — a single Worker with its own R2, D1, and KV — serving exactly one Account.
+One deployed RSilo — a single Worker with its own D1 and Storage backend — serving exactly one Account.
 _Avoid_: server, deployment (ambiguous)
+
+**Storage backend**:
+Where an Instance keeps file contents: its R2 bucket by default, or one S3-compatible bucket chosen by the `S3_*` settings (ADR-0005). Exactly one per Instance.
+_Avoid_: provider, driver
 
 **Account**:
 The single storage identity on an Instance, named by its username (default `me`) and addressed as `username@host`. All data is keyed under this identity.
