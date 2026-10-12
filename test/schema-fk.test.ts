@@ -29,14 +29,14 @@ describe('D1 migrations: OAuth foreign keys', () => {
   });
 
   it('accepts an OAuth token whose user_id is the username', () => {
-    db.exec("INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES ('t1', 'at1', NULL, 9999999999, 'documents:rw', 'alice', 'c1')");
+    db.exec("INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES ('t1', 'at1', NULL, 9999999999, 'documents:rw', 'alice', 'c1')");
     const row = db.prepare("SELECT user_id FROM oauth_tokens WHERE id = 't1'").get() as { user_id: string };
     expect(row.user_id).toBe('alice');
   });
 
   it('rejects an OAuth token for an unknown username', () => {
     expect(() =>
-      db.exec("INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES ('t2', 'at2', NULL, 9999999999, 'documents:rw', 'nobody', 'c1')")
+      db.exec("INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES ('t2', 'at2', NULL, 9999999999, 'documents:rw', 'nobody', 'c1')")
     ).toThrow();
   });
 });

@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from './helpers/sqlite-d1';
 
-// PKCE (RFC 7636) on the authorization code flow, S256 only. Optional: a code
-// requested without a code_challenge redeems as before, but one requested with
-// a challenge redeems only with the matching code_verifier.
+// PKCE (RFC 7636) on the authorization code flow, S256 only. Required, as OAuth
+// 2.1 requires of public clients: a code is issued only with a code_challenge
+// and redeems only with the matching code_verifier.
 
 const app = createServer({});
 const CONSENT_URL = 'http://localhost/account/oauth/authorize';
@@ -61,12 +61,8 @@ describe('PKCE on the consent page', () => {
     expect(html).toContain('name="code_challenge_method" value="S256"');
   });
 
-  it('omits the PKCE fields when the app sends none', async () => {
-    const res = await app.request(`${CONSENT_URL}?${new URLSearchParams(REQUEST)}`, {}, devEnv());
-    expect(await res.text()).not.toContain('code_challenge');
-  });
-
   const invalid: [string, Record<string, string>][] = [
+    ['no PKCE at all', {}],
     ['the plain method', { code_challenge: CHALLENGE, code_challenge_method: 'plain' }],
     ['no method (which means plain)', { code_challenge: CHALLENGE }],
     ['an unknown method', { code_challenge: CHALLENGE, code_challenge_method: 'S512' }],
@@ -152,18 +148,6 @@ describe('PKCE at the token endpoint', () => {
     expect((await exchange(env, code, { code_verifier: VERIFIER })).status).toBe(400);
   });
 
-  it('still redeems a code requested without PKCE when no code_verifier is sent', async () => {
-    const env = devEnv();
-    const res = await exchange(env, await codeFor(env));
-    expect(res.status).toBe(200);
-  });
-
-  it('refuses a code_verifier for a code requested without PKCE (downgrade protection)', async () => {
-    const env = devEnv();
-    const res = await exchange(env, await codeFor(env), { code_verifier: VERIFIER });
-    expect(res.status).toBe(400);
-    expect((await res.json() as any).error).toBe('invalid_grant');
-  });
 });
 
 describe('PKCE discovery', () => {

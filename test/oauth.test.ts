@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
-import { seedToken } from './helpers/tokens';
+import { PKCE, seedToken, tokenHash } from './helpers/tokens';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -87,6 +87,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
       user_id: 'alice',
       redirect_uri: 'https://example.com/callback',
       scope: 'documents:rw',
+      code_challenge: PKCE.challenge,
       expires_at: Math.floor(Date.now() / 1000) + 600,
     };
 
@@ -109,6 +110,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'authorization_code',
+          code_verifier: PKCE.verifier,
           code: 'test-auth-code',
           redirect_uri: 'https://example.com/callback',
           client_id: 'test-client',
@@ -184,6 +186,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'authorization_code',
+          code_verifier: PKCE.verifier,
           code: 'invalid-code',
           redirect_uri: 'https://example.com/callback',
           client_id: 'test-client',
@@ -277,6 +280,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'authorization_code',
+          code_verifier: PKCE.verifier,
           code: 'expired-code',
           redirect_uri: 'https://example.com/callback',
           client_id: 'test-client',
@@ -296,6 +300,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
       user_id: 'alice',
       redirect_uri: 'https://example.com/callback',
       scope: 'documents:rw',
+      code_challenge: PKCE.challenge,
       expires_at: Math.floor(Date.now() / 1000) + 600,
     };
 
@@ -318,6 +323,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'authorization_code',
+          code_verifier: PKCE.verifier,
           code: 'test-code',
           redirect_uri: 'https://evil.com/callback',
           client_id: 'test-client',
@@ -333,11 +339,12 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
 
   it('POST /oauth/:user/token deletes code after use (prevents reuse)', async () => {
     const codes = new Map<string, any>();
-    codes.set('one-time-code', {
+    codes.set(tokenHash('one-time-code'), {
       client_id: 'test-client',
       user_id: 'alice',
       redirect_uri: 'https://example.com/callback',
       scope: 'documents:rw',
+      code_challenge: PKCE.challenge,
       expires_at: Math.floor(Date.now() / 1000) + 600,
     });
 
@@ -357,6 +364,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
 
     const body = JSON.stringify({
       grant_type: 'authorization_code',
+      code_verifier: PKCE.verifier,
       code: 'one-time-code',
       redirect_uri: 'https://example.com/callback',
       client_id: 'test-client',
@@ -410,6 +418,7 @@ describe('OAuth token endpoint, more grants', () => {
       user_id: 'alice',
       redirect_uri: 'https://example.com/callback',
       scope: 'documents:rw',
+      code_challenge: PKCE.challenge,
       expires_at: Math.floor(Date.now() / 1000) + 600,
     };
     const db = {
@@ -423,6 +432,7 @@ describe('OAuth token endpoint, more grants', () => {
     const env = { ...TEST_ENV, DB: db };
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
+      code_verifier: PKCE.verifier,
       code: 'test-code',
       redirect_uri: 'https://example.com/callback',
       client_id: 'test-client',

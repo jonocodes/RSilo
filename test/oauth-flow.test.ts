@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { seedToken } from './helpers/tokens';
+import { PKCE, seedToken } from './helpers/tokens';
 
 function createTestEnv() {
   return {
@@ -21,6 +21,7 @@ function createTestEnv() {
                 user_id: '1',
                 client_id: 'test-client',
                 redirect_uri: 'http://localhost/callback',
+                code_challenge: PKCE.challenge,
                 scopes: 'documents:rw',
                 expires_at: Date.now() + 600000
               };
@@ -63,6 +64,7 @@ describe('OAuth Flow Tests', () => {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             grant_type: 'authorization_code',
+            code_verifier: PKCE.verifier,
             code: 'valid-code',
             redirect_uri: 'http://localhost/callback',
             client_id: 'test-client',

@@ -19,8 +19,9 @@ function makeMockDb() {
     createToken: vi.fn().mockResolvedValue(undefined),
     deleteToken: vi.fn().mockResolvedValue(undefined),
     deleteTokenByIdAndUser: vi.fn().mockResolvedValue(undefined),
-    getTokenByAccessToken: vi.fn().mockResolvedValue(null),
-    getTokenByRefreshToken: vi.fn().mockResolvedValue(null),
+    getTokenByAccessTokenHash: vi.fn().mockResolvedValue(null),
+    getTokenByRefreshTokenHash: vi.fn().mockResolvedValue(null),
+    rotateToken: vi.fn().mockResolvedValue(undefined),
     getTokensByUser: vi.fn().mockResolvedValue([]),
     createCode: vi.fn().mockResolvedValue(undefined),
     getCode: vi.fn().mockResolvedValue(null),
@@ -73,27 +74,28 @@ describe('D1Adapter — oauth codes', () => {
   });
 
   it('INSERT INTO oauth_codes calls createCode', async () => {
-    const sql = 'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)';
-    await adapter.prepare(sql).bind('abc123', 'client-1', 'alice', 'https://cb', 'documents:rw', 9999).run();
+    const sql = 'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)';
+    await adapter.prepare(sql).bind('abc123', 'client-1', 'alice', 'https://cb', 'documents:rw', 'challenge', 9999).run();
     expect(mockDb.createCode).toHaveBeenCalledWith(expect.objectContaining({
-      code: 'abc123',
+      code_hash: 'abc123',
       client_id: 'client-1',
       user_id: 'alice',
       redirect_uri: 'https://cb',
       scope: 'documents:rw',
+      code_challenge: 'challenge',
       expires_at: 9999,
     }));
   });
 
-  it('SELECT FROM oauth_codes WHERE code = ? calls getCode', async () => {
-    mockDb.getCode.mockResolvedValue({ code: 'abc123', user_id: 'alice', scope: 'documents:rw' });
-    const result = await adapter.prepare('SELECT * FROM oauth_codes WHERE code = ? AND expires_at > ?').bind('abc123', 0).first();
+  it('SELECT FROM oauth_codes WHERE code_hash = ? calls getCode', async () => {
+    mockDb.getCode.mockResolvedValue({ code_hash: 'abc123', user_id: 'alice', scope: 'documents:rw' });
+    const result = await adapter.prepare('SELECT * FROM oauth_codes WHERE code_hash = ? AND expires_at > ?').bind('abc123', 0).first();
     expect(mockDb.getCode).toHaveBeenCalledWith('abc123');
-    expect((result as any)?.code).toBe('abc123');
+    expect((result as any)?.code_hash).toBe('abc123');
   });
 
   it('DELETE FROM oauth_codes calls deleteCode', async () => {
-    const sql = 'DELETE FROM oauth_codes WHERE code = ?';
+    const sql = 'DELETE FROM oauth_codes WHERE code_hash = ?';
     await adapter.prepare(sql).bind('abc123').run();
     expect(mockDb.deleteCode).toHaveBeenCalledWith('abc123');
   });
@@ -109,12 +111,12 @@ describe('D1Adapter — oauth tokens', () => {
   });
 
   it('INSERT INTO oauth_tokens calls createToken', async () => {
-    const sql = 'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)';
+    const sql = 'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)';
     await adapter.prepare(sql).bind('id-1', 'tok', 'ref', 9999, 'documents:rw', 'alice', 'client-1').run();
     expect(mockDb.createToken).toHaveBeenCalledWith({
       id: 'id-1',
-      access_token: 'tok',
-      refresh_token: 'ref',
+      access_token_hash: 'tok',
+      refresh_token_hash: 'ref',
       expires_at: 9999,
       scopes: 'documents:rw',
       user_id: 'alice',
@@ -122,26 +124,30 @@ describe('D1Adapter — oauth tokens', () => {
     });
   });
 
-  it('SELECT oauth_tokens WHERE access_token calls getTokenByAccessToken', async () => {
-    mockDb.getTokenByAccessToken.mockResolvedValue({ access_token: 'tok', user_id: 'alice' });
-    const result = await adapter.prepare('SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?').bind('tok', 0).first();
-    expect(mockDb.getTokenByAccessToken).toHaveBeenCalledWith('tok');
+  it('SELECT oauth_tokens WHERE access_token_hash calls getTokenByAccessTokenHash', async () => {
+    mockDb.getTokenByAccessTokenHash.mockResolvedValue({ access_token_hash: 'tok', user_id: 'alice' });
+    const result = await adapter.prepare('SELECT * FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?').bind('tok', 0).first();
+    expect(mockDb.getTokenByAccessTokenHash).toHaveBeenCalledWith('tok');
     expect((result as any)?.user_id).toBe('alice');
   });
 
-  it('UPDATE oauth_tokens (refresh rotation) deletes old and creates new', async () => {
-    const existing = { id: 'tok-id', access_token: 'old', refresh_token: 'old-ref', expires_at: 9999, scopes: 'documents:rw', user_id: 'alice', client_id: 'client-1' };
-    mockDb.getTokenByRefreshToken.mockResolvedValue(existing);
+  it('SELECT oauth_tokens by refresh hash calls getTokenByRefreshTokenHash', async () => {
+    const sql = 'SELECT * FROM oauth_tokens WHERE refresh_token_hash = ? OR previous_refresh_token_hash = ?';
+    await adapter.prepare(sql).bind('ref', 'ref').first();
+    expect(mockDb.getTokenByRefreshTokenHash).toHaveBeenCalledWith('ref');
+    expect(mockDb.getTokenByAccessTokenHash).not.toHaveBeenCalled();
+  });
 
-    const sql = 'UPDATE oauth_tokens SET access_token = ?, refresh_token = ?, expires_at = ? WHERE refresh_token = ?';
-    await adapter.prepare(sql).bind('new-tok', 'new-ref', 99999, 'old-ref').run();
+  it('UPDATE oauth_tokens (refresh rotation) calls rotateToken', async () => {
+    const sql = 'UPDATE oauth_tokens SET access_token_hash = ?, refresh_token_hash = ?, previous_refresh_token_hash = ?, expires_at = ? WHERE id = ?';
+    await adapter.prepare(sql).bind('new-tok', 'new-ref', 'old-ref', 99999, 'tok-id').run();
 
-    expect(mockDb.deleteToken).toHaveBeenCalledWith('tok-id');
-    expect(mockDb.createToken).toHaveBeenCalledWith(expect.objectContaining({
-      access_token: 'new-tok',
-      refresh_token: 'new-ref',
+    expect(mockDb.rotateToken).toHaveBeenCalledWith('tok-id', {
+      access_token_hash: 'new-tok',
+      refresh_token_hash: 'new-ref',
+      previous_refresh_token_hash: 'old-ref',
       expires_at: 99999,
-    }));
+    });
   });
 
   it('DELETE FROM oauth_tokens WHERE id = ? AND user_id = ? calls deleteTokenByIdAndUser', async () => {

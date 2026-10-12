@@ -6,12 +6,26 @@ export interface TokenPayload {
   exp: number;
 }
 
-// Opaque bearer token value, as stored in oauth_tokens.access_token.
+function base64url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function sha256(value: string): Promise<string> {
+  return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))));
+}
+
+// A fresh secret (access token, refresh token or authorization code): 256
+// random bits as base64url. Only its hash is ever stored.
 export function generateToken(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const array = new Uint8Array(48);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => chars[b % chars.length]).join('');
+  return base64url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+// How a secret is stored and looked up: base64url SHA-256. The secrets are
+// 256-bit random values, so an unsalted fast hash is enough.
+export function hashToken(token: string): Promise<string> {
+  return sha256(token);
 }
 
 export function hasScope(tokenScopes: string, requiredScope: string): boolean {

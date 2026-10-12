@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { generateToken } from '../services/auth';
+import { generateToken, hashToken } from '../services/auth';
 import { LocalDatabase } from '../services/db/local';
 
 // Issues an opaque bearer token for local development by inserting a row into
 // oauth_tokens (ADR-0003). Creates the user and a per-user "dev-token" OAuth
-// client if they do not exist yet. Only the token is written to stdout.
+// client if they do not exist yet. Only the token is written to stdout; the
+// row holds its hash.
 
 const TOKEN_TTL_SECONDS = 86400 * 30;
 
@@ -29,8 +30,8 @@ const accessToken = generateToken();
 const clientId = `dev-token:${username}`;
 const token = {
   id: crypto.randomUUID(),
-  access_token: accessToken,
-  refresh_token: null,
+  access_token_hash: await hashToken(accessToken),
+  refresh_token_hash: null,
   expires_at: now + TOKEN_TTL_SECONDS,
   scopes,
   user_id: username,
@@ -62,8 +63,8 @@ function insertD1(): void {
     `INSERT OR IGNORE INTO users (id, username) VALUES (${sqlString(crypto.randomUUID())}, ${sqlString(username)});`,
     'INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES '
       + `(${sqlString(clientId)}, 'dev-token', '[]', ${now}, ${sqlString(username)});`,
-    'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES '
-      + `(${sqlString(token.id)}, ${sqlString(accessToken)}, NULL, ${token.expires_at}, ${sqlString(scopes)}, `
+    'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES '
+      + `(${sqlString(token.id)}, ${sqlString(token.access_token_hash)}, NULL, ${token.expires_at}, ${sqlString(scopes)}, `
       + `${sqlString(username)}, ${sqlString(clientId)});`,
   ].join('\n');
 

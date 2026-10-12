@@ -21,17 +21,17 @@ export class LocalDatabase {
   }
 
   private initSchema() {
+    // Mirrors migration 0005 for databases created before OAuth secrets were
+    // hashed: the plaintext rows are dropped, so apps reconnect once.
+    const columns = this.db.prepare("SELECT name FROM pragma_table_info('oauth_tokens')").all() as { name: string }[];
+    if (columns.some(column => column.name === 'access_token')) {
+      this.db.exec('DROP TABLE oauth_tokens; DROP TABLE IF EXISTS oauth_codes; DELETE FROM oauth_clients;');
+    }
     this.db.exec(SCHEMA_SQL);
     // Mirrors migration 0003 for databases created before passwords were removed.
     try {
       this.db.exec('ALTER TABLE users DROP COLUMN password_hash');
     } catch { /* column already gone */ }
-    // Mirrors migration 0004 for databases created before PKCE.
-    for (const column of ['code_challenge', 'code_challenge_method']) {
-      try {
-        this.db.exec(`ALTER TABLE oauth_codes ADD COLUMN ${column} TEXT`);
-      } catch { /* column already there */ }
-    }
   }
 
   async getUserByUsername(username: string): Promise<User | null> {
@@ -87,31 +87,38 @@ export class LocalDatabase {
     return result || null;
   }
 
-  async getTokenByAccessToken(accessToken: string): Promise<OAuthToken | null> {
-    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?');
-    const result = stmt.get(accessToken, Math.floor(Date.now() / 1000)) as OAuthToken | undefined;
+  async getTokenByAccessTokenHash(accessTokenHash: string): Promise<OAuthToken | null> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?');
+    const result = stmt.get(accessTokenHash, Math.floor(Date.now() / 1000)) as OAuthToken | undefined;
     return result || null;
   }
 
-  async getTokenByRefreshToken(refreshToken: string): Promise<OAuthToken | null> {
-    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE refresh_token = ?');
-    const result = stmt.get(refreshToken) as OAuthToken | undefined;
+  // Matches the current or the previous refresh token (see the token endpoint).
+  async getTokenByRefreshTokenHash(refreshTokenHash: string): Promise<OAuthToken | null> {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE refresh_token_hash = ? OR previous_refresh_token_hash = ?');
+    const result = stmt.get(refreshTokenHash, refreshTokenHash) as OAuthToken | undefined;
     return result || null;
   }
 
-  async createToken(token: Omit<OAuthToken, 'created_at'>): Promise<void> {
+  async createToken(token: Omit<OAuthToken, 'created_at' | 'previous_refresh_token_hash'>): Promise<void> {
     const stmt = this.db.prepare(
-      'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     stmt.run(
       token.id,
-      token.access_token,
-      token.refresh_token,
+      token.access_token_hash,
+      token.refresh_token_hash,
       token.expires_at,
       token.scopes,
       token.user_id,
       token.client_id
     );
+  }
+
+  async rotateToken(id: string, rotation: Pick<OAuthToken, 'access_token_hash' | 'refresh_token_hash' | 'previous_refresh_token_hash' | 'expires_at'>): Promise<void> {
+    this.db.prepare(
+      'UPDATE oauth_tokens SET access_token_hash = ?, refresh_token_hash = ?, previous_refresh_token_hash = ?, expires_at = ? WHERE id = ?'
+    ).run(rotation.access_token_hash, rotation.refresh_token_hash, rotation.previous_refresh_token_hash, rotation.expires_at, id);
   }
 
   async deleteToken(tokenId: string): Promise<void> {
@@ -207,16 +214,16 @@ export class LocalDatabase {
 
   async createCode(code: OAuthCode): Promise<void> {
     const stmt = this.db.prepare(
-      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at, code_challenge, code_challenge_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
-    stmt.run(code.code, code.client_id, code.user_id, code.redirect_uri, code.scope, code.expires_at, code.code_challenge, code.code_challenge_method);
+    stmt.run(code.code_hash, code.client_id, code.user_id, code.redirect_uri, code.scope, code.code_challenge, code.expires_at);
   }
 
-  async getCode(code: string): Promise<OAuthCode | null> {
+  async getCode(codeHash: string): Promise<OAuthCode | null> {
     const stmt = this.db.prepare(
-      'SELECT * FROM oauth_codes WHERE code = ? AND expires_at > ?'
+      'SELECT * FROM oauth_codes WHERE code_hash = ? AND expires_at > ?'
     );
-    const result = stmt.get(code, Math.floor(Date.now() / 1000)) as OAuthCode | undefined;
+    const result = stmt.get(codeHash, Math.floor(Date.now() / 1000)) as OAuthCode | undefined;
     return result || null;
   }
 
@@ -225,8 +232,8 @@ export class LocalDatabase {
     return stmt.all() as OAuthCode[];
   }
 
-  async deleteCode(code: string): Promise<void> {
-    this.db.prepare('DELETE FROM oauth_codes WHERE code = ?').run(code);
+  async deleteCode(codeHash: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_codes WHERE code_hash = ?').run(codeHash);
   }
 
   async deleteExpiredCodes(): Promise<void> {
@@ -258,8 +265,9 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 
     CREATE TABLE IF NOT EXISTS oauth_tokens (
   id TEXT PRIMARY KEY,
-  access_token TEXT UNIQUE NOT NULL,
-  refresh_token TEXT UNIQUE,
+  access_token_hash TEXT UNIQUE NOT NULL,
+  refresh_token_hash TEXT UNIQUE,
+  previous_refresh_token_hash TEXT UNIQUE,
   expires_at INTEGER NOT NULL,
   scopes TEXT NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(username),
@@ -268,19 +276,16 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 );
 
 CREATE TABLE IF NOT EXISTS oauth_codes (
-  code TEXT PRIMARY KEY,
+  code_hash TEXT PRIMARY KEY,
   client_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   redirect_uri TEXT NOT NULL,
   scope TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  code_challenge TEXT,
-  code_challenge_method TEXT
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_access_token ON oauth_tokens(access_token);
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh_token ON oauth_tokens(refresh_token);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
 `;

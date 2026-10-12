@@ -209,7 +209,11 @@ Older RSilo versions had their own usernames and passwords, an admin console and
 2. [Set up Cloudflare Access](#set-up-cloudflare-access).
 3. Deploy with `bun run deploy`. It applies migration `0003`, which drops the stored passwords.
 
-Apps you already connected keep working: their tokens are unchanged, and apps that cached the old consent address are redirected to the new one. Any other users on the deployment become unreachable — their data and tokens are left in place, not deleted. For a second person, deploy a second Instance. Old admin secrets and password settings are no longer read; you can delete them from the Worker's settings.
+Apps that cached the old consent address are redirected to the new one. Any other users on the deployment become unreachable — their data and tokens are left in place, not deleted. For a second person, deploy a second Instance. Old admin secrets and password settings are no longer read; you can delete them from the Worker's settings.
+
+### Connected apps reconnect once (migration `0005`)
+
+Migration `0005` makes RSilo store tokens only as hashes. D1 can't hash the existing tokens in place, so the migration deletes them, and every connected app is signed out once. Each app shows it is disconnected (or gets a `401`) and asks you to connect again. Approve it as usual and it carries on syncing, with your data untouched. Your `/account` dashboard lists no apps until each one reconnects.
 
 ## Connect a RemoteStorage app
 
@@ -309,16 +313,20 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 ### OAuth flow (production)
 
 1. App queries WebFinger to discover auth and storage endpoints (see [Discovery](#discovery))
-2. App redirects user to the advertised consent URL, `/account/oauth/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw&state=...`
+2. App redirects user to the advertised consent URL, `/account/oauth/authorize?client_id=...&redirect_uri=...&response_type=code&scope=documents:rw&state=...&code_challenge=...&code_challenge_method=S256`
 3. The Owner reviews the requested scopes and approves (their identity comes from Cloudflare Access; see [Set up Cloudflare Access](#set-up-cloudflare-access)). Approve and deny are `/account` form posts, so they get the same-origin check.
 4. Server redirects back with `?code=...`
-5. App exchanges code at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
+5. App exchanges code and `code_verifier` at `/oauth/:user/token` → `access_token` (1-hour expiry) + `refresh_token`
 6. App uses `Authorization: Bearer <access_token>` on storage requests
 7. When the access token expires, exchange the refresh token at `/oauth/:user/token` with `grant_type=refresh_token`
 
-Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
+Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. remoteStorage.js uses implicit, which returns the access token in the redirect fragment and has no refresh token. The code flow requires [PKCE](https://datatracker.ietf.org/doc/html/rfc7636) with `code_challenge_method=S256`, as OAuth 2.1 does for public clients. Without it the consent page answers `400`, and the token endpoint refuses a missing or wrong `code_verifier` with `invalid_grant`. A code is single-use: any attempt to redeem it spends it, even a failed one.
 
-The code flow supports **PKCE** ([RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)), `S256` only, and it is optional. An app that adds `code_challenge` and `code_challenge_method=S256` to step 2 must send the matching `code_verifier` in step 5, or the exchange fails with `invalid_grant` and the code is used up. An app that sends no challenge redeems its code as before, but a `code_verifier` sent for such a code is refused, so a request stripped of its challenge cannot be completed. The `plain` method (or a challenge with no method) is a `400` on the consent page. The implicit flow ignores PKCE parameters. `/oauth/:user` advertises `code_challenge_methods_supported: ["S256"]`.
+Refresh tokens rotate on every use. The refresh token just replaced stays valid until its replacement is first used, so an app that lost a refresh response can retry with the old one.
+
+The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
+
+PKCE is `S256` only. The `plain` method, or a challenge with no method, is a `400` on the consent page. The implicit flow ignores PKCE parameters. `/oauth/:user` advertises `code_challenge_methods_supported: ["S256"]`.
 
 Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
 
@@ -338,11 +346,11 @@ curl 'http://localhost:8787/.well-known/webfinger?resource=acct:alice@localhost:
 curl 'http://localhost:8787/.well-known/webfinger?resource=http://localhost:8787/'
 ```
 
-Access tokens are **opaque bearer tokens**: random strings stored as rows in the D1 `oauth_tokens` table. A token is valid exactly while its unexpired row exists, so revoking an app (deleting its row) takes effect on the very next request. Self-contained signed tokens are never accepted, in production or in local-development mode ([ADR-0003](docs/adr/0003-opaque-bearer-tokens-only.md)).
+Access tokens are **opaque bearer tokens**: 256-bit random base64url strings, each recorded as a row in the D1 `oauth_tokens` table. Rows hold only the base64url SHA-256 hash of each access token, refresh token and authorization code, so a copy of the database contains nothing an app could present. A token is valid exactly while its unexpired row exists, so revoking an app (deleting its row) takes effect on the very next request. Self-contained signed tokens are never accepted, in production or in local-development mode ([ADR-0003](docs/adr/0003-opaque-bearer-tokens-only.md)).
 
 ### Dev tokens (testing only)
 
-`bun run dev-token` inserts an opaque token row (30-day expiry) into a local database and prints the token. It creates the user and a `dev-token:<username>` client if they do not exist yet.
+`bun run dev-token` inserts an opaque token row (30-day expiry, stored as its hash) into a local database and prints the token. It creates the user and a `dev-token:<username>` client if they do not exist yet.
 
 ```bash
 # Offline DB used by `bun run dev:offline` (DB_PATH, default data/remotestorage.db)
@@ -408,7 +416,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**627 tests** across 31 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**667 tests** across 34 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
