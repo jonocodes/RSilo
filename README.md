@@ -442,7 +442,7 @@ bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 
 `test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local MinIO. CI runs it, and the remoteStorage spec-check, against a MinIO container (`.github/workflows/spec-check.yml`).
 
-**657 tests** across 33 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2/S3 adapters (S3 against an in-memory fake), migration/schema checks, and E2E against the offline server.
+**682 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2/S3 adapters (S3 against an in-memory fake), migration/schema checks, and E2E against the offline server.
 
 ## Known limitations
 
