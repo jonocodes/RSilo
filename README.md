@@ -311,7 +311,7 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
 
 For offline development: R2 → local filesystem, D1 → SQLite (via a D1-compatible adapter), rate limiting → skipped.
 
-The routes talk to storage through a small `StorageInterface`. `getStorage()` returns an `S3Storage` (`src/services/s3.ts`, SigV4 via `aws4fetch`) when the `S3_*` settings are present. Otherwise, in production it wraps the raw R2 binding in `R2Storage`, and offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`. The offline server uses S3 too when `S3_*` are set in its environment, e.g. pointing at a local MinIO.
+The routes talk to storage through a small `StorageInterface`. `getStorage()` returns an `S3Storage` (`src/services/s3.ts`, SigV4 via `aws4fetch`) when the `S3_*` settings are present. Otherwise, in production it wraps the raw R2 binding in `R2Storage`, and offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`. The offline server uses S3 too when `S3_*` are set in its environment, e.g. pointing at a local SeaweedFS or MinIO.
 
 ## Local development (offline)
 
@@ -440,7 +440,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-`test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local MinIO. CI runs it, and the remoteStorage spec-check, against a MinIO container (`.github/workflows/spec-check.yml`).
+`test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
 **682 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2/S3 adapters (S3 against an in-memory fake), migration/schema checks, and E2E against the offline server.
 

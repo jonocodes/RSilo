@@ -1,10 +1,11 @@
 // Runs S3Storage against a real S3-compatible server, so request signing is
 // checked by an actual implementation rather than the fake in helpers/fake-s3.
 // Skipped unless RSILO_S3_LIVE_ENDPOINT is set. Every object it writes is under
-// a fresh prefix and deleted again. Example with a local MinIO:
+// a fresh prefix and deleted again. Example with a local SeaweedFS (as CI uses;
+// the fixture holds the credentials below):
 //
-//   MINIO_ROOT_USER=rsiloadmin MINIO_ROOT_PASSWORD=rsilo-secret-123 minio server /tmp/minio --address 127.0.0.1:9123
-//   RSILO_S3_LIVE_ENDPOINT=http://127.0.0.1:9123 RSILO_S3_LIVE_BUCKET=rsilo-live \
+//   weed server -dir=/tmp/seaweedfs -s3 -s3.config=test/fixtures/seaweedfs-s3.json
+//   RSILO_S3_LIVE_ENDPOINT=http://127.0.0.1:8333 RSILO_S3_LIVE_BUCKET=rsilo-live \
 //   RSILO_S3_LIVE_ACCESS_KEY_ID=rsiloadmin RSILO_S3_LIVE_SECRET_ACCESS_KEY=rsilo-secret-123 \
 //   bun run test test/s3-live.test.ts
 //
