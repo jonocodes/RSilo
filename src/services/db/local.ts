@@ -26,6 +26,12 @@ export class LocalDatabase {
     try {
       this.db.exec('ALTER TABLE users DROP COLUMN password_hash');
     } catch { /* column already gone */ }
+    // Mirrors migration 0004 for databases created before PKCE.
+    for (const column of ['code_challenge', 'code_challenge_method']) {
+      try {
+        this.db.exec(`ALTER TABLE oauth_codes ADD COLUMN ${column} TEXT`);
+      } catch { /* column already there */ }
+    }
   }
 
   async getUserByUsername(username: string): Promise<User | null> {
@@ -201,9 +207,9 @@ export class LocalDatabase {
 
   async createCode(code: OAuthCode): Promise<void> {
     const stmt = this.db.prepare(
-      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at, code_challenge, code_challenge_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
-    stmt.run(code.code, code.client_id, code.user_id, code.redirect_uri, code.scope, code.expires_at);
+    stmt.run(code.code, code.client_id, code.user_id, code.redirect_uri, code.scope, code.expires_at, code.code_challenge, code.code_challenge_method);
   }
 
   async getCode(code: string): Promise<OAuthCode | null> {
@@ -268,7 +274,9 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
   redirect_uri TEXT NOT NULL,
   scope TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  code_challenge TEXT,
+  code_challenge_method TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
