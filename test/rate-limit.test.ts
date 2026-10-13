@@ -4,6 +4,7 @@ import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { RATE_LIMITS, RATE_LIMIT_PERIOD_SECONDS } from '../src/services/rate-limit';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 // Mirrors the native Workers rate-limit binding: limit() counts the call and
 // reports whether the key is still within its budget.
@@ -38,11 +39,7 @@ const mockStorage = {
   async list() { return { objects: [] }; },
 } as any;
 
-const db = {
-  prepare: () => ({
-    bind: () => ({ first: async () => null, run: async () => ({}), all: async () => ({ results: [] }) }),
-  }),
-} as any;
+const db = createSqliteD1();
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
   return {

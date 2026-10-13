@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { generateToken, hashToken } from '../services/auth';
-import { LocalDatabase } from '../services/db/local';
+import { createSqliteD1 } from '../services/db/sqlite';
 
 // Issues an opaque bearer token for local development by inserting a row into
 // oauth_tokens (ADR-0003). Creates the user and a per-user "dev-token" OAuth
@@ -39,16 +39,18 @@ const token = {
 };
 
 async function insertOffline(): Promise<void> {
-  const db = new LocalDatabase(process.env.DB_PATH || 'data/remotestorage.db');
+  const db = createSqliteD1(process.env.DB_PATH || 'data/remotestorage.db');
   try {
-    if (!await db.getUserByUsername(username)) {
-      await db.createUser(crypto.randomUUID(), username);
-      console.error(`Created user ${username}`);
-    }
-    if (!await db.getClient(clientId)) {
-      await db.createClient({ id: clientId, name: 'dev-token', redirect_uris: '[]', created_at: now, user_id: username });
-    }
-    await db.createToken(token);
+    const user = await db.prepare('INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)')
+      .bind(crypto.randomUUID(), username)
+      .run();
+    if (user.meta.changes > 0) console.error(`Created user ${username}`);
+    await db.prepare('INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
+      .bind(clientId, 'dev-token', '[]', now, username)
+      .run();
+    await db.prepare(
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(token.id, token.access_token_hash, token.refresh_token_hash, token.expires_at, token.scopes, token.user_id, token.client_id).run();
   } finally {
     db.close();
   }

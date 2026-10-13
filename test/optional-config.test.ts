@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1, usernames, type SqliteD1 } from './helpers/sqlite-d1';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
+import { usernames } from './helpers/db';
 import { tokenHash } from './helpers/tokens';
 
 // OWNER_EMAIL is the only required setting. ACCOUNT_USERNAME defaults to "me"

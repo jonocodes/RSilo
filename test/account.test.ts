@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 // Requests go to http://localhost in dev mode (vitest sets RSILO_DEV_MODE), so
 // the dev identity signs them in as the Owner; see identity.test.ts for the
 // production resolver. State changes carry the header a browser sends for a
@@ -33,19 +34,33 @@ const mockStorage = {
   },
 } as any;
 
-function makeDb(userRow: any = null, tokens: any[] = []) {
-  return {
-    prepare: (sql: string) => ({
-      bind: (..._args: any[]) => ({
-        first: async () => sql.includes('users') ? userRow : null,
-        run: async () => ({}),
-        all: async () => ({ results: tokens }),
-      }),
-      first: async () => userRow,
-      run: async () => ({}),
-      all: async () => ({ results: tokens }),
-    }),
-  } as any;
+interface TokenRow {
+  id: string;
+  client_id: string;
+  scopes: string;
+  user_id: string;
+  expires_at: number;
+  created_at: number;
+}
+
+function makeDb(
+  user: { username: string; storage_quota_bytes?: number; used_storage_bytes?: number } | null = null,
+  tokens: TokenRow[] = [],
+) {
+  const db = createSqliteD1();
+  if (user) {
+    db.sqlite.prepare('INSERT INTO users (id, username, storage_quota_bytes, used_storage_bytes) VALUES (?, ?, ?, ?)')
+      .run(crypto.randomUUID(), user.username, user.storage_quota_bytes ?? 0, user.used_storage_bytes ?? 0);
+  }
+  for (const token of tokens) {
+    db.sqlite.prepare('INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)').run(crypto.randomUUID(), token.user_id);
+    db.sqlite.prepare('INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
+      .run(token.client_id, token.client_id, '[]', token.created_at, token.user_id);
+    db.sqlite.prepare(
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
+    ).run(token.id, `hash-${token.id}`, token.expires_at, token.scopes, token.user_id, token.client_id, token.created_at);
+  }
+  return db;
 }
 
 describe('Files — browse', () => {

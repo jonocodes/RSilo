@@ -1,11 +1,18 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 import { PKCE, seedToken, tokenHash } from './helpers/tokens';
+
+// OAuth discovery and the token endpoint. The whole consent -> code -> token
+// flow lives in consent.test.ts, PKCE enforcement in pkce.test.ts, and refresh
+// rotation plus hashed storage in token-hardening.test.ts; this file keeps
+// discovery, the error grants and the few endpoint behaviours not covered
+// there, all against the real SQLite database.
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
-const TEST_ENV = {
-  STORAGE: {
+function makeStorage() {
+  return {
     async get(key: string) {
       const item = storage.get(key);
       if (!item) return null;
@@ -16,42 +23,59 @@ const TEST_ENV = {
       storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
       return etag;
     },
-    async delete(key: string) {
-      storage.delete(key);
-    },
+    async delete(key: string) { storage.delete(key); },
     async head(key: string) {
       const item = storage.get(key);
       if (!item) return null;
       return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
     },
-    async list(options: { prefix?: string; delimiter?: string }) {
+    async list(options: { prefix?: string }) {
       const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
       return {
-        objects: keys.map(k => ({
+        objects: Array.from(storage.keys()).filter(k => k.startsWith(prefix)).map(k => ({
           key: k,
           size: storage.get(k)!.body.byteLength,
           etag: storage.get(k)!.etag,
         })),
       };
     },
-  } as any,
-  DB: {} as any,
-};
+  } as any;
+}
 
-describe('OAuth endpoints', () => {
-  let app: ReturnType<typeof createServer>;
+function makeEnv(extra: Record<string, unknown> = {}) {
+  return { STORAGE: makeStorage(), DB: createSqliteD1(), ...extra } as any;
+}
 
-  beforeAll(() => {
-    app = createServer(TEST_ENV);
-  });
+const REDIRECT_URI = 'https://example.com/callback';
 
-it('GET /oauth/:user returns OAuth discover info', async () => {
-    const res = await app.request(
-      'http://localhost/oauth/alice',
-      { method: 'GET' },
-      TEST_ENV
-    );
+function insertCode(env: any, code: string, overrides: { redirect_uri?: string; expires_at?: number } = {}) {
+  env.DB.sqlite.prepare(
+    'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    tokenHash(code),
+    'test-client',
+    'alice',
+    overrides.redirect_uri ?? REDIRECT_URI,
+    'documents:rw',
+    PKCE.challenge,
+    overrides.expires_at ?? Math.floor(Date.now() / 1000) + 600,
+  );
+}
+
+function exchange(env: any, body: Record<string, string>) {
+  return createServer(env).request('http://localhost/oauth/alice/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body).toString(),
+  }, env);
+}
+
+describe('OAuth endpoint discovery', () => {
+  const app = createServer({});
+
+  it('GET /oauth/:user returns OAuth discover info', async () => {
+    const env = makeEnv();
+    const res = await app.request('http://localhost/oauth/alice', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as any;
@@ -63,7 +87,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   });
 
   it('advertises HTTPS endpoints from an HTTPS PUBLIC_BASE_URL', async () => {
-    const env = { ...TEST_ENV, PUBLIC_BASE_URL: 'https://storage.example' };
+    const env = makeEnv({ PUBLIC_BASE_URL: 'https://storage.example' });
     const res = await app.request('http://localhost/oauth/alice', { method: 'GET' }, env);
     const json = await res.json() as any;
     expect(json.auth).toBe('https://storage.example/account/oauth/authorize');
@@ -72,7 +96,7 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
   });
 
   it('ignores X-Forwarded-Proto, so a request cannot downgrade the advertised scheme', async () => {
-    const env = { ...TEST_ENV, PUBLIC_BASE_URL: 'https://storage.example' };
+    const env = makeEnv({ PUBLIC_BASE_URL: 'https://storage.example' });
     const res = await app.request('http://storage.example/oauth/alice', {
       method: 'GET',
       headers: { 'X-Forwarded-Proto': 'http' },
@@ -81,374 +105,132 @@ it('GET /oauth/:user returns OAuth discover info', async () => {
     expect(json.auth).toMatch(/^https:\/\//);
   });
 
-  it('POST /oauth/:user/token with authorization_code returns access_token', async () => {
-    const codeData = {
-      client_id: 'test-client',
-      user_id: 'alice',
-      redirect_uri: 'https://example.com/callback',
-      scope: 'documents:rw',
-      code_challenge: PKCE.challenge,
-      expires_at: Math.floor(Date.now() / 1000) + 600,
-    };
-
-    const oauthEnv = {
-      ...TEST_ENV,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (..._args: any[]) => ({
-            first: async () => sql.includes('oauth_codes') ? codeData : null,
-            run: async () => {},
-          }),
-        }),
-      } as any,
-    };
-
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code_verifier: PKCE.verifier,
-          code: 'test-auth-code',
-          redirect_uri: 'https://example.com/callback',
-          client_id: 'test-client',
-        }),
-      },
-      oauthEnv
-    );
-
-    expect(res.status).toBe(200);
-    const json = await res.json() as any;
-    expect(json.access_token).toBeDefined();
-    expect(json.refresh_token).toBeDefined();
-    expect(json.token_type).toBe('Bearer');
-    expect(json.expires_in).toBe(3600);
-    expect(json.scope).toBe('documents:rw');
-  });
-
-  it('POST /oauth/:user/token with refresh_token returns new access_token', async () => {
-    const tokenStore = new Map<string, any>();
-    tokenStore.set('test-refresh-token', {
-      id: 'token-id',
-      access_token: 'old-access-token',
-      refresh_token: 'test-refresh-token',
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      scopes: 'documents:rw',
-      user_id: 'alice',
-      client_id: 'test-client',
-    });
-
-    const oauthEnv = {
-      ...TEST_ENV,
-      DB: {
-        prepare: () => ({
-          bind: () => ({
-            first: async () => tokenStore.get('test-refresh-token'),
-          }),
-        }),
-      },
-    };
-
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'test-refresh-token',
-          client_id: 'test-client',
-        }),
-      },
-      oauthEnv
-    );
-
-    expect(res.status).toBe(200);
-    const json = await res.json() as any;
-    expect(json.access_token).toBeDefined();
-    expect(json.refresh_token).toBeDefined();
-    expect(json.token_type).toBe('Bearer');
-    expect(json.expires_in).toBe(3600);
-  });
-
-  it('POST /oauth/:user/token with invalid code returns 400', async () => {
-    const oauthEnv = {
-      ...TEST_ENV,
-      OAUTH_CODES: new Map(),
-    };
-
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code_verifier: PKCE.verifier,
-          code: 'invalid-code',
-          redirect_uri: 'https://example.com/callback',
-          client_id: 'test-client',
-        }),
-      },
-      oauthEnv
-    );
-
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_grant');
-  });
-
-  it('POST /oauth/:user/token with unsupported grant_type returns 400', async () => {
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'password',
-          client_id: 'test-client',
-        }),
-      },
-      TEST_ENV
-    );
-
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('unsupported_grant_type');
-  });
-
   it('OPTIONS /oauth/:user returns CORS headers', async () => {
-    const res = await app.request(
-      'http://localhost/oauth/alice',
-      { method: 'OPTIONS' },
-      TEST_ENV
-    );
-
+    const res = await app.request('http://localhost/oauth/alice', { method: 'OPTIONS' }, makeEnv());
     expect(res.status).toBe(204);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
   });
 
   it('OPTIONS /oauth/:user/token returns CORS headers', async () => {
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'OPTIONS',
-        headers: { 'Access-Control-Request-Method': 'POST' },
-      },
-      TEST_ENV
-    );
-
+    const res = await app.request('http://localhost/oauth/alice/token', {
+      method: 'OPTIONS',
+      headers: { 'Access-Control-Request-Method': 'POST' },
+    }, makeEnv());
     expect(res.status).toBe(204);
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('POST');
   });
+});
 
-  it('OAuth endpoint works with dev token for storage', async () => {
-    const token = seedToken(TEST_ENV, 'alice');
-
-    const res = await app.request(
-      'http://localhost/oauth/alice',
-      {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}` },
-      },
-      TEST_ENV
-    );
-
-    expect(res.status).toBe(200);
-  });
-
-  it('POST /oauth/:user/token with expired code returns invalid_grant', async () => {
-    const oauthEnv = {
-      ...TEST_ENV,
-      DB: {
-        prepare: (_sql: string) => ({
-          bind: (..._args: any[]) => ({
-            first: async () => null,
-            run: async () => {},
-          }),
-        }),
-      } as any,
-    };
-
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code_verifier: PKCE.verifier,
-          code: 'expired-code',
-          redirect_uri: 'https://example.com/callback',
-          client_id: 'test-client',
-        }),
-      },
-      oauthEnv
-    );
-
+describe('OAuth token endpoint', () => {
+  it('returns unsupported_grant_type for an unknown grant', async () => {
+    const env = makeEnv();
+    const res = await exchange(env, { grant_type: 'password', client_id: 'test-client' });
     expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_grant');
+    expect((await res.json() as any).error).toBe('unsupported_grant_type');
   });
 
-  it('POST /oauth/:user/token with redirect_uri mismatch returns invalid_grant', async () => {
-    const codeData = {
-      client_id: 'test-client',
-      user_id: 'alice',
-      redirect_uri: 'https://example.com/callback',
-      scope: 'documents:rw',
-      code_challenge: PKCE.challenge,
-      expires_at: Math.floor(Date.now() / 1000) + 600,
-    };
-
-    const oauthEnv = {
-      ...TEST_ENV,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (..._args: any[]) => ({
-            first: async () => sql.includes('oauth_codes') ? codeData : null,
-            run: async () => {},
-          }),
-        }),
-      } as any,
-    };
-
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'authorization_code',
-          code_verifier: PKCE.verifier,
-          code: 'test-code',
-          redirect_uri: 'https://evil.com/callback',
-          client_id: 'test-client',
-        }),
-      },
-      oauthEnv
-    );
-
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_grant');
-  });
-
-  it('POST /oauth/:user/token deletes code after use (prevents reuse)', async () => {
-    const codes = new Map<string, any>();
-    codes.set(tokenHash('one-time-code'), {
-      client_id: 'test-client',
-      user_id: 'alice',
-      redirect_uri: 'https://example.com/callback',
-      scope: 'documents:rw',
-      code_challenge: PKCE.challenge,
-      expires_at: Math.floor(Date.now() / 1000) + 600,
-    });
-
-    const oauthEnv = {
-      ...TEST_ENV,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (codeVal: string, ..._rest: any[]) => ({
-            first: async () => sql.includes('oauth_codes') ? codes.get(codeVal) ?? null : null,
-            run: async () => {
-              if (sql.includes('DELETE FROM oauth_codes')) codes.delete(codeVal);
-            },
-          }),
-        }),
-      } as any,
-    };
-
-    const body = JSON.stringify({
+  it('rejects an unknown authorization code with invalid_grant', async () => {
+    const res = await exchange(makeEnv(), {
       grant_type: 'authorization_code',
+      code: 'no-such-code',
+      redirect_uri: REDIRECT_URI,
       code_verifier: PKCE.verifier,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toBe('invalid_grant');
+  });
+
+  it('rejects an expired authorization code with invalid_grant', async () => {
+    const env = makeEnv();
+    insertCode(env, 'expired-code', { expires_at: Math.floor(Date.now() / 1000) - 1 });
+    const res = await exchange(env, {
+      grant_type: 'authorization_code',
+      code: 'expired-code',
+      redirect_uri: REDIRECT_URI,
+      code_verifier: PKCE.verifier,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toBe('invalid_grant');
+  });
+
+  it('rejects a redirect_uri that differs from the one the code was issued for', async () => {
+    const env = makeEnv();
+    insertCode(env, 'code-with-redirect');
+    const res = await exchange(env, {
+      grant_type: 'authorization_code',
+      code: 'code-with-redirect',
+      redirect_uri: 'https://evil.com/callback',
+      code_verifier: PKCE.verifier,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toBe('invalid_grant');
+    // The attempt spent the code.
+    expect(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM oauth_codes').get()).toEqual({ n: 0 });
+  });
+
+  it('deletes a code after use, so it cannot be replayed', async () => {
+    const env = makeEnv();
+    seedToken(env, 'alice');
+    insertCode(env, 'one-time-code');
+    const body = {
+      grant_type: 'authorization_code',
       code: 'one-time-code',
-      redirect_uri: 'https://example.com/callback',
+      redirect_uri: REDIRECT_URI,
+      code_verifier: PKCE.verifier,
+    };
+
+    const first = await exchange(env, body);
+    expect(first.status).toBe(200);
+    const json = await first.json() as any;
+    expect(json.access_token).toBeTruthy();
+    expect(json.refresh_token).toBeTruthy();
+    expect(json.token_type).toBe('Bearer');
+    expect(json.scope).toBe('documents:rw');
+
+    const second = await exchange(env, body);
+    expect(second.status).toBe(400);
+    expect((await second.json() as any).error).toBe('invalid_grant');
+  });
+
+  it('rejects an unknown refresh_token with invalid_grant', async () => {
+    const res = await exchange(makeEnv(), {
+      grant_type: 'refresh_token',
+      refresh_token: 'no-such-token',
       client_id: 'test-client',
     });
-
-    const first = await app.request('http://localhost/oauth/alice/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }, oauthEnv);
-    expect(first.status).toBe(200);
-
-    const second = await app.request('http://localhost/oauth/alice/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }, oauthEnv);
-    expect(second.status).toBe(400);
-    const json = await second.json() as any;
-    expect(json.error).toBe('invalid_grant');
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toBe('invalid_grant');
   });
 });
 
-// Consent itself (render, approve, deny, CSRF, origin check, legacy redirect)
-// is covered in test/consent.test.ts; these are more token endpoint cases.
-describe('OAuth token endpoint, more grants', () => {
-  const app = createServer(TEST_ENV);
-
-  it('POST /token with refresh_token=missing returns invalid_grant', async () => {
-    const emptyDb = {
-      prepare: () => ({ bind: (..._: any[]) => ({ first: async () => null, run: async () => ({}) }) }),
-    } as any;
-    const env = { ...TEST_ENV, DB: emptyDb };
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: 'no-such-token', client_id: 'x' }),
-      },
-      env
-    );
-    expect(res.status).toBe(400);
-    const json = await res.json() as any;
-    expect(json.error).toBe('invalid_grant');
+describe('database and storage failures surface as 500', () => {
+  it('a database that throws during token lookup is a 500, not a silent 401', async () => {
+    const env = {
+      STORAGE: makeStorage(),
+      DB: { prepare: () => { throw new Error('Database connection failed'); } } as any,
+    };
+    const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer opaque-token' },
+    }, env);
+    expect(res.status).toBe(500);
   });
 
-  it('POST /token with authorization_code via form-urlencoded works', async () => {
-    const codeData = {
-      client_id: 'test-client',
-      user_id: 'alice',
-      redirect_uri: 'https://example.com/callback',
-      scope: 'documents:rw',
-      code_challenge: PKCE.challenge,
-      expires_at: Math.floor(Date.now() / 1000) + 600,
+  it('a storage get failure after auth is a 500', async () => {
+    const env = makeEnv();
+    env.STORAGE = {
+      async get() { throw new Error('Storage get failed'); },
+      async put() { return '"test"'; },
+      async delete() {},
+      async head() { return null; },
+      async list() { return { objects: [] }; },
     };
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (..._args: any[]) => ({
-          first: async () => sql.includes('oauth_codes') ? codeData : null,
-          run: async () => {},
-        }),
-      }),
-    } as any;
-    const env = { ...TEST_ENV, DB: db };
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code_verifier: PKCE.verifier,
-      code: 'test-code',
-      redirect_uri: 'https://example.com/callback',
-      client_id: 'test-client',
-    });
-    const res = await app.request(
-      'http://localhost/oauth/alice/token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      },
-      env
-    );
-    expect(res.status).toBe(200);
-    const json = await res.json() as any;
-    expect(json.access_token).toBeDefined();
-    expect(json.token_type).toBe('Bearer');
+    const token = seedToken(env, 'alice', '*:rw');
+    const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }, env);
+    expect(res.status).toBe(500);
   });
 });

@@ -281,7 +281,7 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
     └─────────┘          └─────────┘    └─────────────┘
 ```
 
-For offline development: R2 → local filesystem, D1 → SQLite (via a D1-compatible adapter), rate limiting → skipped.
+For offline development: R2 → local filesystem, D1 → real SQLite through a D1-shaped shim (`src/services/db/sqlite.ts`) that applies the same `drizzle/migrations` as production and tracks them in `d1_migrations`, rate limiting → skipped.
 
 The routes talk to storage through a small `StorageInterface`. In production `getStorage()` wraps the raw R2 binding in `R2Storage`; offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`.
 
@@ -296,6 +296,8 @@ bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
 `bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure it and explicit local-development mode.
+
+The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
 ## API reference
 
@@ -396,7 +398,8 @@ src/
   config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL defaults) and dev defaults
   services/           auth, identity (Owner resolver: Cloudflare Access or dev identity; CSRF check),
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger
-                      matching), r2 (+ getStorage adapter), local-storage, db/
+                      matching), r2 (+ getStorage adapter), local-storage, db/ (schema
+                      types, SQLite D1 shim that applies the migrations)
   middleware/         auth, cors, instance (config + Account gates), owner (/account gate + CSRF)
   ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation, path validation)
@@ -408,7 +411,7 @@ test/                 unit, compliance and E2E suites
 ## Testing
 
 ```bash
-bun run test             # all tests (fast, mocked + offline server E2E)
+bun run test             # all tests (fast: real SQLite + offline server E2E)
 bun run test:watch       # watch mode
 bun run typecheck        # source tsc --noEmit
 bun run typecheck:test   # test-suite tsc --noEmit
@@ -416,7 +419,9 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**667 tests** across 34 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, D1/R2 adapters, migration/schema checks, and E2E against the offline server.
+**643 tests** across 33 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+
+Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 
 ## Known limitations
 

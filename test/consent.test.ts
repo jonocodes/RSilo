@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
-import { createSqliteD1 } from './helpers/sqlite-d1';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 import { PKCE } from './helpers/tokens';
 
 // OAuth consent lives under the Owner-gated /account prefix (ADR-0004, #18):
