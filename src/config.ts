@@ -109,10 +109,77 @@ export function getInstanceConfig(env: unknown, requestUrl: string): InstanceCon
   const baseUrl = rawBaseUrl ? parsePublicBaseUrl(rawBaseUrl) : new URL(new URL(requestUrl).origin);
   if (!baseUrl) problems.push(publicBaseUrlProblem(rawBaseUrl) ?? 'PUBLIC_BASE_URL is invalid');
 
+  const storage = getStorageConfig(env);
+  if ('problems' in storage) problems.push(...storage.problems);
+
   if (problems.length > 0 || !baseUrl) return { ok: false, problems };
   return {
     ok: true,
     config: { accountUsername, publicBaseUrl: baseUrl.origin, publicHost: baseUrl.host },
+  };
+}
+
+// Storage backend (ADR-0005). The R2 binding (STORAGE) is the default. Setting
+// any S3_* var switches the Instance to an S3-compatible bucket instead (for
+// example Backblaze B2), so R2 and the payment method it needs are optional.
+// S3_REGION may be left out: the signer reads it from the endpoint's host for
+// AWS, B2 and R2, and otherwise uses us-east-1.
+export const S3_VARS = ['S3_ENDPOINT', 'S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const;
+export type S3Var = (typeof S3_VARS)[number];
+export const S3_REQUIRED_VARS = ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const satisfies readonly S3Var[];
+const S3_BUCKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export interface S3Config {
+  /** Origin of the S3 API, e.g. https://s3.us-west-004.backblazeb2.com */
+  endpoint: string;
+  bucket: string;
+  /** Undefined lets the signer derive it from the endpoint. */
+  region?: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
+export type StorageConfigResult =
+  | { ok: true; s3: S3Config | null }
+  | { ok: false; problems: string[] };
+
+export function s3EndpointProblem(value: string): string | null {
+  return parsePublicBaseUrl(value)
+    ? null
+    : 'S3_ENDPOINT must be an http(s) origin such as https://s3.us-west-004.backblazeb2.com';
+}
+
+export function s3BucketProblem(value: string): string | null {
+  return S3_BUCKET_PATTERN.test(value) ? null : 'S3_BUCKET must be a bucket name ([A-Za-z0-9._-]+)';
+}
+
+/**
+ * Which storage backend this Instance uses: `s3: null` means the R2 binding.
+ * Problems name the vars at fault and never echo their values.
+ */
+export function getStorageConfig(env: unknown): StorageConfigResult {
+  const bindings = (typeof env === 'object' && env !== null ? env : {}) as Partial<Record<S3Var, unknown>>;
+  const value = (name: S3Var) => typeof bindings[name] === 'string' ? bindings[name].trim() : '';
+  if (S3_VARS.every((name) => !value(name))) return { ok: true, s3: null };
+
+  const problems: string[] = S3_REQUIRED_VARS
+    .filter((name) => !value(name))
+    .map((name) => `${name} is not set (other S3_* settings are)`);
+  const endpointProblem = value('S3_ENDPOINT') && s3EndpointProblem(value('S3_ENDPOINT'));
+  if (endpointProblem) problems.push(endpointProblem);
+  const bucketProblem = value('S3_BUCKET') && s3BucketProblem(value('S3_BUCKET'));
+  if (bucketProblem) problems.push(bucketProblem);
+  if (problems.length > 0) return { ok: false, problems };
+
+  return {
+    ok: true,
+    s3: {
+      endpoint: new URL(value('S3_ENDPOINT')).origin,
+      bucket: value('S3_BUCKET'),
+      region: value('S3_REGION') || undefined,
+      accessKeyId: value('S3_ACCESS_KEY_ID'),
+      secretAccessKey: value('S3_SECRET_ACCESS_KEY'),
+    },
   };
 }
 

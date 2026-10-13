@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getInstanceConfig, getOwnerEmail } from '../src/config';
 import {
   INSTANCE_VARS,
+  withoutR2Buckets,
   REQUIRED_VARS,
   accessSteps,
   parseSetupArgs,
@@ -109,6 +110,36 @@ describe('validateSetting', () => {
     for (const name of INSTANCE_VARS) {
       expect(validateSetting(name, '  ')).toBe(`${name} is not set`);
     }
+  });
+});
+
+describe('S3 setup settings', () => {
+  it('validates S3 settings with the Worker rules', () => {
+    expect(validateSetting('S3_ENDPOINT', 'https://s3.us-west-004.backblazeb2.com')).toBeNull();
+    expect(validateSetting('S3_ENDPOINT', 's3.us-west-004.backblazeb2.com')).toMatch(/S3_ENDPOINT must be/);
+    expect(validateSetting('S3_BUCKET', 'rsilo-files')).toBeNull();
+    expect(validateSetting('S3_BUCKET', 'a/b')).toMatch(/S3_BUCKET must be/);
+    expect(validateSetting('S3_ACCESS_KEY_ID', '004abc')).toBeNull();
+  });
+
+  it('parses the S3 flags but has none for the secret key', () => {
+    expect(parseSetupArgs(['--s3-endpoint=https://e.example', '--s3-bucket', 'b', '--s3-region=r', '--s3-access-key-id=k'])).toEqual({
+      S3_ENDPOINT: 'https://e.example',
+      S3_BUCKET: 'b',
+      S3_REGION: 'r',
+      S3_ACCESS_KEY_ID: 'k',
+    });
+    expect(() => parseSetupArgs(['--s3-secret-access-key=x'])).toThrow(/Unknown option/);
+  });
+
+  it('removes only the [[r2_buckets]] table', () => {
+    const toml = readFileSync('wrangler.toml', 'utf8');
+    const stripped = withoutR2Buckets(toml);
+    expect(stripped).not.toMatch(/r2_buckets|bucket_name|binding = "STORAGE"/);
+    expect(stripped).toMatch(/\[\[d1_databases\]\]\nbinding = "DB"/);
+    expect(stripped).toMatch(/\[\[ratelimits\]\]/);
+    expect(readVars(stripped)).toEqual(readVars(toml));
+    expect(withoutR2Buckets(stripped)).toBe(stripped);
   });
 });
 

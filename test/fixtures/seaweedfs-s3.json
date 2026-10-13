@@ -1,0 +1,1 @@
+{"identities":[{"name":"rsilo","credentials":[{"accessKey":"rsiloadmin","secretKey":"rsilo-secret-123"}],"actions":["Admin","Read","Write","List","Tagging"]}]}

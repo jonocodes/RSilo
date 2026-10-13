@@ -7,6 +7,16 @@ on:
 jobs:
   spec-check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # local: the offline server's directory storage. s3: the S3 backend
+        # (ADR-0005) against a SeaweedFS S3 container (credentials from
+        # test/fixtures/seaweedfs-s3.json, so request signatures are verified),
+        # which also runs test/s3-live.test.ts. MinIO no longer publishes
+        # community images.
+        storage: [local, s3]
+    name: spec-check (${{ matrix.storage }})
     steps:
       - uses: actions/checkout@v4
 
@@ -16,6 +26,35 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+
+      - name: Start SeaweedFS S3
+        if: matrix.storage == 's3'
+        run: |
+          set -euo pipefail
+          docker run -d --name seaweedfs -p 8333:8333 \
+            -v "$PWD/test/fixtures:/cfg:ro" \
+            chrislusf/seaweedfs:4.48 server -s3 -s3.config=/cfg/seaweedfs-s3.json
+          # Any HTTP answer (unauthenticated requests get 403) means it is up.
+          for i in $(seq 1 60); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8333/)" != "000" ]; then break; fi
+            sleep 1
+          done
+          curl -s -o /dev/null -w 'SeaweedFS S3: HTTP %{http_code}\n' http://localhost:8333/
+          {
+            echo "S3_ENDPOINT=http://localhost:8333"
+            echo "S3_BUCKET=rsilo-spec"
+            echo "S3_ACCESS_KEY_ID=rsiloadmin"
+            echo "S3_SECRET_ACCESS_KEY=rsilo-secret-123"
+          } >> "$GITHUB_ENV"
+
+      - name: Live S3Storage test (creates the bucket)
+        if: matrix.storage == 's3'
+        run: bunx vitest run test/s3-live.test.ts
+        env:
+          RSILO_S3_LIVE_ENDPOINT: http://localhost:8333
+          RSILO_S3_LIVE_BUCKET: rsilo-spec
+          RSILO_S3_LIVE_ACCESS_KEY_ID: rsiloadmin
+          RSILO_S3_LIVE_SECRET_ACCESS_KEY: rsilo-secret-123
 
       - name: Run remoteStorage spec-check
         run: |
@@ -32,6 +71,7 @@ jobs:
             sleep 1
           done
           curl -sf http://localhost:8788/health
+          head -3 /tmp/rsilo/server.log
 
           # dev-token creates the Account row (alice, the dev default) if it is missing.
           RW=$(DB_PATH=/tmp/rsilo/db.sqlite bun run dev-token alice 'api-test-suite:rw' | tail -1)
@@ -43,12 +83,12 @@ jobs:
           git checkout e969675a41c8bbffa35dc8d8c0eea0e82846695b
           npm install --no-audit --no-fund
 
-          cat > .env <<EOF
+          cat > .env <<EOF2
           SERVER_URL="http://localhost:8788"
           ACCOUNT_HANDLE="alice"
           TOKEN_READ_WRITE="$RW"
           TOKEN_READ_ONLY="$RO"
           TOKEN_GLOBAL="$GL"
-          EOF
+          EOF2
 
           npm test

@@ -1,10 +1,18 @@
 import type { R2Bucket } from '@cloudflare/workers-types';
 import type { StorageInterface } from '../types';
+import { configurationMessage, getStorageConfig } from '../config';
+import { S3Storage } from './s3';
 
-// Normalises the storage binding to the StorageInterface the routes expect.
-// In the Worker runtime STORAGE is a raw R2Bucket; offline it is a LocalStorage
-// instance (or a test double) that already implements the interface.
+// Normalises the storage backend to the StorageInterface the routes expect.
+// S3_* vars select an S3-compatible bucket (ADR-0005). Otherwise, in the Worker
+// runtime STORAGE is a raw R2Bucket; offline it is a LocalStorage instance (or
+// a test double) that already implements the interface.
 export function getStorage(c: any): StorageInterface {
+  const config = getStorageConfig(c.env);
+  // Routes resolve getInstanceConfig() first, which answers 503 for these.
+  if ('problems' in config) throw new Error(configurationMessage(config.problems));
+  if (config.s3) return new S3Storage(config.s3);
+
   const raw = c.env.STORAGE;
   if (raw && typeof raw.createMultipartUpload === 'function') {
     return new R2Storage(raw as R2Bucket);

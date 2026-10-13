@@ -37,9 +37,9 @@ This is for the person who owns the server. You deploy it once, protect `/accoun
 
 ## Deploy it
 
-The service runs as a single Cloudflare Worker with two provisioned resources: **R2** (file storage) and **D1** (your account record and app tokens). Rate limiting uses Cloudflare's native rate-limit bindings, which are declared in `wrangler.toml` and need no setup.
+The service runs as a single Cloudflare Worker with two provisioned resources: **R2** (file storage) and **D1** (your account record and app tokens). Rate limiting uses Cloudflare's native rate-limit bindings, which are declared in `wrangler.toml` and need no setup. If you would rather not put a payment method on file for R2, your files can live in an S3-compatible bucket instead, such as Backblaze B2's free tier (see [Use an S3 bucket instead of R2](#use-an-s3-bucket-instead-of-r2)).
 
-Every Instance needs one setting, plain text (RSilo has no secrets):
+Every Instance needs one setting, plain text (with R2, RSilo has no secrets):
 
 - `OWNER_EMAIL` — your email; only you may open `/account`
 
@@ -59,7 +59,7 @@ The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare c
 
 ### Option B — Command line
 
-Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file), plus `bun` and `wrangler`.
+Prerequisites: a Cloudflare account with **R2 enabled** (R2 requires a payment method on file) or [an S3 bucket](#use-an-s3-bucket-instead-of-r2), plus `bun` and `wrangler`.
 
 The bundled setup script creates the resources, writes a gitignored `wrangler.prod.toml` with their real IDs and your settings, runs migrations, and deploys:
 
@@ -107,6 +107,33 @@ Storage access tokens are opaque values stored in D1 (see [Authentication](#auth
 
 `MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
 
+### Use an S3 bucket instead of R2
+
+R2 needs a payment method on file, and once one is there any overage is charged automatically. To avoid that, RSilo can keep your files in any S3-compatible bucket instead. The Worker, D1 and Cloudflare Access stay as they are, and none of them need a payment method. See [ADR-0005](docs/adr/0005-s3-compatible-storage-backend.md).
+
+**Backblaze B2** is a good free choice: 10 GB at no cost, and no card needed to sign up (check [their pricing](https://www.backblaze.com/cloud-storage/pricing) for current terms).
+
+1. Create a B2 account. Under **Buckets → Create a Bucket**, make a **private** bucket, e.g. `rsilo-yourname`. Note its **Endpoint**, e.g. `s3.us-west-004.backblazeb2.com`.
+2. Under **Application Keys → Add a New Application Key**, allow access to that bucket only, with *Read and Write*. Note the **keyID** and the **applicationKey**. The key is shown only once.
+3. Run setup with the bucket details. Pass the secret key in the environment (or leave it out and the script asks for it, with the input hidden):
+
+   ```bash
+   S3_SECRET_ACCESS_KEY=<applicationKey> bun run setup \
+     --owner-email=me@example.com \
+     --s3-endpoint=https://s3.us-west-004.backblazeb2.com \
+     --s3-bucket=rsilo-yourname \
+     --s3-access-key-id=<keyID>
+   ```
+
+   Setup then skips R2 completely: it neither checks nor creates a bucket, and it leaves the R2 binding out of `wrangler.prod.toml`. It writes the S3 settings under `[vars]` and stores the key as the Worker secret `S3_SECRET_ACCESS_KEY`, which is never written to a file. On a re-run it keeps the existing secret unless you pass a new one.
+
+Things to know:
+
+- **This is CLI only.** The Deploy to Cloudflare button always provisions R2. With [Workers Builds](#automatic-deploys-cloudflare-workers-builds), also add the build variable `RSILO_STORAGE=s3` so the R2 binding is left out of the build.
+- **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Each folder listing an app fetches costs one Class C call. Each file download, and the check before each upload, costs one Class B call. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
+- **Switching an existing Instance copies nothing.** If you move from R2 to S3 (or back), copy the bucket's contents first, for example with [rclone](https://rclone.org/), keeping the `users/` key layout. The storage usage figure on `/account` is not recomputed.
+- **Other providers work too**: AWS S3, Wasabi, Storj, iDrive e2, a MinIO server, or R2's own S3 endpoint. Set `S3_REGION` if your provider needs a region that is not part of its endpoint host.
+
 ### Instance configuration
 
 Only `OWNER_EMAIL` is **required**. Set settings under `[vars]` in your `wrangler.prod.toml` (what `bun run setup` does) or in the Cloudflare dashboard (**Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, type *Text*). A missing or invalid `OWNER_EMAIL` closes only the human pages: `/account` and the consent page show a *finish setup* page, while storage, WebFinger and the OAuth token endpoint keep working, so apps already connected keep syncing. An *invalid* optional setting (for example a `PUBLIC_BASE_URL` with a path) makes every request `503` with a message naming it; delete it to go back to the default.
@@ -115,6 +142,11 @@ Only `OWNER_EMAIL` is **required**. Set settings under `[vars]` in your `wrangle
 |----------|----------|---------|---------|------------------|
 | `OWNER_EMAIL` | **yes** | Your email address, exactly as your Cloudflare Access sign-in method reports it (the one-time-PIN address, or your Google/GitHub email — not necessarily your Cloudflare login). Only this identity (case-insensitive) may use `/account`. See [Change your sign-in email](#change-your-sign-in-email). | none | `alice@example.com` |
 | `ACCOUNT_USERNAME` | no | The one Account this Instance serves (`[a-z0-9_.-]+`). It names the storage root `/storage/<ACCOUNT_USERNAME>/` and the storage address `<ACCOUNT_USERNAME>@<host>`, and is never derived from an email address. Set it only to keep an existing username (see [The Account row](#instance-configuration)). | `me` | `alice` |
+| `S3_ENDPOINT` | with S3 | Origin of an S3-compatible API, e.g. `https://s3.us-west-004.backblazeb2.com`. Setting any `S3_*` value stores files in that bucket instead of R2; then `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are required too. See [Use an S3 bucket instead of R2](#use-an-s3-bucket-instead-of-r2). | unset (R2) | unset (local directory) |
+| `S3_BUCKET` | with S3 | The bucket name. | none | none |
+| `S3_ACCESS_KEY_ID` | with S3 | The access key ID (B2: the application key's *keyID*). | none | none |
+| `S3_SECRET_ACCESS_KEY` | with S3 | The secret key. Set it as a **Secret**, never as a plain-text var: `bun run setup` does this, or use **Variables and Secrets → Add → Secret**, or `wrangler secret put S3_SECRET_ACCESS_KEY`. | none | none |
+| `S3_REGION` | no | The signing region. Only needed when it is not part of the endpoint host (AWS, B2 and R2 hosts are recognised). | from the endpoint, else `us-east-1` | same |
 | `PUBLIC_BASE_URL` | no | A canonical origin, e.g. a custom domain `https://rs.example.com` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it. Unset, they are built from the origin the request arrived at, which on Cloudflare is always one of your Worker's own hostnames (Cloudflare's edge refuses any other `Host` with a `403` before the Worker runs). `X-Forwarded-Host` / `X-Forwarded-Proto` are never consulted. | the request's origin | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
 
 The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value is rejected even in dev mode. Dev mode keeps `alice` so local tooling and the spec-check run unchanged.
@@ -148,7 +180,7 @@ To release on every push to `main`, connect the repository to your Worker using 
    ```
 
 4. No build variables are needed. On the build, `bun run deploy` finds your D1 database by name (`remotestorage-db`), materialises `wrangler.prod.toml` for it, applies D1 migrations, and deploys, so a recreated database is picked up automatically. If you gave `bun run setup` other names with `RSILO_BUCKET` / `RSILO_DB`, add the same two as **Build variables**. A `D1_DATABASE_ID` build variable from older instructions is ignored; you can delete it.
-5. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them.
+5. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them. If your files are in an [S3 bucket](#use-an-s3-bucket-instead-of-r2), keep the `S3_*` settings there too (`S3_SECRET_ACCESS_KEY` as a *Secret*) and add the build variable `RSILO_STORAGE=s3`.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
@@ -245,7 +277,7 @@ An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, th
 
 RSilo is built for a *small personal backup*, not a business service — and it fits comfortably inside Cloudflare's free tier.
 
-**The one thing to watch: R2 is the only part that can ever cost money.** Workers and D1 simply stop working once their free limits are reached. R2 instead bills overage once you pass its free allowance — and because Cloudflare requires a payment method to enable R2, that overage is charged automatically.
+**The one thing to watch: R2 is the only part that can ever cost money.** (If you [use an S3 bucket instead](#use-an-s3-bucket-instead-of-r2), R2 is not used at all and that provider's free tier applies instead.) Workers and D1 simply stop working once their free limits are reached. R2 instead bills overage once you pass its free allowance — and because Cloudflare requires a payment method to enable R2, that overage is charged automatically.
 
 As of **October 2026**, R2's free tier covers roughly **10 GB of storage**, **1 million writes/listings**, and **10 million reads** per month, with free egress. Cloudflare changes these numbers and prices over time, so treat them as a rough guide and check the current values on the [R2 pricing page](https://developers.cloudflare.com/r2/pricing/). For a personal notes/todos/photos backup this allowance is far more than you will use.
 
@@ -277,13 +309,13 @@ Roughly, uploads and folder listings count as "writes" (Class A), downloads and 
 └──────────────────────────────────────────────────────────┘
          │                    │                │
     ┌────▼────┐          ┌────▼────┐    ┌──────▼──────┐
-    │   R2    │          │   D1    │    │ Rate limits │
+    │ R2 / S3 │          │   D1    │    │ Rate limits │
     └─────────┘          └─────────┘    └─────────────┘
 ```
 
 For offline development: R2 → local filesystem, D1 → real SQLite through a D1-shaped shim (`src/services/db/sqlite.ts`) that applies the same `drizzle/migrations` as production and tracks them in `d1_migrations`, rate limiting → skipped.
 
-The routes talk to storage through a small `StorageInterface`. In production `getStorage()` wraps the raw R2 binding in `R2Storage`; offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`.
+The routes talk to storage through a small `StorageInterface`. `getStorage()` returns an `S3Storage` (`src/services/s3.ts`, SigV4 via `aws4fetch`) when the `S3_*` settings are present. Otherwise, in production it wraps the raw R2 binding in `R2Storage`, and offline it returns the `LocalStorage` instance directly. See `src/services/r2.ts`. The offline server uses S3 too when `S3_*` are set in its environment, e.g. pointing at a local SeaweedFS or MinIO.
 
 ## Local development (offline)
 
@@ -419,9 +451,11 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**643 tests** across 33 files: protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+**667 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
+
+`test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
 ## Known limitations
 

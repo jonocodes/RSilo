@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { hasScope, hashToken, scopeFromPath } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { RATE_LIMITS } from '../services/rate-limit';
-import { getInstanceConfig, isLocalDevelopment } from '../config';
+import { S3_VARS, getInstanceConfig, getStorageConfig, isLocalDevelopment } from '../config';
 import pkg from '../../package.json';
 
 const RATE_LIMITER_NAMES = Object.keys(RATE_LIMITS);
@@ -14,7 +14,9 @@ export const debugRouter = new Hono();
 
 const VERSION = (pkg as { version?: string }).version || 'unknown';
 
-function storageBackend(env: any): 'r2' | 'local' | 'unknown' {
+function storageBackend(env: any): 's3' | 'r2' | 'local' | 'unknown' {
+  const config = getStorageConfig(env);
+  if ('problems' in config || config.s3) return 's3';
   const raw = env?.STORAGE;
   if (raw && typeof raw.createMultipartUpload === 'function') return 'r2';
   if (raw && typeof raw.list === 'function') return 'local';
@@ -275,6 +277,7 @@ debugRouter.get('/env', (c) => {
       ACCOUNT_USERNAME: isSet('ACCOUNT_USERNAME'),
       OWNER_EMAIL: isSet('OWNER_EMAIL'),
       PUBLIC_BASE_URL: isSet('PUBLIC_BASE_URL'),
+      ...Object.fromEntries(S3_VARS.map((name) => [name, isSet(name)])),
     },
     timestamp: new Date().toISOString(),
   });

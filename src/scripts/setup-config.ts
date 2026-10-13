@@ -1,32 +1,48 @@
 // Pure helpers for `bun run setup` (src/scripts/setup.ts) and `bun run deploy`:
 // Instance var validation, [vars] editing in wrangler TOML, and the manual
 // Cloudflare Access steps. No I/O here, so it is unit-tested without Cloudflare.
-import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem } from '../config';
+import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
 import { workerNameFromHost } from '../ui/setup-pages';
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
 /** The vars a fresh Instance must be given; the rest have defaults (src/config.ts). */
 export const REQUIRED_VARS = ['OWNER_EMAIL'] as const satisfies readonly InstanceVar[];
-export type InstanceSettings = Partial<Record<InstanceVar, string>>;
+/**
+ * S3 storage settings (ADR-0005), written to [vars] like the Instance vars.
+ * Giving any of them switches setup to S3 mode. The secret key is never a
+ * flag or a var: setup sets it as the Worker secret S3_SECRET_ACCESS_KEY.
+ */
+export const S3_SETUP_VARS = ['S3_ENDPOINT', 'S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID'] as const;
+export type S3SetupVar = (typeof S3_SETUP_VARS)[number];
+export type SetupVar = InstanceVar | S3SetupVar;
+export type InstanceSettings = Partial<Record<SetupVar, string>>;
 
-const FIELD_RULES: Record<InstanceVar, (value: string) => string | null> = {
+const FIELD_RULES: Record<SetupVar, (value: string) => string | null> = {
   ACCOUNT_USERNAME: accountUsernameProblem,
   OWNER_EMAIL: ownerEmailProblem,
   PUBLIC_BASE_URL: publicBaseUrlProblem,
+  S3_ENDPOINT: s3EndpointProblem,
+  S3_BUCKET: s3BucketProblem,
+  S3_REGION: () => null,
+  S3_ACCESS_KEY_ID: () => null,
 };
 
 /** The problem with a setting, using the Worker's own rules, or null if valid. */
-export function validateSetting(name: InstanceVar, value: string): string | null {
+export function validateSetting(name: SetupVar, value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return `${name} is not set`;
   return FIELD_RULES[name](trimmed);
 }
 
-const FLAGS: Record<string, InstanceVar> = {
+const FLAGS: Record<string, SetupVar> = {
   '--account-username': 'ACCOUNT_USERNAME',
   '--owner-email': 'OWNER_EMAIL',
   '--public-base-url': 'PUBLIC_BASE_URL',
+  '--s3-endpoint': 'S3_ENDPOINT',
+  '--s3-bucket': 'S3_BUCKET',
+  '--s3-region': 'S3_REGION',
+  '--s3-access-key-id': 'S3_ACCESS_KEY_ID',
 };
 
 /** Parses `--account-username=x` / `--account-username x` style flags. Throws on anything else. */
@@ -54,7 +70,7 @@ export interface SettingSources {
 }
 
 /** First non-blank value from a flag, then an env var, then the existing config. */
-export function resolveSetting(name: InstanceVar, sources: SettingSources): string | undefined {
+export function resolveSetting(name: SetupVar, sources: SettingSources): string | undefined {
   for (const value of [sources.flags[name], sources.env[name], sources.existing[name]]) {
     if (value !== undefined && value.trim()) return value.trim();
   }
@@ -157,6 +173,22 @@ export function withoutEmptyVars(toml: string): string {
     return !m || parseValue(m[3]).value !== '';
   });
   return kept.join('\n');
+}
+
+/**
+ * Drops the [[r2_buckets]] table, for an Instance that stores its files in an
+ * S3 bucket: a Worker with an R2 binding cannot deploy to an account without R2.
+ */
+export function withoutR2Buckets(toml: string): string {
+  const lines = toml.split('\n');
+  const out: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    const header = line.match(HEADER);
+    if (header) skipping = header[1] === 'r2_buckets';
+    if (!skipping) out.push(line);
+  }
+  return out.join('\n');
 }
 
 /** The workers.dev origin printed by `wrangler deploy`, if any. */

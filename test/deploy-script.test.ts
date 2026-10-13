@@ -86,6 +86,15 @@ describe('bun run deploy without a local wrangler.prod.toml (Workers Builds)', (
     expect(toml).toContain(`database_id = "${PROD_ID}"`);
   });
 
+  it('leaves the R2 binding out when RSILO_STORAGE=s3 (files in an S3 bucket)', () => {
+    databases([{ name: 'remotestorage-db', uuid: PROD_ID }]);
+    const res = deploy({ WORKERS_CI: '1', RSILO_STORAGE: 's3' });
+    expect(res.status, res.out).toBe(0);
+    const toml = read('deployed.toml');
+    expect(toml).not.toMatch(/r2_buckets|bucket_name/);
+    expect(toml).toContain(`database_id = "${PROD_ID}"`);
+  });
+
   it('fails on CI, before migrating, when no database has that name', () => {
     databases([{ name: 'something-else', uuid: PROD_ID }]);
     const res = deploy({ WORKERS_CI: '1' });
