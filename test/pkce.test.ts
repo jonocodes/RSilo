@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1 } from './helpers/sqlite-d1';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 // PKCE (RFC 7636) on the authorization code flow, S256 only. Required, as OAuth
 // 2.1 requires of public clients: a code is issued only with a code_challenge

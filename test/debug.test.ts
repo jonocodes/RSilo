@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 class FakeStorage {
   objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
@@ -50,26 +51,16 @@ class FakeStorage {
   }
 }
 
-function makeDb(user: any = null) {
-  return {
-    prepare: (sql: string) => ({
-      bind: (..._args: any[]) => ({
-        first: async () => {
-          if (sql.includes('FROM users WHERE username')) return user;
-          return null;
-        },
-        all: async () => ({ results: [] }),
-        run: async () => ({}),
-      }),
-      first: async () => (sql.includes('SELECT 1') ? { ok: 1 } : null),
-      all: async () => ({ results: [] }),
-      run: async () => ({}),
-    }),
-  } as any;
+function makeDb(user: { username: string; storage_quota_bytes?: number; used_storage_bytes?: number } | null = null) {
+  const db = createSqliteD1();
+  if (user) {
+    db.sqlite.prepare('INSERT INTO users (id, username, storage_quota_bytes, used_storage_bytes) VALUES (?, ?, ?, ?)')
+      .run(crypto.randomUUID(), user.username, user.storage_quota_bytes ?? 0, user.used_storage_bytes ?? 0);
+  }
+  return db;
 }
 
 const testUser = {
-  id: '1',
   username: 'alice',
   storage_quota_bytes: 1000,
   used_storage_bytes: 400,
@@ -307,41 +298,26 @@ describe('debug endpoints are dev-only', () => {
   });
 });
 
-function makeOAuthDb({ clients = [] as any[], tokens = [] as any[], codes = [] as any[] }) {
-  return {
-    prepare: (sql: string) => ({
-      all: async () => {
-        if (sql.includes('FROM oauth_clients')) return { results: clients };
-        if (sql.includes('FROM oauth_tokens')) return { results: tokens };
-        if (sql.includes('FROM oauth_codes')) return { results: codes };
-        return { results: [] };
-      },
-      first: async () => null,
-      run: async () => ({}),
-      bind: () => ({
-        all: async () => ({ results: [] }),
-        first: async () => null,
-        run: async () => ({}),
-      }),
-    }),
-  } as any;
+function makeOAuthDb(): ReturnType<typeof createSqliteD1> {
+  const now = Math.floor(Date.now() / 1000);
+  const db = createSqliteD1();
+  db.sqlite.prepare('INSERT INTO users (id, username) VALUES (?, ?)').run('u1', 'alice');
+  db.sqlite.prepare('INSERT INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
+    .run('app-1', 'App One', 'https://app.example/cb', now - 1000, 'alice');
+  const insertToken = db.sqlite.prepare(
+    'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  insertToken.run('t1', 'hash-access', 'hash-refresh', now + 3600, 'documents:rw', 'alice', 'app-1', now - 100);
+  insertToken.run('t2', 'hash-access-2', null, now - 10, 'pictures:r', 'alice', 'app-1', now - 100);
+  db.sqlite.prepare(
+    'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run('abcdef1234567890', 'app-1', 'alice', 'https://app.example/cb', 'documents:rw', 'challenge', now + 600, now);
+  return db;
 }
 
 describe('GET /debug/oauth', () => {
-  const now = Math.floor(Date.now() / 1000);
-  const clients = [
-    { id: 'app-1', name: 'App One', user_id: 'alice', redirect_uris: 'https://app.example/cb', created_at: now - 1000 },
-  ];
-  const tokens = [
-    { id: 't1', access_token_hash: 'hash-access', refresh_token_hash: 'hash-refresh', user_id: 'alice', client_id: 'app-1', scopes: 'documents:rw', created_at: now - 100, expires_at: now + 3600 },
-    { id: 't2', access_token_hash: 'hash-access-2', refresh_token_hash: null, user_id: 'alice', client_id: 'app-1', scopes: 'pictures:r', created_at: now - 100, expires_at: now - 10 },
-  ];
-  const codes = [
-    { code_hash: 'abcdef1234567890', client_id: 'app-1', user_id: 'alice', redirect_uri: 'https://app.example/cb', scope: 'documents:rw', expires_at: now + 600, created_at: now },
-  ];
-
   it('summarises clients, tokens and codes without leaking secrets', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeOAuthDb({ clients, tokens, codes }) };
+    const env = { STORAGE: new FakeStorage() as any, DB: makeOAuthDb() };
     const app = createServer(env);
     const res = await app.request('http://localhost/debug/oauth', { method: 'GET' }, env);
 

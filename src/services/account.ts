@@ -8,8 +8,8 @@
 //   written, because the Operator changed ACCOUNT_USERNAME or migrated a
 //   multi-user deployment without choosing which account to keep.
 //
-// Works with any D1-shaped binding: the D1 binding itself, or the offline
-// D1Adapter over LocalDatabase.
+// Works with any D1-shaped binding: the D1 binding itself, or the SQLite shim
+// (services/db/sqlite.ts) the offline server and tests use.
 
 export type AccountStatus = 'ready' | 'username_mismatch';
 

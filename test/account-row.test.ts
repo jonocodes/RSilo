@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1, usernames } from './helpers/sqlite-d1';
+import { createSqliteD1 } from '../src/services/db/sqlite';
+import { usernames } from './helpers/db';
 import { tokenHash } from './helpers/tokens';
 
 // The Instance serves exactly one Account (ADR-0002). Its `users` row is

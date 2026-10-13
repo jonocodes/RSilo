@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -36,7 +37,7 @@ const TEST_ENV = {
       };
     },
   } as any,
-  DB: {} as any,
+  DB: createSqliteD1(),
 };
 
 describe('Scope-based access control', () => {

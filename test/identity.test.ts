@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
-import { createSqliteD1, type SqliteD1 } from './helpers/sqlite-d1';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { tokenHash } from './helpers/tokens';
 
 // The human identity seam (services/identity.ts), driven through /account.

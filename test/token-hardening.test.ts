@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1 } from './helpers/sqlite-d1';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 import { PKCE, tokenHash as sha256 } from './helpers/tokens';
 import { generateToken, hashToken } from '../src/services/auth';
 

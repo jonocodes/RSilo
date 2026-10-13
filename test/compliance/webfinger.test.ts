@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
+import { createSqliteD1 } from '../../src/services/db/sqlite';
 
 function createTestEnv() {
   return {
@@ -11,7 +12,7 @@ function createTestEnv() {
       async head() { return null; },
       async list() { return { objects: [] }; },
     } as any,
-    DB: {} as any,
+    DB: createSqliteD1(),
   };
 }
 
@@ -227,7 +228,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: 'abc123', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -251,7 +252,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -274,7 +275,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -297,7 +298,7 @@ describe('ETag Compliance', () => {
       async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -322,7 +323,7 @@ describe('Content-Type Compliance', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -345,7 +346,7 @@ describe('Content-Type Compliance', () => {
       async head() { return { etag: '"test"', contentType: 'application/json', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -368,7 +369,7 @@ describe('Content-Type Compliance', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -393,7 +394,7 @@ describe('Folder Listing Compliance', () => {
         return { objects: [] };
       },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -420,7 +421,7 @@ describe('Folder Listing Compliance', () => {
         ] };
       },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -448,7 +449,7 @@ describe('Folder Listing Compliance', () => {
         ] };
       },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -472,7 +473,7 @@ describe('Folder Listing Compliance', () => {
         return { objects: [] };
       },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 

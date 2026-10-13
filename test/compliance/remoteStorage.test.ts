@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
+import { createSqliteD1 } from '../../src/services/db/sqlite';
 import { PRODUCTION_INSTANCE } from '../helpers/instance';
 
 interface StorageMock {
@@ -45,7 +46,7 @@ function createTestStorage(): StorageMock {
 function createEnv(storage: StorageMock) {
   return {
     STORAGE: storage,
-    DB: {} as any,
+    DB: createSqliteD1(),
   };
 }
 

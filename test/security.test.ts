@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 function createTestEnv() {
   const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
@@ -31,22 +32,7 @@ function createTestEnv() {
         return { objects: keys.map(k => ({ key: k, etag: storage.get(k)!.etag })) };
       },
     } as any,
-    DB: {
-      prepare: (query: string) => ({
-        bind: () => ({
-          first: async () => {
-            if (query.includes('SELECT * FROM users WHERE username')) {
-              return { id: '1', username: 'alice', created_at: Date.now(), storage_quota_bytes: 10737418240, used_storage_bytes: 0 };
-            }
-            return null;
-          },
-          run: async () => ({ success: true }),
-        }),
-        first: async () => null,
-        run: async () => ({ success: true }),
-        all: async () => ({ results: [] }),
-      }),
-    } as any,
+    DB: createSqliteD1(),
   };
 }
 
@@ -135,30 +121,20 @@ describe('Security Tests', () => {
 
   describe('Quota Enforcement', () => {
     it('rejects PUT when quota exceeded', async () => {
-      const env = {
-        STORAGE: {
-          async get() { return null; },
-          async put() { return '"test"'; },
-          async delete() {},
-          async head() { return null; },
-          async list() { return { objects: [] }; },
-        } as any,
-        DB: {
-          prepare: (sql: string) => ({
-            bind: () => ({
-              first: async () => {
-                if (sql.includes('oauth_tokens')) return null;
-                if (sql.includes('users')) return { storage_quota_bytes: 10, used_storage_bytes: 9 };
-                return null;
-              },
-              run: async () => ({ meta: { changes: 0 } }),
-            })
-          })
-        } as any,
-        ACCOUNT_USERNAME: 'quotauser',
-      };
-      const app = createServer(env);
-      const token = seedToken(env, 'quotauser', 'documents:rw');
+    const env = {
+      STORAGE: {
+        async get() { return null; },
+        async put() { return '"test"'; },
+        async delete() {},
+        async head() { return null; },
+        async list() { return { objects: [] }; },
+      } as any,
+      DB: createSqliteD1(),
+      ACCOUNT_USERNAME: 'quotauser',
+    };
+    const app = createServer(env);
+    const token = seedToken(env, 'quotauser', 'documents:rw');
+    env.DB.sqlite.prepare('UPDATE users SET storage_quota_bytes = 10, used_storage_bytes = 9 WHERE username = ?').run('quotauser');
 
       const res = await app.request(
         'http://localhost/storage/quotauser/documents/large.txt',

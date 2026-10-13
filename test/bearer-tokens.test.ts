@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken, deleteToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 // ADR-0003: storage accepts only opaque bearer tokens stored in oauth_tokens.
 
@@ -31,7 +32,7 @@ function createStorage() {
 const allowAll = { limit: async () => ({ success: true }) };
 
 function createEnv(overrides: Record<string, unknown> = {}) {
-  return { STORAGE: createStorage(), DB: {} as any, ...overrides };
+  return { STORAGE: createStorage(), DB: createSqliteD1(), ...overrides };
 }
 
 function base64Url(input: string | ArrayBuffer): string {
