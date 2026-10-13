@@ -24,13 +24,13 @@ export class D1Adapter {
           if (sql.includes('oauth_clients') && sql.includes('WHERE id = ?')) {
             return self.db.getClient(values[0]) as Promise<T>;
           }
-          if (sql.includes('oauth_tokens') && sql.includes('access_token = ?')) {
-            return self.db.getTokenByAccessToken(values[0]) as Promise<T>;
+          if (sql.includes('oauth_tokens') && sql.includes('access_token_hash = ?')) {
+            return self.db.getTokenByAccessTokenHash(values[0]) as Promise<T>;
           }
-          if (sql.includes('oauth_tokens') && sql.includes('refresh_token = ?')) {
-            return self.db.getTokenByRefreshToken(values[0]) as Promise<T>;
+          if (sql.includes('oauth_tokens') && sql.includes('refresh_token_hash = ?')) {
+            return self.db.getTokenByRefreshTokenHash(values[0]) as Promise<T>;
           }
-          if (sql.includes('oauth_codes') && sql.includes('WHERE code = ?')) {
+          if (sql.includes('oauth_codes') && sql.includes('WHERE code_hash = ?')) {
             return self.db.getCode(values[0]) as Promise<T>;
           }
           if (sql.includes('FROM users') && sql.includes('username = ?')) {
@@ -62,8 +62,8 @@ export class D1Adapter {
           } else if (sql.includes('INSERT INTO oauth_tokens')) {
             await self.db.createToken({
               id: values[0],
-              access_token: values[1],
-              refresh_token: values[2],
+              access_token_hash: values[1],
+              refresh_token_hash: values[2],
               expires_at: values[3],
               scopes: values[4],
               user_id: values[5],
@@ -79,15 +79,14 @@ export class D1Adapter {
             });
           } else if (sql.includes('INSERT INTO oauth_codes')) {
             await self.db.createCode({
-              code: values[0],
+              code_hash: values[0],
               client_id: values[1],
               user_id: values[2],
               redirect_uri: values[3],
               scope: values[4],
-              expires_at: values[5],
+              code_challenge: values[5],
+              expires_at: values[6],
               created_at: Math.floor(Date.now() / 1000),
-              code_challenge: values[6] ?? null,
-              code_challenge_method: values[7] ?? null,
             });
           } else if (sql.includes('DELETE FROM oauth_tokens WHERE client_id = ? AND user_id = ?')) {
             await self.db.deleteTokensByClient(values[0], values[1]);
@@ -114,19 +113,12 @@ export class D1Adapter {
           } else if (sql.includes('DELETE FROM users') && sql.includes('username')) {
             await self.db.deleteUser(values[0]);
           } else if (sql.includes('UPDATE oauth_tokens')) {
-            const existing = await self.db.getTokenByRefreshToken(values[3]);
-            if (existing) {
-              await self.db.deleteToken(existing.id);
-              await self.db.createToken({
-                id: existing.id,
-                access_token: values[0],
-                refresh_token: values[1],
-                expires_at: values[2],
-                scopes: existing.scopes,
-                user_id: existing.user_id,
-                client_id: existing.client_id,
-              });
-            }
+            await self.db.rotateToken(values[4], {
+              access_token_hash: values[0],
+              refresh_token_hash: values[1],
+              previous_refresh_token_hash: values[2],
+              expires_at: values[3],
+            });
           }
           return {};
         },

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1, usernames, type SqliteD1 } from './helpers/sqlite-d1';
+import { tokenHash } from './helpers/tokens';
 
 // OWNER_EMAIL is the only required setting. ACCOUNT_USERNAME defaults to "me"
 // and PUBLIC_BASE_URL to the request's own origin; a missing OWNER_EMAIL closes
@@ -52,8 +53,8 @@ function minimalEnv(extra: Record<string, unknown> = {}) {
 function seedApp(db: SqliteD1, username = 'me') {
   db.sqlite.exec(`INSERT INTO users (id, username) VALUES ('u1', '${username}')`);
   db.sqlite.exec(`INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'app', '[]', '${username}')`);
-  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id)
-    VALUES ('t1', 'tok', 'ref', 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
+  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id)
+    VALUES ('t1', '${tokenHash('tok')}', '${tokenHash('ref')}', 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
 }
 
 const q = (resource: string) => `resource=${encodeURIComponent(resource)}`;

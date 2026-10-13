@@ -333,11 +333,11 @@ describe('GET /debug/oauth', () => {
     { id: 'app-1', name: 'App One', user_id: 'alice', redirect_uris: 'https://app.example/cb', created_at: now - 1000 },
   ];
   const tokens = [
-    { id: 't1', access_token: 'secret-access', refresh_token: 'secret-refresh', user_id: 'alice', client_id: 'app-1', scopes: 'documents:rw', created_at: now - 100, expires_at: now + 3600 },
-    { id: 't2', access_token: 'secret-access-2', refresh_token: null, user_id: 'alice', client_id: 'app-1', scopes: 'pictures:r', created_at: now - 100, expires_at: now - 10 },
+    { id: 't1', access_token_hash: 'hash-access', refresh_token_hash: 'hash-refresh', user_id: 'alice', client_id: 'app-1', scopes: 'documents:rw', created_at: now - 100, expires_at: now + 3600 },
+    { id: 't2', access_token_hash: 'hash-access-2', refresh_token_hash: null, user_id: 'alice', client_id: 'app-1', scopes: 'pictures:r', created_at: now - 100, expires_at: now - 10 },
   ];
   const codes = [
-    { code: 'abcdef1234567890', client_id: 'app-1', user_id: 'alice', redirect_uri: 'https://app.example/cb', scope: 'documents:rw', expires_at: now + 600, created_at: now },
+    { code_hash: 'abcdef1234567890', client_id: 'app-1', user_id: 'alice', redirect_uri: 'https://app.example/cb', scope: 'documents:rw', expires_at: now + 600, created_at: now },
   ];
 
   it('summarises clients, tokens and codes without leaking secrets', async () => {
@@ -351,10 +351,10 @@ describe('GET /debug/oauth', () => {
     expect(json.clients[0].token_count).toBe(2);
     expect(json.tokens[0].has_refresh_token).toBe(true);
     expect(json.tokens[1].has_refresh_token).toBe(false);
-    expect(json.tokens[0].access_token).toBeUndefined();
-    expect(json.tokens[0].refresh_token).toBeUndefined();
-    expect(json.codes[0].code_prefix).toBe('abcdef12');
-    expect(json.codes[0].code).toBeUndefined();
+    expect(json.tokens[0].access_token_hash).toBeUndefined();
+    expect(json.tokens[0].refresh_token_hash).toBeUndefined();
+    expect(json.codes[0].code_hash_prefix).toBe('abcdef12');
+    expect(json.codes[0].code_hash).toBeUndefined();
   });
 });
 

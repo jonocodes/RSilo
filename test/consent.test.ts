@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { createSqliteD1 } from './helpers/sqlite-d1';
+import { PKCE } from './helpers/tokens';
 
 // OAuth consent lives under the Owner-gated /account prefix (ADR-0004, #18):
 // GET renders it from the query string alone, POST approves or denies. The
@@ -46,6 +47,8 @@ const REQUEST = {
   response_type: 'code',
   scope: 'documents:rw pictures:r',
   state: 's=1&t=2',
+  code_challenge: PKCE.challenge,
+  code_challenge_method: 'S256',
 };
 
 function query(params: Record<string, string> = {}): string {
@@ -201,7 +204,7 @@ describe('approve and deny (POST /account/oauth/authorize)', () => {
     const token = await app.request('http://localhost/oauth/alice/token', {
       method: 'POST',
       headers: FORM,
-      body: new URLSearchParams({ grant_type: 'authorization_code', code: code!, redirect_uri: REQUEST.redirect_uri }).toString(),
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: code!, redirect_uri: REQUEST.redirect_uri, code_verifier: PKCE.verifier }).toString(),
     }, env);
     expect(token.status).toBe(200);
     const json = await token.json() as any;

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { createSqliteD1, type SqliteD1 } from './helpers/sqlite-d1';
+import { tokenHash } from './helpers/tokens';
 
 // The human identity seam (services/identity.ts), driven through /account.
 // Production requests carry a stubbed Workers ExecutionContext whose
@@ -192,7 +193,7 @@ describe('CSRF on /account', () => {
     it(`refuses an app revocation with ${name}`, async () => {
       db.sqlite.exec("INSERT INTO users (id, username) VALUES ('u1', 'alice')");
       db.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'x', '[]', 'alice')");
-      db.sqlite.exec("INSERT INTO oauth_tokens (id, access_token, expires_at, scopes, user_id, client_id) VALUES ('t1', 'tok', 9999999999, 'documents:rw', 'alice', 'https://app.example')");
+      db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, expires_at, scopes, user_id, client_id) VALUES ('t1', '${tokenHash('tok')}', 9999999999, 'documents:rw', 'alice', 'https://app.example')`);
       const res = await post('/account/apps/revoke', { ...FORM, ...headers }, form({ client_id: 'https://app.example' }));
       expect(res.status).toBe(403);
       expect(db.sqlite.prepare('SELECT COUNT(*) AS n FROM oauth_tokens').get()).toEqual({ n: 1 });
@@ -290,11 +291,11 @@ describe('dashboard settings and app revocation', () => {
     db.sqlite.exec("INSERT INTO users (id, username) VALUES ('u1', 'alice')");
     db.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'x', '[]', 'alice')");
     db.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://other.example', 'y', '[]', 'alice')");
-    db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES
-      ('t1', 'app-token-1', 'refresh-1', 9999999999, 'documents:rw', 'alice', 'https://app.example'),
-      ('t2', 'app-token-2', NULL, 9999999999, 'pictures:r', 'alice', 'https://app.example'),
-      ('t3', 'other-token', NULL, 9999999999, 'documents:rw', 'alice', 'https://other.example')`);
-    db.sqlite.exec("INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, expires_at) VALUES ('c1', 'https://app.example', 'alice', 'https://app.example/cb', 'documents:rw', 9999999999)");
+    db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES
+      ('t1', '${tokenHash('app-token-1')}', '${tokenHash('refresh-1')}', 9999999999, 'documents:rw', 'alice', 'https://app.example'),
+      ('t2', '${tokenHash('app-token-2')}', NULL, 9999999999, 'pictures:r', 'alice', 'https://app.example'),
+      ('t3', '${tokenHash('other-token')}', NULL, 9999999999, 'documents:rw', 'alice', 'https://other.example')`);
+    db.sqlite.exec(`INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES ('${tokenHash('c1')}', 'https://app.example', 'alice', 'https://app.example/cb', 'documents:rw', 'challenge', 9999999999)`);
 
     const get = (token: string, path: string) => app.request(`http://localhost/storage/alice/${path}`, {
       headers: { Authorization: `Bearer ${token}` },

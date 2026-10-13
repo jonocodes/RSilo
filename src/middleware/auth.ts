@@ -1,16 +1,16 @@
 import type { Context, Next } from '../types';
-import { parseAuthHeader, hasScope, scopeFromPath } from '../services/auth';
+import { parseAuthHeader, hasScope, scopeFromPath, hashToken } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
 
 // Access tokens are opaque bearer tokens: a token is valid exactly while its
-// unexpired row exists in oauth_tokens (ADR-0003).
+// unexpired row exists in oauth_tokens (ADR-0003). Rows hold only its hash.
 async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayload | null> {
   const db = (c.env as any)?.DB;
   if (!db || typeof db.prepare !== 'function') return null;
 
   const row = await db.prepare(
-    'SELECT * FROM oauth_tokens WHERE access_token = ? AND expires_at > ?'
-  ).bind(token, Math.floor(Date.now() / 1000)).first() as any;
+    'SELECT * FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?'
+  ).bind(await hashToken(token), Math.floor(Date.now() / 1000)).first() as any;
 
   if (!row) return null;
   return {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1, usernames } from './helpers/sqlite-d1';
+import { tokenHash } from './helpers/tokens';
 
 // The Instance serves exactly one Account (ADR-0002). Its `users` row is
 // created lazily on first use; if the table already holds other rows the Worker
@@ -84,7 +85,7 @@ describe('Username mismatch', () => {
     const env = createEnv();
     env.DB.sqlite.exec("INSERT INTO users (id, username) VALUES ('id-bob', 'bob')");
     env.DB.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('c1', 'c1', '[]', 'bob')");
-    env.DB.sqlite.exec("INSERT INTO oauth_tokens (id, access_token, expires_at, scopes, user_id, client_id) VALUES ('t1', 'bob-token', 9999999999, 'documents:rw', 'bob', 'c1')");
+    env.DB.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, expires_at, scopes, user_id, client_id) VALUES ('t1', '${tokenHash('bob-token')}', 9999999999, 'documents:rw', 'bob', 'c1')`);
     return env;
   }
 
