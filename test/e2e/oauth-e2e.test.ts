@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { waitForServer } from './helpers';
+import { PKCE } from '../helpers/tokens';
 
 const SERVER_URL = 'http://localhost:8791';
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-oauth');
@@ -82,7 +83,8 @@ describe('OAuth E2E', () => {
   });
 
   it('the legacy consent URL redirects with the query string unchanged', async () => {
-    const query = 'client_id=http%3A%2F%2Flocalhost&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code&scope=documents:rw+pictures%3Ar&state=a%3Db%26c%20d';
+    const query = 'client_id=http%3A%2F%2Flocalhost&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code&scope=documents:rw+pictures%3Ar&state=a%3Db%26c%20d'
+      + `&code_challenge=${PKCE.challenge}&code_challenge_method=S256`;
     const res = await fetch(`${SERVER_URL}/oauth/alice/authorize?${query}`, { redirect: 'manual' });
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe(`${CONSENT}?${query}`);
@@ -93,7 +95,7 @@ describe('OAuth E2E', () => {
   });
 
   it('the Owner approves a client (dev identity on localhost) and the code buys a working token', async () => {
-    const page = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'code', scope: 'documents:rw', state: 's1' })}`);
+    const page = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'code', scope: 'documents:rw', state: 's1', code_challenge: PKCE.challenge, code_challenge_method: 'S256' })}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain('action="/account/oauth/authorize"');
 
@@ -107,6 +109,8 @@ describe('OAuth E2E', () => {
         response_type: 'code',
         scope: 'documents:rw',
         state: 's1',
+        code_challenge: PKCE.challenge,
+        code_challenge_method: 'S256',
       }),
       redirect: 'manual',
     });
@@ -119,7 +123,7 @@ describe('OAuth E2E', () => {
     const token = await fetch(`${SERVER_URL}/oauth/alice/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'authorization_code', code: code!, redirect_uri: REDIRECT_URI }),
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: code!, redirect_uri: REDIRECT_URI, code_verifier: PKCE.verifier }),
     });
     expect(token.status).toBe(200);
     const { access_token } = await token.json() as any;
@@ -170,7 +174,7 @@ describe('OAuth E2E', () => {
   });
 
   it('the consent page auto-accepts an unknown client', async () => {
-    const res = await fetch(`${CONSENT}?client_id=http://some-new-app.example&redirect_uri=http://some-new-app.example/callback&response_type=code`);
+    const res = await fetch(`${CONSENT}?client_id=http://some-new-app.example&redirect_uri=http://some-new-app.example/callback&response_type=code&code_challenge=${PKCE.challenge}&code_challenge_method=S256`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toContain('some-new-app.example');

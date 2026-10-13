@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { hasScope, scopeFromPath } from '../services/auth';
+import { hasScope, hashToken, scopeFromPath } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { RATE_LIMITS } from '../services/rate-limit';
 import { S3_VARS, getInstanceConfig, getStorageConfig, isLocalDevelopment } from '../config';
@@ -62,7 +62,7 @@ async function introspectToken(c: any, token: string): Promise<Introspection> {
     return { valid: false, source: null, reason: 'DB binding not available' };
   }
 
-  const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token = ?').bind(token).first() as any;
+  const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token_hash = ?').bind(await hashToken(token)).first() as any;
   if (!row) {
     return { valid: false, source: null, reason: 'unknown or revoked token' };
   }
@@ -312,11 +312,11 @@ debugRouter.get('/oauth', async (c) => {
     created_at: t.created_at,
     expires_at: t.expires_at,
     expired: (t.expires_at || 0) <= now,
-    has_refresh_token: !!t.refresh_token,
+    has_refresh_token: !!t.refresh_token_hash,
   }));
 
   const codeRows = codes.map((code) => ({
-    code_prefix: typeof code.code === 'string' ? code.code.slice(0, 8) : null,
+    code_hash_prefix: typeof code.code_hash === 'string' ? code.code_hash.slice(0, 8) : null,
     client_id: code.client_id,
     user_id: code.user_id,
     scope: code.scope,

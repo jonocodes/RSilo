@@ -1,4 +1,4 @@
-import { LocalDatabase } from '../services/db/local';
+import { createSqliteD1 } from '../services/db/sqlite';
 import { LocalStorage } from '../services/local-storage';
 
 const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
@@ -8,7 +8,8 @@ console.log('Setting up local RSilo database...');
 console.log(`Database: ${DB_PATH}`);
 console.log(`Storage:  ${STORAGE_DIR}`);
 
-const db = new LocalDatabase(DB_PATH);
+// Opening the database applies any pending drizzle/migrations.
+const db = createSqliteD1(DB_PATH);
 new LocalStorage(STORAGE_DIR);
 
 console.log('\nReady. Start the server with:');

@@ -5,6 +5,7 @@ import { getStorage, R2Storage } from '../src/services/r2';
 import { S3Storage, S3StorageError } from '../src/services/s3';
 import { createFakeS3, type FakeS3 } from './helpers/fake-s3';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 const S3_ENV = {
   S3_ENDPOINT: 'https://s3.us-west-004.backblazeb2.com',
@@ -162,7 +163,7 @@ describe('S3Storage', () => {
 
 describe('storage routes on S3', () => {
   let s3: FakeS3;
-  const env = { ...S3_ENV, DB: {} as any };
+  const env = { ...S3_ENV, DB: createSqliteD1() };
   const app = createServer(env);
 
   beforeEach(() => {
@@ -201,7 +202,7 @@ describe('storage routes on S3', () => {
   });
 
   it('answers 503 naming the missing setting when the S3 config is incomplete', async () => {
-    const broken = { S3_ENDPOINT: S3_ENV.S3_ENDPOINT, DB: {} as any };
+    const broken = { S3_ENDPOINT: S3_ENV.S3_ENDPOINT, DB: createSqliteD1() };
     const token = seedToken(broken, 'alice');
     const res = await app.request('http://localhost/storage/alice/documents/x', { headers: { Authorization: `Bearer ${token}` } }, broken);
     expect(res.status).toBe(503);

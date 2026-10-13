@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -36,7 +37,7 @@ const TEST_ENV = {
       };
     },
   } as any,
-  DB: {} as any,
+  DB: createSqliteD1(),
 };
 
 describe('PUT + GET storage', () => {
@@ -703,30 +704,11 @@ describe('DB-backed OAuth token auth', () => {
   });
 
   it('accepts a valid DB-backed OAuth token for storage access', async () => {
-    const dbToken = 'real-oauth-access-token';
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (..._args: any[]) => ({
-            first: async () => {
-              if (sql.includes('oauth_tokens')) {
-                return {
-                  access_token: dbToken,
-                  user_id: 'alice',
-                  scopes: 'documents:rw',
-                  expires_at: Math.floor(Date.now() / 1000) + 3600,
-                  created_at: Math.floor(Date.now() / 1000),
-                };
-              }
-              return null;
-            },
-            run: async () => ({}),
-            all: async () => ({ results: [] }),
-          }),
-        }),
-      } as any,
+      DB: createSqliteD1(),
     };
+    const dbToken = seedToken(dbEnv, 'alice', 'documents:rw');
 
     const putRes = await app.request(
       'http://localhost/storage/alice/documents/db-token-test.txt',
@@ -741,18 +723,11 @@ describe('DB-backed OAuth token auth', () => {
   });
 
   it('rejects an expired DB-backed OAuth token', async () => {
-    const expiredToken = 'expired-oauth-token';
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
-      DB: {
-        prepare: () => ({
-          bind: (..._args: any[]) => ({
-            first: async () => null,
-            run: async () => ({}),
-          }),
-        }),
-      } as any,
+      DB: createSqliteD1(),
     };
+    const expiredToken = seedToken(dbEnv, 'alice', 'documents:rw', { expiresAt: Math.floor(Date.now() / 1000) - 1 });
 
     const res = await app.request(
       'http://localhost/storage/alice/documents/test.txt',
@@ -778,33 +753,22 @@ describe('Storage quota — tracking', () => {
   });
 
   it('PUT increments used_storage_bytes in DB', async () => {
-    let updatedBytes: number | null = null;
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (...args: any[]) => ({
-            first: async () => sql.includes('users') ? { storage_quota_bytes: 1000000, used_storage_bytes: 0 } : null,
-            run: async () => {
-              if (sql.includes('used_storage_bytes') && sql.includes('UPDATE')) {
-                updatedBytes = args[0];
-              }
-            },
-            all: async () => ({ results: [] }),
-          }),
-        }),
-      } as any,
+      DB: createSqliteD1(),
     };
     const token = seedToken(dbEnv, 'alice');
 
     const body = 'hello storage';
-    await app.request('http://localhost/storage/alice/documents/track.txt', {
+    const res = await app.request('http://localhost/storage/alice/documents/track.txt', {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' },
       body,
     }, dbEnv);
 
-    expect(updatedBytes).toBe(new TextEncoder().encode(body).byteLength);
+    expect(res.status).toBeOneOf([200, 201]);
+    const row = dbEnv.DB.sqlite.prepare('SELECT used_storage_bytes AS used FROM users WHERE username = ?').get('alice') as any;
+    expect(row.used).toBe(new TextEncoder().encode(body).byteLength);
   });
 
   it('DELETE decrements used_storage_bytes in DB', async () => {
@@ -815,30 +779,19 @@ describe('Storage quota — tracking', () => {
       contentType: 'text/plain',
     });
 
-    let decrementArg: number | null = null;
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (...args: any[]) => ({
-            first: async () => null,
-            run: async () => {
-              if (sql.includes('used_storage_bytes') && sql.includes('UPDATE')) {
-                decrementArg = args[0];
-              }
-            },
-            all: async () => ({ results: [] }),
-          }),
-        }),
-      } as any,
+      DB: createSqliteD1(),
     };
     const token = seedToken(dbEnv, 'alice');
+    dbEnv.DB.sqlite.prepare('UPDATE users SET used_storage_bytes = ? WHERE username = ?').run(fileBody.byteLength, 'alice');
 
     await app.request('http://localhost/storage/alice/documents/todelete.txt', {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` },
     }, dbEnv);
 
-    expect(decrementArg).toBe(-fileBody.byteLength);
+    const row = dbEnv.DB.sqlite.prepare('SELECT used_storage_bytes AS used FROM users WHERE username = ?').get('alice') as any;
+    expect(row.used).toBe(0);
   });
 });

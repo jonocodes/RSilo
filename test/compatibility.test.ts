@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
 
@@ -36,7 +37,7 @@ const TEST_ENV = {
       };
     },
   } as any,
-  DB: {} as any,
+  DB: createSqliteD1(),
   // The Instance serves one Account; these tests use it under this name.
   ACCOUNT_USERNAME: 'testuser',
 };
@@ -552,22 +553,13 @@ describe('Error handling compatibility', () => {
 
     const quotaEnv = {
       STORAGE: dbStorage,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: () => ({
-            first: async () => {
-              if (sql.includes('oauth_tokens')) return null;
-              return null;
-            },
-            run: async () => ({ meta: { changes: 0 } }),
-          })
-        })
-      } as any,
+      DB: createSqliteD1(),
       ACCOUNT_USERNAME: 'quotauser',
     };
 
     const quotaApp = createServer(quotaEnv);
     const quotaToken = seedToken(quotaEnv, 'quotauser');
+    quotaEnv.DB.sqlite.exec('UPDATE users SET storage_quota_bytes = 1 WHERE username = \'quotauser\'');
 
     const res = await quotaApp.request(
       'http://localhost/storage/quotauser/documents/oversize.txt',
@@ -588,17 +580,10 @@ describe('Error handling compatibility', () => {
     const body = 'x'; // 1 byte
     const quotaEnv = {
       STORAGE: TEST_ENV.STORAGE,
-      DB: {
-        prepare: (sql: string) => ({
-          bind: (..._args: any[]) => ({
-            first: async () => sql.includes('users') ? { storage_quota_bytes: 1, used_storage_bytes: 0 } : null,
-            run: async () => ({}),
-            all: async () => ({ results: [] }),
-          }),
-        }),
-      } as any,
+      DB: createSqliteD1(),
     };
     const quotaToken = seedToken(quotaEnv, 'alice');
+    quotaEnv.DB.sqlite.exec('UPDATE users SET storage_quota_bytes = 1 WHERE username = \'alice\'');
     const res = await app.request(
       'http://localhost/storage/alice/documents/exact-fit.txt',
       {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
+import { createSqliteD1 } from '../src/services/db/sqlite';
 
 // An Instance serves one Account and advertises every URL from one origin:
 // PUBLIC_BASE_URL when set (these tests set it), else the request's own origin
@@ -17,7 +18,7 @@ function createEnv(extra: Record<string, string> = {}) {
       async head() { return null; },
       async list() { return { objects: [] }; },
     } as any,
-    DB: {} as any,
+    DB: createSqliteD1(),
     ACCOUNT_USERNAME: 'alice',
     OWNER_EMAIL: 'owner@example.com',
     PUBLIC_BASE_URL: BASE,

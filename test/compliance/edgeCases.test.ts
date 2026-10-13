@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
+import { createSqliteD1 } from '../../src/services/db/sqlite';
 
 function createTestEnv() {
   return {
@@ -11,7 +12,7 @@ function createTestEnv() {
       async head() { return null; },
       async list() { return { objects: [] }; },
     } as any,
-    DB: {} as any,
+    DB: createSqliteD1(),
   };
 }
 
@@ -109,7 +110,7 @@ describe('Authentication Edge Cases', () => {
         async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 4 }; },
         async list() { return { objects: [] }; },
       };
-      const env = { STORAGE: storage, DB: {} } as any;
+      const env = { STORAGE: storage, DB: createSqliteD1() } as any;
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
@@ -298,7 +299,7 @@ describe('Path Validation Edge Cases', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -321,7 +322,7 @@ describe('Content Negotiation', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -344,7 +345,7 @@ describe('Content Negotiation', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -368,7 +369,7 @@ describe('Content Negotiation', () => {
       async head() { return { etag: '"binary"', contentType: 'application/octet-stream', contentLength: 10 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -393,7 +394,7 @@ describe('Response Headers', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -414,7 +415,7 @@ describe('Response Headers', () => {
       async head() { return null; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -437,7 +438,7 @@ describe('Response Headers', () => {
       async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
       async list() { return { objects: [] }; },
     };
-    const env = { STORAGE: storage, DB: {} } as any;
+    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 

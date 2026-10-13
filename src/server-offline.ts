@@ -4,8 +4,7 @@ import { mountRoutes } from './routes/mount';
 import { corsMiddleware } from './middleware/cors';
 import { mountDocs } from './routes/docs';
 import { LocalStorage } from './services/local-storage';
-import { LocalDatabase } from './services/db/local';
-import { D1Adapter } from './services/db/d1-mock';
+import { createSqliteD1 } from './services/db/sqlite';
 import { readFileSync } from 'fs';
 import { DEV_ACCOUNT_USERNAME, DEV_OWNER_EMAIL, S3_VARS } from './config';
 
@@ -42,8 +41,7 @@ const OWNER_EMAIL = process.env.OWNER_EMAIL || DEV_OWNER_EMAIL;
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 
 const localStorage = new LocalStorage(STORAGE_DIR);
-const localDb = new LocalDatabase(DB_PATH);
-const d1Adapter = new D1Adapter(localDb);
+const db = createSqliteD1(DB_PATH);
 
 const app = new Hono();
 
@@ -51,7 +49,7 @@ app.use('*', corsMiddleware());
 
 app.use('*', async (c, next) => {
   (c.env as any).STORAGE = localStorage;
-  (c.env as any).DB = d1Adapter;
+  (c.env as any).DB = db;
   (c.env as any).RSILO_DEV_MODE = 'true';
   (c.env as any).ACCOUNT_USERNAME = ACCOUNT_USERNAME;
   (c.env as any).OWNER_EMAIL = OWNER_EMAIL;
@@ -83,6 +81,6 @@ serve({
 
 process.on('SIGINT', () => {
   console.log('\nShutting down...');
-  localDb.close();
+  db.close();
   process.exit(0);
 });

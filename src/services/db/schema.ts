@@ -7,16 +7,17 @@ export interface User {
   used_storage_bytes: number;
 }
 
+// Secrets (codes, access and refresh tokens) are stored only as base64url
+// SHA-256 hashes; see hashToken in services/auth.ts.
 export interface OAuthCode {
-  code: string;
+  code_hash: string;
   client_id: string;
   user_id: string;
   redirect_uri: string;
   scope: string;
+  code_challenge: string;
   expires_at: number;
   created_at: number;
-  code_challenge: string | null;
-  code_challenge_method: string | null;
 }
 
 export interface OAuthClient {
@@ -29,8 +30,9 @@ export interface OAuthClient {
 
 export interface OAuthToken {
   id: string;
-  access_token: string;
-  refresh_token: string | null;
+  access_token_hash: string;
+  refresh_token_hash: string | null;
+  previous_refresh_token_hash: string | null;
   expires_at: number;
   scopes: string;
   user_id: string;

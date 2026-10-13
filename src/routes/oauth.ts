@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
-import { generateToken } from '../services/auth';
+import { generateToken, hashToken } from '../services/auth';
 import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { accountUrls } from '../services/discovery';
 import { PKCE_METHODS, verifyPkce } from '../services/pkce';
@@ -67,29 +67,25 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
       return c.json({ error: 'invalid_request', error_description: 'code and redirect_uri required' }, 400);
     }
 
+    const codeHash = await hashToken(code);
     const codeData = await db?.prepare?.(
-      'SELECT * FROM oauth_codes WHERE code = ? AND expires_at > ?'
-    )?.bind?.(code, Math.floor(Date.now() / 1000))?.first?.();
+      'SELECT * FROM oauth_codes WHERE code_hash = ? AND expires_at > ?'
+    )?.bind?.(codeHash, Math.floor(Date.now() / 1000))?.first?.();
 
     if (!codeData) {
       return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
     }
 
+    // A code is spent by any attempt to redeem it, successful or not.
+    await db?.prepare?.('DELETE FROM oauth_codes WHERE code_hash = ?')?.bind?.(codeHash)?.run?.();
+
     if (codeData.redirect_uri !== redirectUri) {
       return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
     }
 
-    // Single use: burnt before the PKCE check, so a wrong verifier cannot be retried.
-    await db?.prepare?.('DELETE FROM oauth_codes WHERE code = ?')?.bind?.(code)?.run?.();
-
-    if (codeData.code_challenge) {
-      if (typeof codeVerifier !== 'string' || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
-        return c.json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' }, 400);
-      }
-    } else if (codeVerifier !== undefined) {
-      // A verifier for a code requested without a challenge means the PKCE
-      // parameters were stripped from the authorization request.
-      return c.json({ error: 'invalid_grant', error_description: 'code_verifier sent for a code issued without code_challenge' }, 400);
+    // Every code carries an S256 challenge (the consent page requires one).
+    if (typeof codeVerifier !== 'string' || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
+      return c.json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' }, 400);
     }
 
     const accessToken = generateToken();
@@ -97,8 +93,8 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 
     await db?.prepare?.(
-      'INSERT INTO oauth_tokens (id, access_token, refresh_token, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )?.bind?.(crypto.randomUUID(), accessToken, newRefreshToken, expiresAt, codeData.scope, codeData.user_id, codeData.client_id)?.run?.();
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )?.bind?.(crypto.randomUUID(), await hashToken(accessToken), await hashToken(newRefreshToken), expiresAt, codeData.scope, codeData.user_id, codeData.client_id)?.run?.();
 
     return c.json({
       access_token: accessToken,
@@ -114,21 +110,28 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
       return c.json({ error: 'invalid_request' }, 400);
     }
 
+    // Refresh tokens rotate on use, but the one just replaced stays valid
+    // until its replacement is first used, so a client that lost the refresh
+    // response can retry. Using the current token retires the previous one.
+    const refreshHash = await hashToken(refreshToken);
     const tokenData = await db?.prepare?.(
-      'SELECT * FROM oauth_tokens WHERE refresh_token = ?'
-    )?.bind?.(refreshToken)?.first?.();
+      'SELECT * FROM oauth_tokens WHERE refresh_token_hash = ? OR previous_refresh_token_hash = ?'
+    )?.bind?.(refreshHash, refreshHash)?.first?.();
 
     if (!tokenData) {
       return c.json({ error: 'invalid_grant', error_description: 'Invalid refresh token' }, 400);
     }
 
+    const previousHash = tokenData.refresh_token_hash === refreshHash
+      ? refreshHash
+      : tokenData.previous_refresh_token_hash;
     const accessToken = generateToken();
     const newRefreshToken = generateToken();
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 
     await db?.prepare?.(
-      'UPDATE oauth_tokens SET access_token = ?, refresh_token = ?, expires_at = ? WHERE refresh_token = ?'
-    )?.bind?.(accessToken, newRefreshToken, expiresAt, refreshToken)?.run?.();
+      'UPDATE oauth_tokens SET access_token_hash = ?, refresh_token_hash = ?, previous_refresh_token_hash = ?, expires_at = ? WHERE id = ?'
+    )?.bind?.(await hashToken(accessToken), await hashToken(newRefreshToken), previousHash, expiresAt, tokenData.id)?.run?.();
 
     return c.json({
       access_token: accessToken,
