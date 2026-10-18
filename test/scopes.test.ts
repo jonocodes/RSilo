@@ -116,8 +116,49 @@ describe('Scope-based access control', () => {
     expect(getRes.status).toBe(403);
   });
 
-  it('wildcard scope can access any module', async () => {
-    const adminToken = seedToken(TEST_ENV, 'alice', '*');
+  // A bare `*` used to grant full read-write; it is not a valid scope, so it
+  // grants nothing. The root scope is `*:r` or `*:rw`.
+  it('bare * scope grants nothing', async () => {
+    const bareToken = seedToken(TEST_ENV, 'alice', '*');
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/bare-wildcard',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${bareToken}` } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('a module scope cannot write root-level documents or public/ itself; *:rw can', async () => {
+    const fooToken = seedToken(TEST_ENV, 'alice', 'foo:rw');
+    const rootToken = seedToken(TEST_ENV, 'alice', '*:rw');
+    const put = (path: string, token: string) => app.request(
+      `http://localhost/storage/alice/${path}`,
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'x' },
+      TEST_ENV
+    );
+
+    for (const path of ['foo', 'public/foo']) {
+      const res = await put(path, fooToken);
+      expect(res.status, path).toBe(403);
+      expect(res.headers.get('WWW-Authenticate')).toContain('scope="*:rw"');
+      expect((await put(path, rootToken)).status, path).toBeOneOf([200, 201]);
+    }
+    expect((await put('foo/bar', fooToken)).status).toBeOneOf([200, 201]);
+    expect((await put('public/foo/bar', fooToken)).status).toBeOneOf([200, 201]);
+  });
+
+  it('a read level that only starts with r grants nothing', async () => {
+    const token = seedToken(TEST_ENV, 'alice', 'documents:read');
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/read-test',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('wildcard scope *:rw can access any module', async () => {
+    const adminToken = seedToken(TEST_ENV, 'alice', '*:rw');
 
     const putRes1 = await app.request(
       'http://localhost/storage/alice/documents/wildcard-test',

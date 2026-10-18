@@ -54,8 +54,8 @@ function minimalEnv(extra: Record<string, unknown> = {}) {
 function seedApp(db: SqliteD1, username = 'me') {
   db.sqlite.exec(`INSERT INTO users (id, username) VALUES ('u1', '${username}')`);
   db.sqlite.exec(`INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'app', '[]', '${username}')`);
-  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id)
-    VALUES ('t1', '${tokenHash('tok')}', '${tokenHash('ref')}', 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
+  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id)
+    VALUES ('t1', '${tokenHash('tok')}', '${tokenHash('ref')}', 9999999999, 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
 }
 
 const q = (resource: string) => `resource=${encodeURIComponent(resource)}`;
