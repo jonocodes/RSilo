@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { createServer } from '../src/index';
 import { LocalStorage } from '../src/services/local-storage';
 import { seedToken } from './helpers/tokens';
@@ -666,6 +666,30 @@ describe('Conditional deletes and name clashes', () => {
       expect(Object.keys(listing.items).sort()).toEqual(['doc', 'folder/']);
     });
   }
+});
+
+describe('Document reads from metadata', () => {
+  it('answers HEAD and a matching If-None-Match with the ETag, never downloading the body', async () => {
+    const storage = new MemoryStorage();
+    const env = { STORAGE: storage, DB: createSqliteD1() };
+    const etag = (await requestAs(env, 'PUT', 'documents/a.txt', {}, 'hello')).headers.get('ETag')!;
+    const get = vi.spyOn(storage, 'get');
+
+    const notModified = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': etag });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('ETag')).toBe(etag);
+
+    const head = await requestAs(env, 'HEAD', 'documents/a.txt');
+    expect(head.status).toBe(200);
+    expect(head.headers.get('ETag')).toBe(etag);
+    expect(head.headers.get('Content-Length')).toBe('5');
+    expect(head.headers.get('Content-Security-Policy')).toBe('sandbox');
+    expect(get).not.toHaveBeenCalled();
+
+    const changed = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': '"other"' });
+    expect(changed.status).toBe(200);
+    expect(await changed.text()).toBe('hello');
+  });
 });
 
 describe('Public storage', () => {

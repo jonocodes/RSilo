@@ -144,33 +144,43 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
     return handleFolderGet(c, storage, username, path);
   }
 
+  // HEAD and a conditional GET are answered from metadata, without
+  // downloading the body. A conditional GET whose ETag no longer matches then
+  // takes a second call, the GET below.
+  const isHead = c.req.method === 'HEAD';
+  if (isHead || c.req.header('If-None-Match')) {
+    const metadata = await storage.head(key);
+    if (!metadata) return c.text('Not Found', 404);
+    const etag = normalizeETag(metadata.etag) || '';
+    if (ifNoneMatchIncludes(c, etag)) {
+      return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
+    }
+    if (isHead) return new Response(null, { status: 200, headers: documentHeaders(metadata) });
+  }
+
   const result = await storage.get(key);
   if (!result) {
     return c.text('Not Found', 404);
   }
+  return new Response(result.body, { status: 200, headers: documentHeaders(result.metadata) });
+}
 
-  const etag = normalizeETag(result.metadata.etag);
+function documentHeaders(metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string }): Record<string, string> {
+  return {
+    'Content-Type': metadata.contentType,
+    'Content-Length': metadata.contentLength.toString(),
+    'ETag': normalizeETag(metadata.etag) || '',
+    'Cache-Control': 'no-cache',
+    'Content-Encoding': 'identity',
+    'Last-Modified': httpDate(metadata.lastModified),
+    ...DOCUMENT_HEADERS,
+  };
+}
 
+function ifNoneMatchIncludes(c: Context, etag: string): boolean {
   const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch && etag) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304 });
-    }
-  }
-
-  return new Response(result.body, {
-    status: 200,
-    headers: {
-      'Content-Type': result.metadata.contentType,
-      'Content-Length': result.metadata.contentLength.toString(),
-      'ETag': etag || '',
-      'Cache-Control': 'no-cache',
-      'Content-Encoding': 'identity',
-      'Last-Modified': httpDate(result.metadata.lastModified),
-      ...DOCUMENT_HEADERS,
-    },
-  });
+  if (!ifNoneMatch || !etag) return false;
+  return ifNoneMatch.split(',').map((e) => stripQuotes(e.trim())).includes(stripQuotes(etag));
 }
 
 async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
@@ -216,12 +226,8 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   const folderJson = JSON.stringify(folder);
   const etag = `"${await folderVersion(documents)}"`;
 
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
-    }
+  if (ifNoneMatchIncludes(c, etag)) {
+    return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
   }
 
   return new Response(folderJson, {
