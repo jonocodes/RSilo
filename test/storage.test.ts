@@ -705,6 +705,8 @@ describe('Public storage', () => {
       const res = await app.request(`http://localhost/storage/alice/${path}`, { method: 'GET', headers }, TEST_ENV);
 
       expect(res.status).toBe(200);
+      // The stored type is served as is: the headers below are what keep it inert.
+      expect(res.headers.get('Content-Type')).toBe('text/html');
       expect(res.headers.get('Content-Security-Policy')).toBe('sandbox');
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
       expect(res.headers.get('Cross-Origin-Resource-Policy')).toBeNull();
