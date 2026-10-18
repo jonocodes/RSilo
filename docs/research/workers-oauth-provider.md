@@ -1,5 +1,7 @@
 # Would `@cloudflare/workers-oauth-provider` fit RSilo?
 
+> **Status:** a snapshot from 2026-10-10. "What RSilo does now" describes that day's code. Ideas 1, 2 and 4 below have been implemented since. Idea 3 was implemented, then replaced: refresh tokens now expire after 30 days and only the newest one works (see the README's Token lifetimes).
+
 Researched 2026-10-10 against `cloudflare/workers-oauth-provider` v1.2.3 (released 2026-10-07, MIT, ~1.9k stars, actively maintained) and `remotestorage/remotestorage.js` v2.0.0-beta.10.
 
 **Verdict: not today.** The library no longer supports the implicit grant, and every remoteStorage app built on remotestorage.js uses it. It is still worth borrowing several of its security practices (see the end).
