@@ -1,6 +1,7 @@
 // An in-memory R2 binding for tests: the slice of R2Bucket that R2Storage and
 // getStorage use, answering the way R2 does. ETags are the body's MD5 hex,
-// unquoted (httpEtag is the quoted form); get() streams the body; list() is
+// unquoted (httpEtag is the quoted form); put() honours onlyIf given as
+// If-Match / If-None-Match headers; get() streams the body; list() is
 // sorted, pages by cursor and, like R2, leaves httpMetadata out of each
 // listed object unless asked with include: ['httpMetadata'].
 
@@ -52,7 +53,12 @@ export function createFakeR2(options: { pageSize?: number } = {}): FakeR2 {
     createMultipartUpload() {
       throw new Error('multipart uploads are not part of the fake');
     },
-    async put(key: string, value: ArrayBuffer, put: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> } = {}) {
+    async put(key: string, value: ArrayBuffer, put: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string>; onlyIf?: Headers } = {}) {
+      // onlyIf as conditional headers: a failed condition stores nothing and returns null.
+      const current = objects.get(key);
+      const ifMatch = put.onlyIf?.get('If-Match') ?? null;
+      if (ifMatch !== null && (!current || ifMatch !== `"${current.etag}"`)) return null;
+      if (put.onlyIf?.get('If-None-Match') === '*' && current) return null;
       const body = Uint8Array.from(new Uint8Array(value));
       const object: FakeR2Object = {
         body,

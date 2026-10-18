@@ -6,7 +6,8 @@
 // method on an instance to simulate a failing backend.
 
 import { createHash } from 'node:crypto';
-import type { StorageInterface } from '../../src/types';
+import type { StorageInterface, WriteCondition } from '../../src/types';
+import { conditionHolds, PreconditionFailedError } from '../../src/services/storage-errors';
 
 export interface MemoryObject {
   body: Uint8Array<ArrayBuffer>;
@@ -35,12 +36,20 @@ export class MemoryStorage implements StorageInterface {
     return object ? { body: object.body.slice().buffer, metadata: metadata(object) } : null;
   }
 
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
+  // Conditions are checked and the change made synchronously, so atomically.
+  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
+    this.check(key, condition);
     return this.seed(key, new Uint8Array(body), contentType);
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
+    this.check(key, condition);
     this.objects.delete(key);
+  }
+
+  private check(key: string, condition: WriteCondition | undefined): void {
+    const object = this.objects.get(key);
+    if (!conditionHolds(object ? metadata(object) : null, condition)) throw new PreconditionFailedError();
   }
 
   async head(key: string): Promise<Metadata | null> {
@@ -48,8 +57,8 @@ export class MemoryStorage implements StorageInterface {
     return object ? metadata(object) : null;
   }
 
-  async list(prefix: string): Promise<Listing> {
-    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort();
+  async list(prefix: string, options: { limit?: number } = {}): Promise<Listing> {
+    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort().slice(0, options.limit);
     return {
       objects: keys.map((key) => {
         const object = this.objects.get(key)!;

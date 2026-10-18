@@ -24,12 +24,29 @@ export interface AppEnv {
   S3_SECRET_ACCESS_KEY?: string;
 }
 
+/**
+ * A precondition on a write. `ifMatch` is a stored object's ETag, as head()
+ * returns it (quoted or not); `ifNoneMatch: '*'` means "only if absent".
+ */
+export interface WriteCondition {
+  ifMatch?: string;
+  ifNoneMatch?: '*';
+}
+
 export interface StorageInterface {
   get(key: string): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
-  put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
-  delete(key: string): Promise<void>;
+  /**
+   * Stores the object and returns its ETag. With a condition that does not
+   * hold, stores nothing and throws PreconditionFailedError
+   * (services/storage-errors.ts). R2Storage and LocalStorage check it
+   * atomically; S3Storage checks it with a HEAD first (see s3.ts).
+   */
+  put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string>;
+  /** Deletes the object (a no-op when absent); with a condition, as put(). Never atomic on R2 or S3. */
+  delete(key: string, condition?: { ifMatch: string }): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
-  list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }>;
+  /** Every object whose key starts with `prefix`, in key order; with `limit`, only the first that many. */
+  list(prefix: string, options?: { limit?: number }): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }>;
 }
 
 export type Context = import('hono').Context;
