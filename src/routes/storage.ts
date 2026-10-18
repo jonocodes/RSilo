@@ -88,16 +88,6 @@ storageRouter.delete('/:username/*', async (c) => {
   return handleStorageDelete(c, username, fullPath);
 });
 
-storageRouter.options('/*', () => {
-  const headers = new Headers();
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, If-Match, If-None-Match, Origin, X-Requested-With');
-  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Max-Age', '86400');
-  headers.set('Access-Control-Expose-Headers', 'ETag');
-  return new Response('', { status: 204, headers });
-});
-
 function extractStoragePath(fullPath: string, username: string): string {
   const prefix = `/storage/${username}/`;
   return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
