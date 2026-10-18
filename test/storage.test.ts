@@ -862,4 +862,27 @@ describe('Storage quota — tracking', () => {
     const row = dbEnv.DB.sqlite.prepare('SELECT used_storage_bytes AS used FROM users WHERE username = ?').get('alice') as any;
     expect(row.used).toBe(0);
   });
+
+  it('answers 503 and leaves storage alone when usage cannot be recorded', async () => {
+    const db = createSqliteD1();
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      // Token checks work; the accounting UPDATE fails, as on a D1 outage mid-request.
+      DB: { ...db, prepare: (sql: string) => {
+        if (sql.startsWith('UPDATE users SET used_storage_bytes')) throw new Error('D1 unavailable');
+        return db.prepare(sql);
+      } },
+    };
+    const token = seedToken(dbEnv, 'alice');
+    const url = 'http://localhost/storage/alice/documents/unaccounted.txt';
+
+    const put = await app.request(url, { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` }, body: 'x' }, dbEnv);
+    expect(put.status).toBe(503);
+    expect(storage.objects.size).toBe(0);
+
+    storage.seed('users/alice/storage/documents/unaccounted.txt', 'x');
+    const del = await app.request(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }, dbEnv);
+    expect(del.status).toBe(503);
+    expect(storage.objects.has('users/alice/storage/documents/unaccounted.txt')).toBe(true);
+  });
 });

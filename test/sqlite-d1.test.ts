@@ -160,43 +160,14 @@ describe('D1 statement API', () => {
     expect(await db.prepare('SELECT username FROM users WHERE username = ?').bind('carol').first()).toBeNull();
   });
 
-  it('records every prepared statement in queries', () => {
-    const db = createSqliteD1();
+  it('records every prepared statement in queries when asked, and none otherwise', () => {
+    const db = createSqliteD1(':memory:', { recordQueries: true });
     db.prepare('SELECT 1 FROM users');
     db.prepare('SELECT 2 FROM users');
     expect(db.queries).toEqual(['SELECT 1 FROM users', 'SELECT 2 FROM users']);
-  });
-});
 
-describe('adjustStorageUsage', () => {
-  async function withUser(quota: number, used: number): Promise<SqliteD1> {
-    const db = createSqliteD1();
-    db.sqlite.prepare('INSERT INTO users (id, username, storage_quota_bytes, used_storage_bytes) VALUES (?, ?, ?, ?)')
-      .run('u1', 'alice', quota, used);
-    return db;
-  }
-
-  it('adds a positive delta below the quota', async () => {
-    const db = await withUser(100, 10);
-    expect(await db.adjustStorageUsage('alice', 30)).toBe(true);
-    expect(db.sqlite.prepare('SELECT used_storage_bytes AS used FROM users').get()).toEqual({ used: 40 });
-  });
-
-  it('refuses a positive delta that would exceed the quota, leaving usage alone', async () => {
-    const db = await withUser(100, 90);
-    expect(await db.adjustStorageUsage('alice', 11)).toBe(false);
-    expect(db.sqlite.prepare('SELECT used_storage_bytes AS used FROM users').get()).toEqual({ used: 90 });
-  });
-
-  it('allows exceeding the quota when enforcement is off, and clamps at zero', async () => {
-    const db = await withUser(100, 10);
-    expect(await db.adjustStorageUsage('alice', 1000, false)).toBe(true);
-    expect(await db.adjustStorageUsage('alice', -5000, false)).toBe(true);
-    expect(db.sqlite.prepare('SELECT used_storage_bytes AS used FROM users').get()).toEqual({ used: 0 });
-  });
-
-  it('returns false for an unknown user', async () => {
-    const db = createSqliteD1();
-    expect(await db.adjustStorageUsage('nobody', 1)).toBe(false);
+    const quiet = createSqliteD1();
+    quiet.prepare('SELECT 1 FROM users');
+    expect(quiet.queries).toEqual([]);
   });
 });

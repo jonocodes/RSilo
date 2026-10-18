@@ -93,13 +93,8 @@ export interface SqliteD1 {
   prepare(sql: string): SqliteStatement;
   /** D1's batch, as one transaction. */
   batch<T = unknown>(statements: { run(): Promise<T> }[]): Promise<T[]>;
-  /**
-   * The atomic read-check-write the offline path uses for quota accounting;
-   * `quota-storage.ts` prefers it over a predicate UPDATE when present.
-   */
-  adjustStorageUsage(username: string, delta: number, enforceQuota?: boolean): Promise<boolean>;
   close(): void;
-  /** Every prepared statement, in order. Test observability. */
+  /** Every prepared statement, in order, when created with `recordQueries`. Test observability. */
   queries: string[];
   /** The raw SQLite handle, for test fixtures and direct assertions. */
   sqlite: RawDatabase;
@@ -108,6 +103,8 @@ export interface SqliteD1 {
 export interface SqliteD1Options {
   /** Where the .sql migrations live. Defaults to the repo's drizzle/migrations. */
   migrationsDir?: string;
+  /** Record every prepared statement in `queries`. Off by default, so a long-running offline server does not grow it forever. */
+  recordQueries?: boolean;
 }
 
 function tableExists(db: RawDatabase, table: string): boolean {
@@ -175,34 +172,9 @@ export function createSqliteD1(path = ':memory:', options: SqliteD1Options = {})
 
   const queries: string[] = [];
 
-  async function adjustStorageUsage(username: string, delta: number, enforceQuota = true): Promise<boolean> {
-    sqlite.exec('BEGIN IMMEDIATE');
-    try {
-      const current = sqlite.prepare(
-        'SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?'
-      ).get(username) as { storage_quota_bytes: number; used_storage_bytes: number } | undefined;
-      if (!current) {
-        sqlite.exec('ROLLBACK');
-        return false;
-      }
-
-      const next = Math.max(0, Number(current.used_storage_bytes) + delta);
-      if (enforceQuota && delta > 0 && next > Number(current.storage_quota_bytes)) {
-        sqlite.exec('ROLLBACK');
-        return false;
-      }
-      sqlite.prepare('UPDATE users SET used_storage_bytes = ? WHERE username = ?').run(next, username);
-      sqlite.exec('COMMIT');
-      return true;
-    } catch (error) {
-      sqlite.exec('ROLLBACK');
-      throw error;
-    }
-  }
-
   return {
     prepare(sql: string) {
-      queries.push(sql);
+      if (options.recordQueries) queries.push(sql);
       return new SqliteStatement(sqlite, sql);
     },
     async batch<T = unknown>(statements: { run(): Promise<T> }[]): Promise<T[]> {
@@ -217,7 +189,6 @@ export function createSqliteD1(path = ':memory:', options: SqliteD1Options = {})
       }
       return results;
     },
-    adjustStorageUsage,
     close() {
       sqlite.close();
     },

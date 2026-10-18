@@ -5,9 +5,14 @@ export class StorageAccountingError extends Error {}
 
 type ExistingObject = Awaited<ReturnType<StorageInterface['head']>>;
 
+/** The slice of D1 that accounting uses. The offline SQLite shim has it too, so both run the same SQL. */
+interface UsageDatabase {
+  prepare(sql: string): { bind(...values: unknown[]): { run(): Promise<{ meta: { changes: number } }> } };
+}
+
 interface PutObjectOptions {
   storage: StorageInterface;
-  db: any;
+  db: UsageDatabase | undefined;
   allowUnaccounted?: boolean;
   username: string;
   key: string;
@@ -18,37 +23,37 @@ interface PutObjectOptions {
 
 interface DeleteObjectOptions {
   storage: StorageInterface;
-  db: any;
+  db: UsageDatabase | undefined;
   allowUnaccounted?: boolean;
   username: string;
   key: string;
   existing: NonNullable<ExistingObject>;
 }
 
-async function adjustUsage(db: any, username: string, delta: number, enforceQuota = true, allowUnaccounted = false): Promise<void> {
+async function adjustUsage(db: UsageDatabase | undefined, username: string, delta: number, enforceQuota = true, allowUnaccounted = false): Promise<void> {
   if (!db || typeof db.prepare !== 'function') {
     if (allowUnaccounted) return;
     throw new StorageAccountingError('Storage accounting is not available');
   }
   if (delta === 0) return;
 
-  if (typeof db.adjustStorageUsage === 'function') {
-    const adjusted = await db.adjustStorageUsage(username, delta, enforceQuota);
-    if (!adjusted) throw new QuotaExceededError('Storage quota exceeded');
-    return;
-  }
-
+  // One statement, so the quota check and the update are atomic in D1 and SQLite alike.
   const quotaPredicate = enforceQuota && delta > 0
     ? ' AND used_storage_bytes + ? <= storage_quota_bytes'
     : '';
-  const statement = db.prepare(
-    `UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes + ?) WHERE username = ?${quotaPredicate}`
-  );
-  const bound = quotaPredicate
-    ? statement.bind(delta, username, delta)
-    : statement.bind(delta, username);
-  const result = await bound.run();
-  if (result?.meta?.changes === 0) throw new QuotaExceededError('Storage quota exceeded');
+  let changes: number;
+  try {
+    const statement = db.prepare(
+      `UPDATE users SET used_storage_bytes = MAX(0, used_storage_bytes + ?) WHERE username = ?${quotaPredicate}`
+    );
+    const bound = quotaPredicate
+      ? statement.bind(delta, username, delta)
+      : statement.bind(delta, username);
+    changes = (await bound.run()).meta.changes;
+  } catch (error) {
+    throw new StorageAccountingError('Storage accounting is not available', { cause: error });
+  }
+  if (changes === 0) throw new QuotaExceededError('Storage quota exceeded');
 }
 
 export async function putUserObject(options: PutObjectOptions): Promise<string> {

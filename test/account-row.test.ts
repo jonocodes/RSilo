@@ -12,7 +12,7 @@ import { MemoryStorage } from './helpers/memory-storage';
 function createEnv(extra: Record<string, string> = {}) {
   return {
     STORAGE: new MemoryStorage(),
-    DB: createSqliteD1(),
+    DB: createSqliteD1(':memory:', { recordQueries: true }),
     ...extra,
   };
 }
