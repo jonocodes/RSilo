@@ -74,7 +74,9 @@ export const ACCESS_POLICY_PATH = '<strong>Zero Trust → Access → Application
 export function changeSignInEmailSteps(host: string): string {
   return `<ol>
       <li>In the Cloudflare dashboard, change <code>OWNER_EMAIL</code> to the new email:
-        ${editVariablePath(host, 'OWNER_EMAIL')}.</li>
+        ${editVariablePath(host, 'OWNER_EMAIL')}.
+        If you set up from the command line, run <code>bun run setup --owner-email=…</code> instead:
+        your <code>wrangler.prod.toml</code> would put the old email back on the next <code>bun run deploy</code>.</li>
       <li>Add the new email to the Access application's <strong>Allow</strong> policy:
         ${ACCESS_POLICY_PATH}. Otherwise Cloudflare Access will not let the new email through at all.</li>
     </ol>`;
