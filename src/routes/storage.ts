@@ -5,6 +5,7 @@ import { buildKey, getStorage } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
 import { isLocalDevelopment } from '../config';
 import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
@@ -259,46 +260,22 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
     if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
     throw error;
   }
-  const existing = await storage.head(key);
-  const currentEtag = existing ? normalizeETag(existing.etag) : null;
 
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch === '*' && currentEtag) {
-    return c.text('Precondition Failed', 412);
-  }
-
-  const ifMatch = c.req.header('If-Match');
-  if (ifMatch) {
-    if (!currentEtag) {
-      return c.text('Precondition Failed', 412);
-    }
-    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
-      return c.text('Precondition Failed', 412);
-    }
-  }
-
-  const contentType = c.req.header('Content-Type') || 'application/octet-stream';
-  let newEtag: string;
   try {
-    newEtag = await putUserObject({
+    const { etag, created } = await putUserObject({
       storage,
       db: (c.env as any).DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
       key,
       body,
-      contentType,
-      existing,
+      contentType: c.req.header('Content-Type') || 'application/octet-stream',
+      condition: { ifMatch: c.req.header('If-Match'), ifNoneMatch: c.req.header('If-None-Match') },
     });
+    return c.text('', created ? 201 : 200, { 'ETag': normalizeETag(etag) || '' });
   } catch (error) {
-    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
-
-  return c.text('', existing ? 200 : 201, {
-    'ETag': normalizeETag(newEtag) || '',
-  });
 }
 
 async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
@@ -312,39 +289,28 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
     return c.text("can't delete folder directly", 400);
   }
 
-  const key = buildKey(username, path);
-  const storage = getStorage(c);
-
-  const existing = await storage.head(key);
-
-  const ifMatch = c.req.header('If-Match');
-  if (ifMatch) {
-    if (!existing) {
-      return c.text('Precondition Failed', 412);
-    }
-    const currentEtag = normalizeETag(existing.etag) || '';
-    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
-      return c.text('Precondition Failed', 412);
-    }
-  }
-
-  if (!existing) {
-    return c.text('Not Found', 404);
-  }
-
   try {
-    await deleteUserObject({
-      storage,
+    const etag = await deleteUserObject({
+      storage: getStorage(c),
       db: (c.env as any).DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
-      key,
-      existing,
+      key: buildKey(username, path),
+      ifMatch: c.req.header('If-Match'),
     });
+    if (etag === null) return c.text('Not Found', 404);
+    return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(etag) || '' } });
   } catch (error) {
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
+}
 
-  return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(existing.etag) || '' } });
+// The protocol's answers for a write that storage refused (the account UI
+// uses them too). Anything else is rethrown.
+export function writeErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof PreconditionFailedError) return c.text('Precondition Failed', 412);
+  if (error instanceof PathConflictError) return c.text(error.message, 409);
+  if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 507);
+  if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+  throw error;
 }

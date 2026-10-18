@@ -115,7 +115,7 @@ describe('Security Tests', () => {
         env
       );
 
-      expect(res.status).toBe(413);
+      expect(res.status).toBe(507);
       expect(await res.text()).toContain('quota');
     });
   });
