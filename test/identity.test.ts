@@ -3,6 +3,7 @@ import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { tokenHash } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // The human identity seam (services/identity.ts), driven through /account.
 // Production requests carry a stubbed Workers ExecutionContext whose
@@ -10,23 +11,6 @@ import { tokenHash } from './helpers/tokens';
 
 const app = createServer({});
 const BASE = PRODUCTION_INSTANCE.PUBLIC_BASE_URL;
-
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
 
 function accessCtx(identity: { email?: string } | undefined) {
   return {
@@ -37,7 +21,7 @@ function accessCtx(identity: { email?: string } | undefined) {
 }
 
 function productionEnv(extra: Record<string, unknown> = {}) {
-  return { STORAGE: new MemoryStorage() as any, DB: createSqliteD1(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, ...extra } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE, ...extra };
 }
 
 describe('production identity (ctx.access)', () => {
@@ -87,8 +71,7 @@ describe('production identity (ctx.access)', () => {
   });
 
   it('names a missing OWNER_EMAIL on the finish-setup page', async () => {
-    const env = productionEnv();
-    delete env.OWNER_EMAIL;
+    const env = productionEnv({ OWNER_EMAIL: undefined });
     const res = await app.request(`${BASE}/account`, {}, env, accessCtx({ email: 'owner@example.com' }));
     expect(res.status).toBe(503);
     const html = await res.text();
@@ -122,8 +105,8 @@ describe('production identity (ctx.access)', () => {
 
 describe('development identity guard', () => {
   const devEnv = (extra: Record<string, unknown> = {}) => ({
-    STORAGE: new MemoryStorage() as any, DB: createSqliteD1(), RSILO_DEV_MODE: 'true', ...extra,
-  } as any);
+    STORAGE: new MemoryStorage(), DB: createSqliteD1(), RSILO_DEV_MODE: 'true', ...extra,
+  });
 
   for (const host of ['localhost', '127.0.0.1', '[::1]']) {
     it(`signs in the dev identity on ${host}`, async () => {
@@ -162,13 +145,13 @@ describe('development identity guard', () => {
 describe('CSRF on /account', () => {
   let db: SqliteD1;
   let storage: MemoryStorage;
-  let env: any;
+  let env: { STORAGE: MemoryStorage; DB: SqliteD1 };
 
   beforeEach(() => {
     db = createSqliteD1();
     storage = new MemoryStorage();
-    env = { STORAGE: storage as any, DB: db };
-    storage.objects.set('users/alice/storage/documents/a.txt', { body: new TextEncoder().encode('a').buffer as ArrayBuffer, contentType: 'text/plain' });
+    env = { STORAGE: storage, DB: db };
+    storage.seed('users/alice/storage/documents/a.txt', 'a');
   });
 
   function post(path: string, headers: Record<string, string>, body?: BodyInit) {
@@ -241,12 +224,12 @@ describe('dashboard settings and app revocation', () => {
   const SAME_ORIGIN = { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' };
   let db: SqliteD1;
   let storage: MemoryStorage;
-  let env: any;
+  let env: { STORAGE: MemoryStorage; DB: SqliteD1 };
 
   beforeEach(() => {
     db = createSqliteD1();
     storage = new MemoryStorage();
-    env = { STORAGE: storage as any, DB: db };
+    env = { STORAGE: storage, DB: db };
   });
 
   function upload(bytes: number, name: string) {
@@ -287,7 +270,7 @@ describe('dashboard settings and app revocation', () => {
   }
 
   it('revoking an app deletes all of its tokens, codes and client row, and its tokens stop working', async () => {
-    const tokenEnv = { ...env, STORAGE: storage as any };
+    const tokenEnv = { ...env, STORAGE: storage };
     db.sqlite.exec("INSERT INTO users (id, username) VALUES ('u1', 'alice')");
     db.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'x', '[]', 'alice')");
     db.sqlite.exec("INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://other.example', 'y', '[]', 'alice')");
