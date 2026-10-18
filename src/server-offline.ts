@@ -56,7 +56,7 @@ app.use('*', async (c, next) => {
   if (process.env.RSILO_DEV_EMAIL) (c.env as any).RSILO_DEV_EMAIL = process.env.RSILO_DEV_EMAIL;
   (c.env as any).PUBLIC_BASE_URL = PUBLIC_BASE_URL;
   // S3_* in the environment (e.g. a local MinIO) replace the local directory.
-  for (const name of S3_VARS) {
+  for (const name of [...S3_VARS, 'MAX_OBJECT_SIZE_BYTES']) {
     if (process.env[name]) (c.env as any)[name] = process.env[name];
   }
   await next();
