@@ -25,8 +25,7 @@ const TEST_ENV = {
       if (!item) return null;
       return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
     },
-    async list(options: { prefix?: string; delimiter?: string }) {
-      const prefix = options.prefix || '';
+    async list(prefix: string) {
       const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
       return {
         objects: keys.map(k => ({
@@ -420,6 +419,33 @@ describe('Folder listing', () => {
     const json = await getRes.json() as any;
     expect(json.items).toEqual({});
   });
+
+  it("a subfolder's ETag in its parent listing is the ETag it serves, until a descendant changes", async () => {
+    const token = seedToken(TEST_ENV, 'alice');
+    const put = (body: string) => app.request(
+      'http://localhost/storage/alice/documents/a/b/c',
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body },
+      TEST_ENV
+    );
+    const get = (path: string, headers: Record<string, string> = {}) => app.request(
+      `http://localhost/storage/alice/documents/${path}`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}`, ...headers } },
+      TEST_ENV
+    );
+    const listedETag = async () => ((await (await get('a/')).json()) as any).items['b/'].ETag as string;
+
+    await put('one');
+    const listed = await listedETag();
+    const served = (await get('a/b/')).headers.get('ETag');
+    expect(served).toBe(`"${listed}"`);
+    expect((await get('a/b/', { 'If-None-Match': served! })).status).toBe(304);
+
+    await put('two');
+    const relisted = await listedETag();
+    expect(relisted).not.toBe(listed);
+    expect((await get('a/b/')).headers.get('ETag')).toBe(`"${relisted}"`);
+    expect((await get('a/b/', { 'If-None-Match': served! })).status).toBe(200);
+  });
 });
 
 describe('Path validation', () => {
@@ -689,6 +715,78 @@ describe('Public storage', () => {
     );
     expect(res.status).toBe(301);
     expect(res.headers.get('Location')).toBe('/storage/alice/public/');
+  });
+
+  it('serves public and private documents sandboxed and unsniffable, still readable cross-origin', async () => {
+    const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
+    const origin = 'https://app.example';
+    for (const path of ['public/documents/page.html', 'documents/page.html']) {
+      await app.request(
+        `http://localhost/storage/alice/${path}`,
+        { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/html' }, body: '<script>alert(1)</script>' },
+        TEST_ENV
+      );
+      const headers: Record<string, string> = { 'Origin': origin };
+      if (!path.startsWith('public/')) headers['Authorization'] = `Bearer ${token}`;
+      const res = await app.request(`http://localhost/storage/alice/${path}`, { method: 'GET', headers }, TEST_ENV);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Security-Policy')).toBe('sandbox');
+      expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(res.headers.get('Cross-Origin-Resource-Policy')).toBeNull();
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin);
+      expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag, Content-Length, Content-Type');
+    }
+  });
+});
+
+describe('Public folder listings', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer(TEST_ENV);
+    storage.clear();
+    const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
+    await app.request(
+      'http://localhost/storage/alice/public/documents/shared.txt',
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'shared' },
+      TEST_ENV
+    );
+  });
+
+  const get = (path: string, scopes: string) => app.request(
+    `http://localhost/storage/alice/${path}`,
+    { method: 'GET', headers: { 'Authorization': `Bearer ${seedToken(TEST_ENV, 'alice', scopes)}` } },
+    TEST_ENV
+  );
+
+  it("needs the module's read scope, like a private listing", async () => {
+    const otherModule = await get('public/documents/', 'pictures:r');
+    expect(otherModule.status).toBe(403);
+    expect(otherModule.headers.get('WWW-Authenticate')).toContain('scope="documents:r"');
+
+    const sameModule = await get('public/documents/', 'documents:r');
+    expect(sameModule.status).toBe(200);
+    expect(Object.keys((await sameModule.json() as any).items)).toEqual(['shared.txt']);
+  });
+
+  it('needs the root scope for public/ itself', async () => {
+    expect((await get('public/', 'documents:r')).status).toBe(403);
+    expect((await get('public/', '*:r')).status).toBe(200);
+  });
+
+  it('leaves public documents readable whatever the token covers', async () => {
+    expect((await get('public/documents/shared.txt', 'pictures:r')).status).toBe(200);
+  });
+
+  it('only treats /storage/<user>/public/ as public, not a public/ folder deeper in a module', async () => {
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/public/x.txt',
+      { method: 'GET', headers: { 'Authorization': 'Bearer not-a-token' } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
   });
 });
 

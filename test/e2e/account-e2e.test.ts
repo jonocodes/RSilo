@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
+import { networkInterfaces } from 'os';
 import { join } from 'path';
 import { waitForServer } from './helpers';
 
 const SERVER_URL = 'http://localhost:8790';
+const LAN_ADDRESS = Object.values(networkInterfaces()).flat()
+  .find((address) => address && address.family === 'IPv4' && !address.internal)?.address;
 const DATA_DIR = join(process.cwd(), 'data', 'e2e-test-account');
 const DB_PATH = join(DATA_DIR, 'test.db');
 const STORAGE_DIR = join(DATA_DIR, 'storage');
@@ -55,6 +58,12 @@ describe('Account E2E', () => {
     expect(html).toContain('alice@example.com');
     expect(html).toContain('/cdn-cgi/access/logout');
     expect(html).not.toContain('name="password"');
+  });
+
+  // "Local" comes from the Host header, so a LAN client could otherwise claim
+  // the dev identity by sending `Host: localhost`.
+  it.skipIf(!LAN_ADDRESS)('is not reachable on a non-loopback interface', async () => {
+    await expect(fetch(`http://${LAN_ADDRESS}:8790/health`)).rejects.toThrow();
   });
 
   it('GET /admin redirects to /account', async () => {

@@ -262,7 +262,7 @@ Because apps are not registered in advance, an app is identified by its `client_
 
 ## Share a file publicly
 
-Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still require auth. The write uses the same `<module>` scope as the private data:
+Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. The write uses the same `<module>` scope as the private data:
 
 ```bash
 bun run dev-token alice 'documents:rw'
@@ -327,7 +327,7 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure it and explicit local-development mode.
+`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. "Local" is read from the request's `Host` header, which any client can set, so the offline server listens on `127.0.0.1` only: whoever can reach its port is the Owner, so don't forward or proxy it. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure it and explicit local-development mode.
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
@@ -451,7 +451,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**667 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+**679 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 

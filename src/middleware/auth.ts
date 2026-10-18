@@ -21,6 +21,8 @@ async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayl
   };
 }
 
+const PUBLIC_PATH = /^\/storage\/[^/]+\/public\//;
+
 export function authMiddleware() {
   return async (c: Context, next: Next) => {
     // Tokens live in D1, so storage auth is configured once the DB is bound.
@@ -31,9 +33,9 @@ export function authMiddleware() {
     const path = c.req.path;
     const method = c.req.method;
 
-    // Public reads may be anonymous, but still resolve a supplied token so that
-    // folder listings under /public/ can be authorised.
-    if (path.includes('/public/') && (method === 'GET' || method === 'HEAD')) {
+    // Public reads (/storage/<user>/public/...) may be anonymous, but still
+    // resolve a supplied token so that folder listings there can be authorised.
+    if (PUBLIC_PATH.test(path) && (method === 'GET' || method === 'HEAD')) {
       const token = parseAuthHeader(c.req.header('Authorization') ?? null);
       if (token) {
         const payload = await resolveTokenPayload(c, token);

@@ -74,9 +74,12 @@ console.log(`Database: ${DB_PATH}`);
 console.log(`Account: ${ACCOUNT_USERNAME} at ${PUBLIC_BASE_URL} (owner ${OWNER_EMAIL})`);
 console.log(`Listening on http://localhost:${port}`);
 
+// Loopback only: the dev identity trusts the Host header, which anyone on the
+// network could set to localhost if the server listened on every interface.
 serve({
   fetch: app.fetch,
   port,
+  hostname: '127.0.0.1',
 });
 
 process.on('SIGINT', () => {
