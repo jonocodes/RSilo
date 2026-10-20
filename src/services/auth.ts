@@ -55,6 +55,14 @@ export function hasScope(tokenScopes: string, requiredScope: string): boolean {
   return false;
 }
 
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function scopeFromPath(fullPath: string): { module: string; permission: string } {
   const segments = fullPath.split('/').filter(Boolean);
   let startIdx = 0;
@@ -65,7 +73,9 @@ export function scopeFromPath(fullPath: string): { module: string; permission: s
   if (segments[categoryIdx] === 'public') {
     categoryIdx += 1;
   }
-  const module = segments.length > categoryIdx ? segments[categoryIdx] : '*';
+  // Paths arrive raw (percent-encoded, see protocol/item-path.ts); the
+  // category is compared with scopes by name.
+  const module = segments.length > categoryIdx ? safeDecode(segments[categoryIdx]) : '*';
   return { module, permission: 'rw' };
 }
 

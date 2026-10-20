@@ -331,6 +331,8 @@ bun run dev:offline      # http://localhost:8787 with live reload
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
+Offline files live in `STORAGE_DIR` (default `data/storage/`), one file per document at its key, with metadata in a parallel `.meta/` tree. Data written by older RSilo versions kept a `<file>.meta` sidecar next to each file, which hid documents whose names end in `.meta`. Those sidecars are moved into `.meta/` the first time the store opens. Like R2, the store lists documents only, so a folder disappears once its last document is deleted.
+
 ## API reference
 
 The server exposes one OpenAPI surface:
@@ -422,6 +424,14 @@ curl -X PUT http://localhost:8787/storage/alice/public/documents/shared.txt \
 curl http://localhost:8787/storage/alice/public/documents/shared.txt
 # → Cache-Control: no-cache
 ```
+
+### Item names
+
+Names follow protocol §4. A name may contain any character except `/` and NUL, and must not be empty, `.` or `..`. That includes spaces, `?`, `#`, `%`, newlines and leading dots. Clients send each name percent-encoded, and RSilo decodes each path segment on its own (`src/protocol/item-path.ts`). It stores the name itself and lists it unencoded, so `PUT /storage/alice/documents/a%20b%3F` is listed as `"a b?"`. An encoded `/` inside a name (`%2F`) is a `400`. Routing uses the raw request path for this reason (Hono `getPath`). The file manager under `/account` uses the same names.
+
+### Byte ranges
+
+`GET` on a document honours a single `Range: bytes=…` (RFC 9110 §14): `206` with `Content-Range`, or `416` when the range starts past the end. Responses carry `Accept-Ranges: bytes`, and WebFinger advertises `"http://tools.ietf.org/html/rfc7233": "GET"`. Multiple ranges and invalid values get the whole document (`200`). R2 and S3 fetch only the requested bytes.
 src/
   index.ts            Worker entry (Hono app)
   server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
@@ -434,7 +444,7 @@ src/
                       types, SQLite D1 shim that applies the migrations)
   middleware/         auth, cors, instance (config + Account gates), owner (/account gate + CSRF)
   ui/                 account client script, setup and not-allowed pages
-  protocol/           constants (ETag normalisation, path validation)
+  protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
   scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, dev-token, setup-local-db
 drizzle/migrations/   D1 migrations
 test/                 unit, compliance and E2E suites

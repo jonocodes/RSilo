@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { authMiddleware, requireScope } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
-import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { decodeItemPath } from '../protocol/item-path';
+import { contentRange, parseRange, type ByteRange } from '../protocol/range';
 import type { TokenPayload } from '../services/auth';
 import type { StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
@@ -15,12 +17,10 @@ export const storageRouter = new Hono();
 storageRouter.use('/*', async (c, next) => {
   const url = new URL(c.req.url);
 
-  if (url.pathname.includes('/../') || url.pathname.includes('/..')) {
-    return c.text('Invalid path', 400);
-  }
-
+  // Dot segments, raw or encoded. Names merely containing dots ("..a") are
+  // fine; protocol/item-path.ts checks each name.
   const segments = url.pathname.split('/').filter(Boolean);
-  if (segments.some(s => s === '..')) {
+  if (segments.some(s => s === '..' || s.toLowerCase() === '%2e%2e')) {
     return c.text('Invalid path', 400);
   }
 
@@ -102,9 +102,12 @@ storageRouter.options('/*', () => {
   return new Response('', { status: 204, headers });
 });
 
-function extractStoragePath(fullPath: string, username: string): string {
-  const prefix = `/storage/${username}/`;
-  return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
+// The decoded path below the user's storage root, or null if it is not made of
+// valid item names. fullPath is the raw request path (see rawRequestPath).
+function storagePath(fullPath: string, username: string): string | null {
+  const prefix = `/storage/${encodeURIComponent(username)}/`;
+  const raw = fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
+  return decodeItemPath(raw);
 }
 
 function httpDate(value?: string): string {
@@ -118,7 +121,10 @@ async function shortHash(input: string): Promise<string> {
 }
 
 async function handlePublicStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
+  if (path === null) {
+    return c.text('Invalid path', 400);
+  }
   const storage = getStorage(c);
 
   if (path === '' || path.endsWith('/')) {
@@ -129,87 +135,87 @@ async function handlePublicStorageGet(c: any, username: string, fullPath: string
     return handleFolderGet(c, storage, username, path);
   }
 
-  if (!isValidPath(path)) {
-    return c.text('Invalid path', 400);
-  }
-
-  const key = buildKey(username, path);
-
-  const result = await storage.get(key);
-  if (!result) {
-    return c.text('Not Found', 404);
-  }
-
-  const etag = normalizeETag(result.metadata.etag);
-
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch && etag) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304 });
-    }
-  }
-
-  return new Response(result.body, {
-    status: 200,
-    headers: {
-      'Content-Type': result.metadata.contentType,
-      'Content-Length': result.metadata.contentLength.toString(),
-      'ETag': etag || '',
-      'Cache-Control': 'no-cache',
-      'Content-Encoding': 'identity',
-      'Last-Modified': httpDate(result.metadata.lastModified),
-    },
-  });
+  return serveDocument(c, storage, buildKey(username, path));
 }
 
 async function handleStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
   const payload = c.get('tokenPayload') as TokenPayload | undefined;
   if (!payload || payload.sub !== username) {
     return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
   }
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 
-  const isFolderRequest = path === '' || path.endsWith('/');
-  const key = buildKey(username, path);
-
   const storage = getStorage(c);
 
-  if (isFolderRequest) {
+  if (path === '' || path.endsWith('/')) {
     return handleFolderGet(c, storage, username, path);
   }
 
-  const result = await storage.get(key);
+  return serveDocument(c, storage, buildKey(username, path));
+}
+
+// Serves a document, honouring If-None-Match and a single byte Range.
+async function serveDocument(c: any, storage: StorageInterface, key: string): Promise<Response> {
+  const rangeHeader = c.req.header('Range');
+  const ifNoneMatch = c.req.header('If-None-Match');
+
+  // A range needs the size first; a suffix range or a 416 can't be worked
+  // out without it.
+  let range: ByteRange | null = null;
+  let size = 0;
+  if (rangeHeader) {
+    const meta = await storage.head(key);
+    if (!meta) return c.text('Not Found', 404);
+    if (isNotModified(ifNoneMatch, normalizeETag(meta.etag))) return new Response(null, { status: 304 });
+    size = meta.contentLength;
+    const parsed = parseRange(rangeHeader, size);
+    if (parsed === 'unsatisfiable') {
+      return c.text('Range Not Satisfiable', 416, { 'Content-Range': `bytes */${size}` });
+    }
+    range = parsed;
+  }
+
+  const result = await storage.get(key, range ? { range } : undefined);
   if (!result) {
     return c.text('Not Found', 404);
   }
 
   const etag = normalizeETag(result.metadata.etag);
-
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch && etag) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304 });
-    }
+  if (!range && isNotModified(ifNoneMatch, etag)) {
+    return new Response(null, { status: 304 });
   }
 
-  return new Response(result.body, {
-    status: 200,
-    headers: {
-      'Content-Type': result.metadata.contentType,
-      'Content-Length': result.metadata.contentLength.toString(),
-      'ETag': etag || '',
-      'Cache-Control': 'no-cache',
-      'Content-Encoding': 'identity',
-      'Last-Modified': httpDate(result.metadata.lastModified),
-    },
-  });
+  const headers: Record<string, string> = {
+    'Content-Type': result.metadata.contentType,
+    'ETag': etag || '',
+    'Cache-Control': 'no-cache',
+    'Content-Encoding': 'identity',
+    'Last-Modified': httpDate(result.metadata.lastModified),
+    'Accept-Ranges': 'bytes',
+  };
+  if (!range) {
+    headers['Content-Length'] = result.metadata.contentLength.toString();
+    return new Response(result.body, { status: 200, headers });
+  }
+
+  let body = result.body;
+  if (body instanceof ArrayBuffer && body.byteLength !== range.length) {
+    // the storage backend returned the whole object
+    body = body.slice(range.offset, range.offset + range.length);
+  }
+  headers['Content-Length'] = range.length.toString();
+  headers['Content-Range'] = contentRange(range, size);
+  return new Response(body, { status: 206, headers });
+}
+
+function isNotModified(ifNoneMatch: string | undefined, etag: string | null): boolean {
+  if (!ifNoneMatch || !etag) return false;
+  return ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim())).includes(stripQuotes(etag));
 }
 
 async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
@@ -270,14 +276,14 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
 }
 
 async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
   const payload = c.get('tokenPayload') as TokenPayload | undefined;
   if (!payload || payload.sub !== username) {
     return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
   }
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 
@@ -342,14 +348,14 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
 }
 
 async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
   const payload = c.get('tokenPayload') as TokenPayload | undefined;
   if (!payload || payload.sub !== username) {
     return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
   }
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 

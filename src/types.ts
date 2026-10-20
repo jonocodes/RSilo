@@ -25,8 +25,14 @@ export interface AppEnv {
   S3_SECRET_ACCESS_KEY?: string;
 }
 
+/** A byte range of an object: `length` bytes starting at `offset`. */
+export interface StorageGetOptions {
+  range?: { offset: number; length: number };
+}
+
 export interface StorageInterface {
-  get(key: string): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
+  /** With `options.range` only those bytes are returned; metadata.contentLength stays the full size. */
+  get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
   put(key: string, body: ArrayBuffer, contentType: string): Promise<string>;
   delete(key: string): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;

@@ -1,6 +1,6 @@
 import { AwsClient } from 'aws4fetch';
 import type { S3Config } from '../config';
-import type { StorageInterface } from '../types';
+import type { StorageGetOptions, StorageInterface } from '../types';
 import type { BlobMetadata } from './r2';
 
 // StorageInterface over any S3-compatible API (ADR-0005): Backblaze B2, AWS S3,
@@ -32,11 +32,17 @@ export class S3Storage implements StorageInterface {
     this.bucketUrl = `${config.endpoint}/${encodeURIComponent(config.bucket)}`;
   }
 
-  async get(key: string): Promise<{ body: ReadableStream<Uint8Array> | ArrayBuffer; metadata: BlobMetadata } | null> {
-    const response = await this.send('GET', this.objectUrl(key));
+  async get(key: string, options?: StorageGetOptions): Promise<{ body: ReadableStream<Uint8Array> | ArrayBuffer; metadata: BlobMetadata } | null> {
+    const range = options?.range;
+    const response = await this.send('GET', this.objectUrl(key), range
+      ? { headers: { Range: `bytes=${range.offset}-${range.offset + range.length - 1}` } }
+      : {});
     if (response.status === 404) return null;
     await this.ensureOk('GET', response);
     const metadata = metadataFrom(response.headers);
+    // A 206 carries the range's length; the full size is after the "/".
+    const total = /\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '');
+    if (response.status === 206 && total) metadata.contentLength = Number(total[1]);
     return { body: response.body ?? new ArrayBuffer(0), metadata };
   }
 
@@ -74,6 +80,9 @@ export class S3Storage implements StorageInterface {
       const url = new URL(this.bucketUrl);
       url.searchParams.set('list-type', '2');
       url.searchParams.set('prefix', prefix);
+      // Keys may hold characters XML 1.0 can't carry (control characters,
+      // allowed in item names), so have them URL-encoded in the listing.
+      url.searchParams.set('encoding-type', 'url');
       if (token) url.searchParams.set('continuation-token', token);
 
       const response = await this.send('GET', url.href);
@@ -83,7 +92,7 @@ export class S3Storage implements StorageInterface {
       for (const [, entry] of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
         const lastModified = xmlField(entry, 'LastModified');
         objects.push({
-          key: xmlField(entry, 'Key') ?? '',
+          key: decodeListedKey(xmlField(entry, 'Key') ?? ''),
           size: Number(xmlField(entry, 'Size') ?? 0),
           etag: xmlField(entry, 'ETag') ?? '',
           lastModified: lastModified ? new Date(lastModified).toISOString() : undefined,
@@ -112,6 +121,12 @@ export class S3Storage implements StorageInterface {
     const body = operation === 'HEAD' ? '' : await response.text().catch(() => '');
     throw new S3StorageError(operation, response.status, xmlField(body, 'Code'));
   }
+}
+
+// Keys in a ListObjectsV2 response with encoding-type=url: form-style
+// percent-encoding, where "+" stands for a space (a literal "+" is %2B).
+function decodeListedKey(key: string): string {
+  return decodeURIComponent(key.replace(/\+/g, ' '));
 }
 
 function metadataFrom(headers: Headers): BlobMetadata {

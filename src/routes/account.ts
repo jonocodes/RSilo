@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
+import { decodeItemPath } from '../protocol/item-path';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
@@ -95,6 +96,14 @@ function escapeHtml(s: string): string {
 
 function encodePath(p: string): string {
   return p.split('/').map(encodeURIComponent).join('/');
+}
+
+// The decoded item path after /account/<route>/ (see protocol/item-path.ts),
+// or "" for anything that isn't a valid path, which the routes treat as the
+// root / not found.
+function accountItemPath(c: { req: { path: string } }, route: string): string {
+  const raw = c.req.path.slice(`/account/${route}`.length).replace(/^\//, '');
+  return decodeItemPath(raw) ?? '';
 }
 
 const COMMON_CSS = `
@@ -413,7 +422,7 @@ accountRouter.get('/browse', async (c) => {
 accountRouter.get('/browse/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const browsePath = c.req.path.replace(/^\/account\/browse\/?/, '') || '';
+  const browsePath = accountItemPath(c, 'browse');
   const storage = getStorage(c);
   const items = await listFolder(storage, username, browsePath);
 
@@ -422,7 +431,7 @@ accountRouter.get('/browse/*', async (c) => {
   let cumPath = '';
   for (const seg of pathSegments) {
     cumPath += (cumPath ? '/' : '') + seg;
-    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodeURIComponent(cumPath)}">${escapeHtml(seg)}</a>`);
+    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodePath(cumPath)}">${escapeHtml(seg)}</a>`);
   }
 
   const rows = items.length
@@ -476,7 +485,7 @@ accountRouter.get('/browse/*', async (c) => {
 accountRouter.get('/download/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/download\/?/, '');
+  const filePath = accountItemPath(c, 'download');
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -507,7 +516,7 @@ const TEXT_EXTENSIONS = new Set([
 accountRouter.get('/view/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/view\/?/, '');
+  const filePath = accountItemPath(c, 'view');
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -535,7 +544,7 @@ accountRouter.get('/view/*', async (c) => {
   let cumPath = '';
   for (let i = 0; i < pathSegments.length - 1; i++) {
     cumPath += (cumPath ? '/' : '') + pathSegments[i];
-    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodeURIComponent(cumPath)}">${escapeHtml(pathSegments[i])}</a>`);
+    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodePath(cumPath)}">${escapeHtml(pathSegments[i])}</a>`);
   }
   breadcrumb.push(`<span>/</span>${escapeHtml(filename)}`);
 
@@ -565,7 +574,7 @@ accountRouter.get('/view/*', async (c) => {
 accountRouter.post('/save/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/save\/?/, '');
+  const filePath = accountItemPath(c, 'save');
   if (!filePath) return c.redirect('/account/browse', 302);
 
   const body = await c.req.parseBody() as any;
@@ -610,7 +619,7 @@ accountRouter.post('/upload/*', async (c) => {
     if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
     throw error;
   }
-  const folderPath = c.req.path.replace(/^\/account\/upload\/?/, '');
+  const folderPath = accountItemPath(c, 'upload');
 
   const body = await c.req.parseBody({ all: true }) as any;
   const rawFiles = body['files'];
@@ -659,7 +668,7 @@ accountRouter.post('/upload/*', async (c) => {
 accountRouter.post('/delete/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/delete\/?/, '');
+  const filePath = accountItemPath(c, 'delete');
   if (!filePath) return c.redirect('/account/browse', 302);
 
   const storage = getStorage(c);
@@ -683,6 +692,6 @@ accountRouter.post('/delete/*', async (c) => {
   }
 
   const parentPath = filePath.split('/').slice(0, -1).join('/');
-  return c.redirect(`/account/browse${parentPath ? '/' + encodeURIComponent(parentPath) : ''}`, 302);
+  return c.redirect(`/account/browse${parentPath ? '/' + encodePath(parentPath) : ''}`, 302);
 });
 

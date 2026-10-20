@@ -58,10 +58,14 @@ export function createFakeS3(options: { bucket: string; accessKeyId: string; pag
       const start = Number(url.searchParams.get('continuation-token') ?? 0);
       const keys = [...objects.keys()].filter((k) => k.startsWith(prefix)).sort();
       const page = keys.slice(start, start + pageSize);
+      // encoding-type=url: keys percent-encoded, spaces as "+", like S3
+      const listed = url.searchParams.get('encoding-type') === 'url'
+        ? (k: string) => encodeURIComponent(k).replace(/%20/g, '+')
+        : (k: string) => k;
       const truncated = start + pageSize < keys.length;
       const contents = page.map((k) => {
         const object = objects.get(k)!;
-        return `<Contents><Key>${escapeXml(k)}</Key><LastModified>${object.lastModified.toISOString()}</LastModified>` +
+        return `<Contents><Key>${escapeXml(listed(k))}</Key><LastModified>${object.lastModified.toISOString()}</LastModified>` +
           `<ETag>${escapeXml(object.etag)}</ETag><Size>${object.body.byteLength}</Size><StorageClass>STANDARD</StorageClass></Contents>`;
       }).join('');
       return new Response(
@@ -96,6 +100,14 @@ export function createFakeS3(options: { bucket: string; accessKeyId: string; pag
           ETag: object.etag,
           'Last-Modified': object.lastModified.toUTCString(),
         };
+        const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers.get('Range') ?? '');
+        if (range && request.method === 'GET') {
+          const [start, end] = [Number(range[1]), Math.min(Number(range[2]), object.body.byteLength - 1)];
+          return new Response(object.body.slice(start, end + 1), {
+            status: 206,
+            headers: { ...headers, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${object.body.byteLength}` },
+          });
+        }
         return new Response(request.method === 'HEAD' ? null : object.body, { headers });
       }
       case 'DELETE':

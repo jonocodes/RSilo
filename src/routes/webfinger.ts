@@ -83,6 +83,8 @@ webfingerRouter.get('/.well-known/webfinger', requireInstanceConfig(), async (c)
         properties: {
           'http://remotestorage.io/spec/version': PROTOCOL_VERSION,
           'http://tools.ietf.org/html/rfc6749#section-4.2': urls.authorize,
+          // Byte ranges on GET (RFC 7233), see protocol/range.ts
+          'http://tools.ietf.org/html/rfc7233': 'GET',
         }
       },
       {

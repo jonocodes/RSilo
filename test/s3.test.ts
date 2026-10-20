@@ -134,6 +134,22 @@ describe('S3Storage', () => {
     expect(await storage.head(key)).not.toBeNull();
   });
 
+  it('lists keys XML can\'t carry, asking for URL-encoded keys', async () => {
+    const key = 'users/alice/storage/docs/\x01\x0bctl a+b c%41';
+    await storage.put(key, new ArrayBuffer(1), 'text/plain');
+    expect((await storage.list('users/alice/storage/docs/')).objects.map((o) => o.key)).toEqual([key]);
+    const listRequest = s3.requests.find((r) => new URL(r.url).searchParams.get('list-type') === '2')!;
+    expect(new URL(listRequest.url).searchParams.get('encoding-type')).toBe('url');
+  });
+
+  it('gets a byte range, keeping the full size in metadata', async () => {
+    await storage.put('users/alice/storage/docs/digits', new TextEncoder().encode('0123456789').buffer as ArrayBuffer, 'text/plain');
+    const got = await storage.get('users/alice/storage/docs/digits', { range: { offset: 2, length: 3 } });
+    expect(await text(got!.body)).toBe('234');
+    expect(got!.metadata.contentLength).toBe(10);
+    expect(s3.requests.at(-1)!.headers.get('Range')).toBe('bytes=2-4');
+  });
+
   it('lists every page under a prefix with sizes, ETags and ISO dates', async () => {
     for (const name of ['a', 'b', 'c', 'd', 'e']) {
       await storage.put(`users/alice/storage/docs/${name}`, new ArrayBuffer(name.charCodeAt(0) - 96), 'text/plain');
