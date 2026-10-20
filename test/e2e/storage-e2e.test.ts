@@ -13,7 +13,7 @@ let devToken = '';
 
 // Issues an opaque token row in the server's offline DB via `bun run dev-token`.
 function createDevToken(): string {
-  const res = spawnSync('bun', ['run', 'src/scripts/dev-token.ts', 'alice', 'documents:rw pictures:rw public:rw'], {
+  const res = spawnSync('bun', ['run', 'src/scripts/dev-token.ts', 'alice', 'documents:rw pictures:rw'], {
     env: { ...process.env, DB_PATH },
     encoding: 'utf8',
   });

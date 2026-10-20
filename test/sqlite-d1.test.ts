@@ -90,9 +90,15 @@ describe('migration application', () => {
     after.close();
   });
 
-  it('upgrades a pre-shim database that already matches the shipped schema without touching its rows', () => {
+  it('upgrades a pre-shim database at the hash migration without touching its rows, then runs later migrations', () => {
+    // The newest schema the old LocalDatabase wrote: everything up to 0005.
+    const oldDir = join(workdir, 'migrations-at-hash');
+    mkdirSync(oldDir);
+    for (const file of SHIPPED.filter(file => file <= HASH_MIGRATION)) {
+      copyFileSync(join(MIGRATIONS, file), join(oldDir, file));
+    }
     const path = join(workdir, 'legacy-current.sqlite');
-    const before = createSqliteD1(path);
+    const before = createSqliteD1(path, { migrationsDir: oldDir });
     before.sqlite.exec('DROP TABLE d1_migrations');
     before.sqlite.prepare('INSERT INTO users (id, username) VALUES (?, ?)').run('u1', 'alice');
     before.sqlite.prepare('INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES (?, ?, ?, ?)')
@@ -105,6 +111,7 @@ describe('migration application', () => {
     const after = createSqliteD1(path);
     expect(migrationNames(after)).toEqual(SHIPPED);
     expect(after.sqlite.prepare('SELECT id FROM oauth_tokens').all()).toEqual([{ id: 't1' }]);
+    expect(columns(after, 'oauth_tokens')).toContain('refresh_expires_at');
     after.close();
   });
 });

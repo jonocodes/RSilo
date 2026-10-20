@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
-import { generateToken, hashToken } from '../services/auth';
+import { parseScopes } from '../services/auth';
 import { parsePkceRequest } from '../services/pkce';
+import { ACCESS_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
 import type { Context } from '../types';
 
 // The OAuth consent dialog (ADR-0004). Mounted by the /account router at
@@ -36,9 +37,18 @@ interface AuthorizationRequest {
   appHost: string;
 }
 
-type Parsed =
-  | { ok: true; request: AuthorizationRequest }
-  | { ok: false; error: string; description: string };
+/**
+ * A refused request. With `redirect` (the redirect_uri is already validated)
+ * the error goes back to the app, as OAuth does; without it, a 400 page.
+ */
+interface Refusal {
+  ok: false;
+  error: string;
+  description: string;
+  redirect?: { redirectUri: string; state: string };
+}
+
+type Parsed = { ok: true; request: AuthorizationRequest } | Refusal;
 
 function httpUrl(value: string): URL | null {
   try {
@@ -91,14 +101,25 @@ function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
     codeChallenge = parsed.challenge.codeChallenge;
   }
 
+  const scope = str('scope') || DEFAULT_SCOPE;
+  const state = str('state');
+  if (!parseScopes(scope)) {
+    return {
+      ok: false,
+      error: 'invalid_scope',
+      description: 'scope must be space-separated <module>:r or <module>:rw items (*:r or *:rw for all of storage)',
+      redirect: { redirectUri, state },
+    };
+  }
+
   return {
     ok: true,
     request: {
       clientId,
       redirectUri,
       responseType,
-      scope: str('scope') || DEFAULT_SCOPE,
-      state: str('state'),
+      scope,
+      state,
       codeChallenge,
       appOrigin: client.origin,
       appHost: client.host,
@@ -106,15 +127,28 @@ function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
   };
 }
 
-// A plain-text 400 that never carries a Location: an invalid request must not
+// Sends the browser back to the app with an OAuth error (RFC 6749 §4.1.2.1).
+function redirectWithError(c: Context, redirectUri: string, state: string, error: string, description?: string): Response {
+  const url = new URL(redirectUri);
+  url.searchParams.set('error', error);
+  if (description) url.searchParams.set('error_description', description);
+  if (state) url.searchParams.set('state', state);
+  return c.redirect(url.toString(), 302);
+}
+
+// A refusal with a trusted redirect_uri goes back to the app. Otherwise a
+// plain-text 400 that never carries a Location: an invalid request must not
 // bounce the browser anywhere.
-function badRequest(c: Context, parsed: { error: string; description: string }): Response {
-  return c.text(`${parsed.error}: ${parsed.description}`, 400);
+function refuse(c: Context, refusal: Refusal): Response {
+  if (refusal.redirect) {
+    return redirectWithError(c, refusal.redirect.redirectUri, refusal.redirect.state, refusal.error, refusal.description);
+  }
+  return c.text(`${refusal.error}: ${refusal.description}`, 400);
 }
 
 consentRouter.get('/authorize', (c) => {
   const parsed = parseAuthorizationRequest(c.req.query());
-  if ('error' in parsed) return badRequest(c, parsed);
+  if ('error' in parsed) return refuse(c, parsed);
 
   // The page's own CSP governs where its form may go, including the 302 that
   // answers the POST. Chromium and WebKit apply form-action to redirects after
@@ -134,17 +168,16 @@ consentRouter.post('/authorize', async (c) => {
   }
 
   const parsed = parseAuthorizationRequest(body);
-  if ('error' in parsed) return badRequest(c, parsed);
+  if ('error' in parsed) return refuse(c, parsed);
   const request = parsed.request;
 
-  if (action === 'deny') {
-    const denyUrl = new URL(request.redirectUri);
-    denyUrl.searchParams.set('error', 'access_denied');
-    if (request.state) denyUrl.searchParams.set('state', request.state);
-    return c.redirect(denyUrl.toString(), 302);
-  }
+  if (action === 'deny') return redirectWithError(c, request.redirectUri, request.state, 'access_denied');
 
-  const location = await issueGrant((c.env as any).DB, c.get('instance').accountUsername, request);
+  // The grant must be stored before the app is sent its token or code.
+  const db = (c.env as { DB?: D1Database }).DB;
+  if (!db) return c.text('Server database is not configured', 503);
+
+  const location = await issueGrant(db, c.get('instance').accountUsername, request);
   return c.redirect(location, 302);
 });
 
@@ -154,43 +187,25 @@ consentRouter.post('/authorize', async (c) => {
  * `code` stores a 10-minute authorization code for /oauth/:user/token. Only
  * hashes of either are stored.
  */
-async function issueGrant(db: any, user: string, request: AuthorizationRequest): Promise<string> {
+async function issueGrant(db: D1Database, user: string, request: AuthorizationRequest): Promise<string> {
   const { clientId, redirectUri, scope, state } = request;
-
-  // Record the client on first approval so it can be listed and revoked.
-  try {
-    const known = await db?.prepare?.('SELECT id FROM oauth_clients WHERE id = ?')?.bind?.(clientId)?.first?.();
-    if (!known) {
-      await db?.prepare?.('INSERT INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
-        ?.bind?.(clientId, clientId, redirectUri, Math.floor(Date.now() / 1000), user)?.run?.();
-    }
-  } catch { /* best effort */ }
+  await recordClient(db, clientId, redirectUri, user);
 
   const redirectUrl = new URL(redirectUri);
 
   if (request.responseType === 'token') {
-    const accessToken = generateToken();
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-    await db?.prepare?.(
-      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )?.bind?.(crypto.randomUUID(), await hashToken(accessToken), null, expiresAt, scope, user, clientId)?.run?.();
-
+    const { accessToken } = await issueTokens(db, { clientId, user, scope, withRefreshToken: false });
     redirectUrl.hash = new URLSearchParams({
       access_token: accessToken,
       token_type: 'Bearer',
-      expires_in: '3600',
+      expires_in: String(ACCESS_TOKEN_TTL_SECONDS),
       scope,
       ...(state ? { state } : {}),
     }).toString();
     return redirectUrl.toString();
   }
 
-  const code = generateToken();
-  const expiresAt = Math.floor(Date.now() / 1000) + 600;
-  await db?.prepare?.(
-    'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  )?.bind?.(await hashToken(code), clientId, user, redirectUri, scope, request.codeChallenge, expiresAt)?.run?.();
-
+  const code = await issueCode(db, { clientId, user, redirectUri, scope, codeChallenge: request.codeChallenge });
   redirectUrl.searchParams.set('code', code);
   if (state) redirectUrl.searchParams.set('state', state);
   return redirectUrl.toString();
@@ -200,14 +215,12 @@ function escapeHtml(str: string): string {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** One requested Module per scope, e.g. `documents:rw` -> documents, read and write. */
+/** One line per requested scope, e.g. `documents:rw` -> documents, read and write. */
 function describeScopes(scope: string): { module: string; access: string }[] {
-  return scope.split(/\s+/).filter(Boolean).map((item) => {
-    const [name, level] = item.split(':');
-    const module = name === '*' ? 'All modules' : name;
-    const access = level === 'rw' ? 'read and write' : level === 'r' ? 'read only' : `"${level ?? ''}" access`;
-    return { module, access };
-  });
+  return (parseScopes(scope) ?? []).map(({ module, access }) => ({
+    module: module === '*' ? 'All your storage' : module,
+    access: access === 'rw' ? 'read and write' : 'read only',
+  }));
 }
 
 const CSS = `

@@ -40,6 +40,8 @@ interface TokenRow {
   scopes: string;
   user_id: string;
   expires_at: number;
+  /** Set for a token with a refresh token. */
+  refresh_expires_at?: number;
   created_at: number;
 }
 
@@ -57,8 +59,11 @@ function makeDb(
     db.sqlite.prepare('INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
       .run(token.client_id, token.client_id, '[]', token.created_at, token.user_id);
     db.sqlite.prepare(
-      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
-    ).run(token.id, `hash-${token.id}`, token.expires_at, token.scopes, token.user_id, token.client_id, token.created_at);
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      token.id, `hash-${token.id}`, token.refresh_expires_at ? `refresh-${token.id}` : null, token.expires_at,
+      token.refresh_expires_at ?? null, token.scopes, token.user_id, token.client_id, token.created_at,
+    );
   }
   return db;
 }
@@ -282,6 +287,10 @@ describe('Dashboard', () => {
     { id: 'tok-1', client_id: 'https://notes.example', scopes: 'documents:rw', user_id: 'alice', expires_at: now + 3600, created_at: now - 86400 * 3 },
     { id: 'tok-2', client_id: 'https://notes.example', scopes: 'pictures:r', user_id: 'alice', expires_at: now - 1, created_at: now },
     { id: 'tok-3', client_id: 'another-app', scopes: 'music:r', user_id: 'alice', expires_at: now + 3600, created_at: now },
+    // Access token expired, refresh token still valid: the app keeps access.
+    { id: 'tok-4', client_id: 'https://sync.example', scopes: 'notes:rw', user_id: 'alice', expires_at: now - 1, refresh_expires_at: now + 86400, created_at: now },
+    // Everything expired: not an app with access any more.
+    { id: 'tok-5', client_id: 'https://gone.example', scopes: 'videos:rw', user_id: 'alice', expires_at: now - 1, refresh_expires_at: now - 1, created_at: now },
   ];
 
   beforeAll(async () => {
@@ -306,11 +315,24 @@ describe('Dashboard', () => {
     const env = { STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any;
     const res = await app.request('http://localhost/account', { method: 'GET' }, env);
     const html = await res.text();
-    expect(html.split('action="/account/apps/revoke"')).toHaveLength(3);
+    expect(html.split('action="/account/apps/revoke"')).toHaveLength(4);
     expect(html).toContain('<strong>notes.example</strong>');
-    expect(html).toContain('documents:rw pictures:r');
     expect(html).toContain(new Date((now - 86400 * 3) * 1000).toISOString().slice(0, 10));
     expect(html).toContain('<strong>another-app</strong>');
+    expect(html).toContain('<strong>sync.example</strong>');
+  });
+
+  it('GET /account leaves out expired tokens and apps whose grants have all expired', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any;
+    const html = await (await app.request('http://localhost/account', { method: 'GET' }, env)).text();
+    expect(html).toContain('>documents:rw</span>');
+    expect(html).not.toContain('pictures:r');
+    expect(html).not.toContain('gone.example');
+  });
+
+  it('GET /account without a database is a 503, not an empty dashboard', async () => {
+    const res = await app.request('http://localhost/account', { method: 'GET' }, { STORAGE: mockStorage } as any);
+    expect(res.status).toBe(503);
   });
 
   it('GET /account/tokens redirects to the dashboard', async () => {

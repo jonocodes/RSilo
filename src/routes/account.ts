@@ -238,16 +238,20 @@ accountRouter.get('/', async (c) => {
   const instance = c.get('instance');
   const username = instance.accountUsername;
   const db = getDb(c);
+  if (!db || typeof db.prepare !== 'function') return c.text('Server database is not configured', 503);
 
-  const usage = await db?.prepare?.('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
-    ?.bind?.(username)?.first?.() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
+  const usage = await db.prepare('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
+    .bind(username).first() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
   const quota = Number(usage?.storage_quota_bytes ?? 0);
   const used = Number(usage?.used_storage_bytes ?? 0);
   const percent = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
 
-  const tokensResult = await db?.prepare?.('SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ?')
-    ?.bind?.(username)?.all?.() || { results: [] };
-  const grants = groupGrants(tokensResult.results || []);
+  // Only live tokens: an access token or refresh token that has not expired.
+  const now = Math.floor(Date.now() / 1000);
+  const tokensResult = await db.prepare(
+    'SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ? AND (expires_at > ? OR refresh_expires_at > ?)'
+  ).bind(username, now, now).all();
+  const grants = groupGrants(tokensResult.results);
 
   const address = `${username}@${instance.publicHost}`;
   const appRows = grants.length

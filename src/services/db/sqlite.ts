@@ -136,12 +136,12 @@ function applyMigrations(db: RawDatabase, dir: string): void {
     )`);
     if (tableExists(db, 'users')) {
       // Pre-shim database: its schema is the latest one the old LocalDatabase
-      // wrote, so everything shipped back then is already applied. A database
-      // still holding plaintext tokens predates the hash migration; let that
-      // one (and anything after it) run.
+      // wrote, so everything up to the hash migration is already applied. A
+      // database still holding plaintext tokens predates the hash migration;
+      // let that one run too. Later migrations always run.
       const baseline = hasColumn(db, 'oauth_tokens', 'access_token')
         ? files.filter(file => file < HASH_MIGRATION)
-        : files;
+        : files.filter(file => file <= HASH_MIGRATION);
       const insert = db.prepare('INSERT INTO d1_migrations (name) VALUES (?)');
       for (const file of baseline) insert.run(file);
     }

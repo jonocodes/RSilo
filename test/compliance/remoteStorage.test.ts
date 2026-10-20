@@ -736,11 +736,24 @@ describe('RemoteStorage Protocol Compliance', () => {
       expect(res.status).toBe(200);
     });
 
-    it('wildcard scope: * grants access to all modules', async () => {
+    // §9: the root scope is `*:rw` (or `*:r`). A bare `*` is not a scope and
+    // grants nothing (it used to grant full read-write).
+    it('bare * scope grants nothing', async () => {
+      const env = createEnv(createTestStorage());
+      const token = seedToken(env, 'alice', '*');
+      const res = await createServer(env).request(
+        'http://localhost/storage/alice/documents/test.txt',
+        { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'content' },
+        env
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it('wildcard scope: *:rw grants access to all modules', async () => {
       const storage = createTestStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = seedToken(env, 'alice', '*');
+      const token = seedToken(env, 'alice', '*:rw');
 
       const docRes = await app.request(
         'http://localhost/storage/alice/documents/test.txt',

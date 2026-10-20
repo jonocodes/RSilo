@@ -1,5 +1,4 @@
 import type { R2Bucket, RateLimit } from '@cloudflare/workers-types';
-import type { TokenPayload } from './services/auth';
 
 export interface AppEnv {
   /** R2 bucket. Unused, and may be absent, when the S3_* vars are set (ADR-0005). */
@@ -31,18 +30,6 @@ export interface StorageInterface {
   delete(key: string): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
   list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }>;
-}
-
-export interface StorageContext {
-  username: string;
-  path: string;
-  payload: TokenPayload;
-}
-
-declare module 'hono' {
-  interface ContextVariableMap {
-    tokenPayload: TokenPayload;
-  }
 }
 
 export type Context = import('hono').Context;
