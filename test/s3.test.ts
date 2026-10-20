@@ -3,7 +3,6 @@ import { getInstanceConfig, getStorageConfig } from '../src/config';
 import { createServer } from '../src/index';
 import { getStorage, R2Storage } from '../src/services/r2';
 import { S3Storage, S3StorageError } from '../src/services/s3';
-import { PreconditionFailedError } from '../src/services/storage-errors';
 import { createFakeS3, type FakeS3 } from './helpers/fake-s3';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
@@ -113,12 +112,13 @@ describe('S3Storage', () => {
     expect(await storage.get('users/alice/storage/docs/a.txt')).toBeNull();
   });
 
-  it('checks write conditions with a HEAD, never sending conditional headers B2 refuses', async () => {
+  it('ignores write conditions: no conditional headers B2 refuses, and no extra HEAD (the caller checks)', async () => {
     const key = 'users/alice/storage/docs/a.txt';
     await storage.put(key, new ArrayBuffer(1), 'text/plain', { ifNoneMatch: '*' });
-    await expect(storage.put(key, new ArrayBuffer(1), 'text/plain', { ifNoneMatch: '*' })).rejects.toBeInstanceOf(PreconditionFailedError);
+    await storage.put(key, new ArrayBuffer(1), 'text/plain', { ifMatch: '"stale"' });
+    await storage.delete(key, { ifMatch: '"stale"' });
 
-    expect(s3.requests.map((request) => request.method)).toEqual(['HEAD', 'PUT', 'HEAD']);
+    expect(s3.requests.map((request) => request.method)).toEqual(['PUT', 'PUT', 'DELETE']);
     for (const request of s3.requests) {
       expect(request.headers.has('If-Match') || request.headers.has('If-None-Match')).toBe(false);
     }

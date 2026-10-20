@@ -6,6 +6,10 @@ describe('parseScope / parseScopes', () => {
   it('accepts <module>:r and <module>:rw, and * for the whole root', () => {
     expect(parseScope('documents:r')).toEqual({ module: 'documents', access: 'r' });
     expect(parseScope('my_notes-2:rw')).toEqual({ module: 'my_notes-2', access: 'rw' });
+    // Any valid item name, as remoteStorage.js allows; the level is after the last colon.
+    expect(parseScope('myFavoriteDrinks:rw')).toEqual({ module: 'myFavoriteDrinks', access: 'rw' });
+    expect(parseScope('my.app:r')).toEqual({ module: 'my.app', access: 'r' });
+    expect(parseScope('a:b:rw')).toEqual({ module: 'a:b', access: 'rw' });
     expect(parseScope('*:rw')).toEqual({ module: '*', access: 'rw' });
     expect(parseScopes('documents:rw pictures:r')).toEqual([
       { module: 'documents', access: 'rw' },
@@ -14,7 +18,7 @@ describe('parseScope / parseScopes', () => {
   });
 
   it('rejects anything else, including bare * and the reserved public module', () => {
-    for (const item of ['*', 'documents', 'documents:', 'documents:read', 'documents:rwx', 'documents:w', 'Documents:rw', 'a/b:rw', ':rw', 'public:rw', 'documents:rw:r']) {
+    for (const item of ['*', 'documents', 'documents:', 'documents:read', 'documents:rwx', 'documents:w', 'a/b:rw', ':rw', '.:rw', '..:rw', 'public:rw']) {
       expect(parseScope(item), item).toBeNull();
     }
   });
