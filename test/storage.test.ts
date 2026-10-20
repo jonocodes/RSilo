@@ -1,5 +1,9 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { createServer } from '../src/index';
+import { LocalStorage } from '../src/services/local-storage';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
 import { MemoryStorage } from './helpers/memory-storage';
@@ -626,6 +630,65 @@ describe('If-Match / If-None-Match', () => {
     );
 
     expect(getRes.status).toBe(304);
+  });
+});
+
+const requestAs = (env: Record<string, unknown>, method: string, path: string, headers: Record<string, string> = {}, body?: string) =>
+  createServer(env).request(`http://localhost/storage/alice/${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${seedToken(env, 'alice')}`, 'Content-Type': 'text/plain', ...headers },
+    body,
+  }, env);
+
+describe('Conditional deletes and name clashes', () => {
+  const localRoot = mkdtempSync(join(tmpdir(), 'rsilo-routes-'));
+  afterAll(() => rmSync(localRoot, { recursive: true, force: true }));
+
+  it('DELETE honours If-Match', async () => {
+    const env = { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
+    const etag = (await requestAs(env, 'PUT', 'documents/d.txt', {}, 'x')).headers.get('ETag')!;
+
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt', { 'If-Match': '"stale"' })).status).toBe(412);
+    expect((await requestAs(env, 'DELETE', 'documents/missing.txt', { 'If-Match': etag })).status).toBe(412);
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt', { 'If-Match': etag })).status).toBe(200);
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt')).status).toBe(404);
+  });
+
+  for (const [name, storage] of [['MemoryStorage', new MemoryStorage()], ['LocalStorage', new LocalStorage(localRoot)]] as const) {
+    it(`answers 409 when a document and a folder would share a name (${name})`, async () => {
+      const env = { STORAGE: storage, DB: createSqliteD1() };
+      expect((await requestAs(env, 'PUT', 'documents/clash/doc', {}, 'a')).status).toBe(201);
+      expect((await requestAs(env, 'PUT', 'documents/clash/folder/child', {}, 'b')).status).toBe(201);
+
+      expect((await requestAs(env, 'PUT', 'documents/clash/doc/inside', {}, 'c')).status).toBe(409);
+      expect((await requestAs(env, 'PUT', 'documents/clash/folder', {}, 'd')).status).toBe(409);
+      const listing = await (await requestAs(env, 'GET', 'documents/clash/')).json() as { items: Record<string, unknown> };
+      expect(Object.keys(listing.items).sort()).toEqual(['doc', 'folder/']);
+    });
+  }
+});
+
+describe('Document reads from metadata', () => {
+  it('answers HEAD and a matching If-None-Match with the ETag, never downloading the body', async () => {
+    const storage = new MemoryStorage();
+    const env = { STORAGE: storage, DB: createSqliteD1() };
+    const etag = (await requestAs(env, 'PUT', 'documents/a.txt', {}, 'hello')).headers.get('ETag')!;
+    const get = vi.spyOn(storage, 'get');
+
+    const notModified = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': etag });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('ETag')).toBe(etag);
+
+    const head = await requestAs(env, 'HEAD', 'documents/a.txt');
+    expect(head.status).toBe(200);
+    expect(head.headers.get('ETag')).toBe(etag);
+    expect(head.headers.get('Content-Length')).toBe('5');
+    expect(head.headers.get('Content-Security-Policy')).toBe('sandbox');
+    expect(get).not.toHaveBeenCalled();
+
+    const changed = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': '"other"' });
+    expect(changed.status).toBe(200);
+    expect(await changed.text()).toBe('hello');
   });
 });
 

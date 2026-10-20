@@ -3,7 +3,8 @@ import { mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:f
 import type { Stats } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
-import type { StorageInterface } from '../types';
+import type { StorageInterface, WriteCondition } from '../types';
+import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
 
 // The offline (dev-only) Storage backend: one file per object under baseDir.
 //
@@ -57,6 +58,7 @@ async function fileStats(path: string): Promise<Stats | null> {
 
 export class LocalStorage implements StorageInterface {
   private baseDir: string;
+  private locks = new Map<string, Promise<void>>();
 
   constructor(baseDir?: string) {
     this.baseDir = resolve(baseDir || join('data', 'storage'));
@@ -100,33 +102,59 @@ export class LocalStorage implements StorageInterface {
     }
   }
 
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
+  // One write or delete per key at a time, so a condition is checked and the
+  // change made with nothing in between. Enough for the one offline process.
+  private async locked<T>(key: string, change: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(key) ?? Promise.resolve()).then(change);
+    const tail = run.then(() => {}, () => {});
+    this.locks.set(key, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(key) === tail) this.locks.delete(key);
+    }
+  }
+
+  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
     const path = this.dataPath(key);
     const metaPath = this.metaPath(key);
     const bytes = new Uint8Array(body);
     const etag = `"${createHash('sha256').update(bytes).digest('hex').slice(0, 32)}"`;
 
-    await mkdir(dirname(path), { recursive: true });
-    await mkdir(dirname(metaPath), { recursive: true });
-    await writeFile(path, bytes);
-    await writeFile(metaPath, JSON.stringify({ contentType, etag }));
-    return etag;
+    return this.locked(key, async () => {
+      if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+      try {
+        await mkdir(dirname(path), { recursive: true });
+        await mkdir(dirname(metaPath), { recursive: true });
+        await writeFile(path, bytes);
+      } catch (error) {
+        // A file cannot also be a directory, nor sit inside a file.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST' || code === 'ENOTDIR' || code === 'EISDIR') throw new PathConflictError();
+        throw error;
+      }
+      await writeFile(metaPath, JSON.stringify({ contentType, etag }));
+      return etag;
+    });
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
     const path = this.dataPath(key);
     const metaPath = this.metaPath(key);
-    if (!(await fileStats(path))) return;
-    for (const file of [path, metaPath]) {
-      try {
-        await unlink(file);
-      } catch (error) {
-        if (!isMissing(error)) throw error;
+    return this.locked(key, async () => {
+      if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+      if (!(await fileStats(path))) return;
+      for (const file of [path, metaPath]) {
+        try {
+          await unlink(file);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
       }
-    }
-    // Folders exist only while they hold documents.
-    await this.removeEmptyParents(dirname(path));
-    await this.removeEmptyParents(dirname(metaPath));
+      // Folders exist only while they hold documents.
+      await this.removeEmptyParents(dirname(path));
+      await this.removeEmptyParents(dirname(metaPath));
+    });
   }
 
   private async removeEmptyParents(dir: string): Promise<void> {
@@ -145,7 +173,7 @@ export class LocalStorage implements StorageInterface {
     return stats ? this.metadata(key, stats) : null;
   }
 
-  async list(prefix: string): Promise<Listing> {
+  async list(prefix: string, options: { limit?: number } = {}): Promise<Listing> {
     // Walk the deepest folder the prefix names, then keep keys that match it.
     const folderKey = prefix.slice(0, prefix.lastIndexOf('/') + 1);
     const folderPath = folderKey ? this.dataPath(folderKey.slice(0, -1)) : this.baseDir;
@@ -154,7 +182,8 @@ export class LocalStorage implements StorageInterface {
     return {
       objects: objects
         .filter(object => object.key.startsWith(prefix))
-        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+        .slice(0, options.limit),
     };
   }
 

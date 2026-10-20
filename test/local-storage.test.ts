@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorage } from '../src/services/local-storage';
+import { PathConflictError } from '../src/services/storage-errors';
 
 const P = 'users/alice/storage/documents/';
 const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
@@ -69,6 +70,15 @@ describe('LocalStorage', () => {
 
     await storage.delete(P + 'b.txt');
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('refuses a document and a folder of one name with PathConflictError, not a filesystem error', async () => {
+    await storage.put(P + 'a', bytes('a'), 'text/plain');
+    await storage.put(P + 'b/c', bytes('c'), 'text/plain');
+
+    await expect(storage.put(P + 'a/x', bytes('x'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
+    await expect(storage.put(P + 'b', bytes('b'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
+    expect((await storage.list(P)).objects.map((o) => o.key)).toEqual([P + 'a', P + 'b/c']);
   });
 
   it('refuses keys with empty segments rather than guessing a file', async () => {

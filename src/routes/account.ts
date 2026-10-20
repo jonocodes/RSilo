@@ -4,7 +4,8 @@ import { buildKey, getStorage } from '../services/r2';
 import { isValidPath } from '../protocol/constants';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
-import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { deleteUserObject, putUserObject } from '../services/quota-storage';
+import { writeErrorResponse } from './storage';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 import { requireAccountRow } from '../middleware/instance';
 import { requireOwner, requireSameOrigin } from '../middleware/owner';
@@ -599,12 +600,9 @@ accountRouter.post('/save/*', async (c) => {
       key,
       body: encoded.buffer as ArrayBuffer,
       contentType,
-      existing,
     });
   } catch (error) {
-    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
 
   return new Response(null, { status: 204 });
@@ -647,7 +645,6 @@ accountRouter.post('/upload/*', async (c) => {
   for (const [i, file] of fileList.entries()) {
     const key = buildKey(username, filePaths[i]);
     const buffer = await file.arrayBuffer();
-    const existing = await storage.head(key);
     try {
       await putUserObject({
         storage,
@@ -657,12 +654,9 @@ accountRouter.post('/upload/*', async (c) => {
         key,
         body: buffer,
         contentType: file.type || 'application/octet-stream',
-        existing,
       });
     } catch (error) {
-      if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-      throw error;
+      return writeErrorResponse(c, error);
     }
   }
 
@@ -678,24 +672,16 @@ accountRouter.post('/delete/*', async (c) => {
   if (!filePath) return c.redirect('/account/browse', 302);
   if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
-  const storage = getStorage(c);
-  const key = buildKey(username, filePath);
-
-  const existing = await storage.head(key);
-  if (existing) {
-    try {
-      await deleteUserObject({
-        storage,
-        db: getDb(c),
-        allowUnaccounted: isLocalDevelopment(c.env),
-        username,
-        key,
-        existing,
-      });
-    } catch (error) {
-      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-      throw error;
-    }
+  try {
+    await deleteUserObject({
+      storage: getStorage(c),
+      db: getDb(c),
+      allowUnaccounted: isLocalDevelopment(c.env),
+      username,
+      key: buildKey(username, filePath),
+    });
+  } catch (error) {
+    return writeErrorResponse(c, error);
   }
 
   const parentPath = filePath.split('/').slice(0, -1).join('/');

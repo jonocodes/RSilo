@@ -253,7 +253,7 @@ describe('dashboard settings and app revocation', () => {
     expect(res.headers.get('Location')).toBe('/account');
     expect(db.sqlite.prepare('SELECT storage_quota_bytes AS q FROM users').get()).toEqual({ q: 1074 });
 
-    expect((await upload(10, 'second.txt')).status).toBe(413);
+    expect((await upload(10, 'second.txt')).status).toBe(507);
     expect(storage.objects.has('users/alice/storage/documents/second.txt')).toBe(false);
 
     const dashboard = await (await app.request('http://localhost/account', {}, env)).text();

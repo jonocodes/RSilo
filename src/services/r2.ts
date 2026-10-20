@@ -1,7 +1,9 @@
 import type { R2Bucket, R2ListOptions } from '@cloudflare/workers-types';
-import type { StorageInterface } from '../types';
+import type { StorageInterface, WriteCondition } from '../types';
 import { configurationMessage, getStorageConfig } from '../config';
+import { stripQuotes } from '../protocol/constants';
 import { S3Storage } from './s3';
+import { conditionHolds, PreconditionFailedError } from './storage-errors';
 
 // Normalises the storage backend to the StorageInterface the routes expect.
 // S3_* vars select an S3-compatible bucket (ADR-0005). Otherwise, in the Worker
@@ -45,15 +47,21 @@ export class R2Storage {
     return { body, metadata };
   }
 
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
+  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
     const object = await this.bucket.put(key, body, {
       httpMetadata: { contentType },
       customMetadata: { uploaded: new Date().toISOString() },
+      onlyIf: r2OnlyIf(condition),
     });
+    // R2 checks onlyIf atomically and answers a failed one with null, storing nothing.
+    if (!object) throw new PreconditionFailedError();
     return object.etag;
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
+    // R2's delete takes no onlyIf, so a condition is checked with a HEAD
+    // first: a write that lands between the two is deleted anyway.
+    if (condition && !conditionHolds(await this.bucket.head(key), condition)) throw new PreconditionFailedError();
     await this.bucket.delete(key);
   }
 
@@ -68,15 +76,17 @@ export class R2Storage {
     };
   }
 
-  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
+  async list(prefix: string, options: { limit?: number } = {}): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
     const objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] = [];
     let cursor: string | undefined;
+    const { limit } = options;
 
     do {
       // R2 omits httpMetadata (the content type) from listings unless asked.
       // `include` is missing from the default (oldest compatibility date)
       // R2ListOptions type, though this Worker's compatibility date needs it.
-      const listed = await this.bucket.list({ prefix, cursor, include: ['httpMetadata'] } as R2ListOptions);
+      const pageLimit = limit ? Math.min(1000, limit - objects.length) : undefined;
+      const listed = await this.bucket.list({ prefix, cursor, limit: pageLimit, include: ['httpMetadata'] } as R2ListOptions);
       objects.push(...listed.objects.map(obj => ({
         key: obj.key,
         size: obj.size,
@@ -85,13 +95,20 @@ export class R2Storage {
         lastModified: (obj as any).uploaded?.toISOString?.(),
       })));
 
-      if (!listed.truncated) break;
+      if (!listed.truncated || (limit && objects.length >= limit)) break;
       if (!listed.cursor) throw new Error('R2 returned a truncated listing without a cursor');
       cursor = listed.cursor;
     } while (cursor);
 
     return { objects };
   }
+}
+
+// R2 takes conditional request headers as onlyIf, with the ETag quoted.
+function r2OnlyIf(condition: WriteCondition | undefined): Headers | undefined {
+  if (condition?.ifMatch !== undefined) return new Headers({ 'If-Match': `"${stripQuotes(condition.ifMatch)}"` });
+  if (condition?.ifNoneMatch === '*') return new Headers({ 'If-None-Match': '*' });
+  return undefined;
 }
 
 export function buildKey(userId: string, path: string): string {

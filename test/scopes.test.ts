@@ -112,8 +112,9 @@ describe('Scope-based access control', () => {
       expect(res.headers.get('WWW-Authenticate')).toContain('scope="*:rw"');
       expect((await put(path, rootToken)).status, path).toBeOneOf([200, 201]);
     }
-    expect((await put('foo/bar', fooToken)).status).toBeOneOf([200, 201]);
-    expect((await put('public/foo/bar', fooToken)).status).toBeOneOf([200, 201]);
+    // Past the scope check: refused only because the documents foo and public/foo now exist.
+    expect((await put('foo/bar', fooToken)).status).toBe(409);
+    expect((await put('public/foo/bar', fooToken)).status).toBe(409);
   });
 
   it('a read level that only starts with r grants nothing', async () => {
