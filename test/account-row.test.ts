@@ -3,6 +3,7 @@ import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
 import { usernames } from './helpers/db';
 import { tokenHash } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // The Instance serves exactly one Account (ADR-0002). Its `users` row is
 // created lazily on first use; if the table already holds other rows the Worker
@@ -10,14 +11,8 @@ import { tokenHash } from './helpers/tokens';
 
 function createEnv(extra: Record<string, string> = {}) {
   return {
-    STORAGE: {
-      async get() { return null; },
-      async put() { return '"etag"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    } as any,
-    DB: createSqliteD1(),
+    STORAGE: new MemoryStorage(),
+    DB: createSqliteD1(':memory:', { recordQueries: true }),
     ...extra,
   };
 }

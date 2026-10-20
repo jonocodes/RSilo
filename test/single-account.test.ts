@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // An Instance serves one Account and advertises every URL from one origin:
 // PUBLIC_BASE_URL when set (these tests set it), else the request's own origin
@@ -11,13 +12,7 @@ const BASE = 'https://rs.example:8443';
 
 function createEnv(extra: Record<string, string> = {}) {
   return {
-    STORAGE: {
-      async get() { return null; },
-      async put() { return '"etag"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    } as any,
+    STORAGE: new MemoryStorage(),
     DB: createSqliteD1(),
     ACCOUNT_USERNAME: 'alice',
     OWNER_EMAIL: 'owner@example.com',
@@ -225,7 +220,11 @@ describe('OAuth is for the Account only', () => {
 describe('Storage serves only the Account', () => {
   function storageEnv() {
     const env = createEnv();
-    env.STORAGE.get = async () => ({ body: new TextEncoder().encode('hi').buffer, metadata: { contentType: 'text/plain', contentLength: 2, etag: '"e"' } });
+    for (const user of ['alice', 'bob']) {
+      for (const path of ['documents', 'public/documents']) {
+        env.STORAGE.seed(`users/${user}/storage/${path}/a.txt`, 'hi');
+      }
+    }
     return env;
   }
 
@@ -284,7 +283,7 @@ describe('Instance configuration', () => {
   const production = { RSILO_DEV_MODE: 'false' };
 
   it('outside dev mode, discovery defaults to the Account "me" at the request origin', async () => {
-    const env = { ...createEnv(production) } as any;
+    const env: Partial<ReturnType<typeof createEnv>> = createEnv(production);
     delete env.ACCOUNT_USERNAME;
     delete env.PUBLIC_BASE_URL;
 
@@ -295,7 +294,7 @@ describe('Instance configuration', () => {
   });
 
   it('outside dev mode, OAuth answers without PUBLIC_BASE_URL', async () => {
-    const env = { ...createEnv(production) } as any;
+    const env: Partial<ReturnType<typeof createEnv>> = createEnv(production);
     delete env.PUBLIC_BASE_URL;
 
     const discovery = await app.request('http://localhost/oauth/alice', {}, env);
@@ -305,7 +304,7 @@ describe('Instance configuration', () => {
   });
 
   it('outside dev mode, a missing OWNER_EMAIL does not stop discovery or OAuth', async () => {
-    const env = { ...createEnv(production) } as any;
+    const env: Partial<ReturnType<typeof createEnv>> = createEnv(production);
     delete env.OWNER_EMAIL;
 
     const discovery = await app.request('http://localhost/oauth/alice', {}, env);
@@ -319,7 +318,7 @@ describe('Instance configuration', () => {
   });
 
   it('in dev mode, defaults to alice at http://localhost:8787', async () => {
-    const env = { ...createEnv() } as any;
+    const env: Partial<ReturnType<typeof createEnv>> = createEnv();
     delete env.ACCOUNT_USERNAME;
     delete env.PUBLIC_BASE_URL;
 

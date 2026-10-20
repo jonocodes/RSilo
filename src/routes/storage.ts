@@ -179,7 +179,7 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   const { objects } = await storage.list(folderKey);
 
   const items: Record<string, any> = {};
-  // Directory markers (keys ending in `/`, which LocalStorage lists) are not
+  // Directory markers (keys ending in `/`, which some S3 tools create) are not
   // documents, so they never count towards a folder's version.
   const documents: { path: string; etag: string }[] = [];
   const subfolderDocuments: Record<string, { path: string; etag: string }[]> = {};

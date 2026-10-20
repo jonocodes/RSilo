@@ -331,6 +331,8 @@ bun run dev:offline      # http://localhost:8787 with live reload
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
+Offline documents are stored under `data/storage/` with percent-encoded file names and their metadata in `data/storage/.meta/`; this layout is new, so delete `data/storage/` (or re-upload your files) after upgrading from an older RSilo.
+
 ## API reference
 
 The server exposes one OpenAPI surface:
