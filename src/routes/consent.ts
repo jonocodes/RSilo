@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { parseScopes } from '../services/auth';
 import { parsePkceRequest } from '../services/pkce';
-import { ACCESS_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
+import { IMPLICIT_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
 import type { Context } from '../types';
 
 // The OAuth consent dialog (ADR-0004). Mounted by the /account router at
@@ -198,7 +198,7 @@ async function issueGrant(db: D1Database, user: string, request: AuthorizationRe
     redirectUrl.hash = new URLSearchParams({
       access_token: accessToken,
       token_type: 'Bearer',
-      expires_in: String(ACCESS_TOKEN_TTL_SECONDS),
+      expires_in: String(IMPLICIT_TOKEN_TTL_SECONDS),
       scope,
       ...(state ? { state } : {}),
     }).toString();

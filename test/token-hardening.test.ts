@@ -4,7 +4,7 @@ import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { PKCE, tokenHash as sha256 } from './helpers/tokens';
 import { MemoryStorage } from './helpers/memory-storage';
 import { generateToken, hashToken } from '../src/services/auth';
-import { REFRESH_TOKEN_TTL_SECONDS } from '../src/services/tokens';
+import { IMPLICIT_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS } from '../src/services/tokens';
 
 // Hardening borrowed from cloudflare/workers-oauth-provider (see
 // docs/research/workers-oauth-provider.md): secrets are stored only as hashes
@@ -176,6 +176,60 @@ describe('refresh token rotation', () => {
     const res = await refresh(env, first.refresh_token);
     expect(res.status).toBe(400);
     expect((await res.json() as any).error).toBe('invalid_grant');
+  });
+});
+
+describe('implicit-flow tokens', () => {
+  async function implicitToken(env: unknown): Promise<URLSearchParams> {
+    const res = await approve(env, { response_type: 'token', code_challenge: '', code_challenge_method: '' });
+    expect(res.status).toBe(302);
+    return new URLSearchParams(new URL(res.headers.get('Location')!).hash.slice(1));
+  }
+
+  it('last 30 days, as the redirect says', async () => {
+    const env = devEnv();
+    const fragment = await implicitToken(env);
+    expect(fragment.get('expires_in')).toBe(String(IMPLICIT_TOKEN_TTL_SECONDS));
+    const [issued] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    const now = Math.floor(Date.now() / 1000);
+    expect(issued.expires_at - now).toBeGreaterThan(IMPLICIT_TOKEN_TTL_SECONDS - 60);
+    expect(issued.expires_at - now).toBeLessThanOrEqual(IMPLICIT_TOKEN_TTL_SECONDS);
+  });
+
+  it('slide forward on use, so an app in use never re-authorizes', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    const now = Math.floor(Date.now() / 1000);
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(now + 3600);
+
+    expect((await putFile(env, token)).status).toBeOneOf([200, 201]);
+    const [renewed] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    expect(renewed.expires_at - now).toBeGreaterThan(IMPLICIT_TOKEN_TTL_SECONDS - 60);
+  });
+
+  it('are renewed at most once a day', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    const recent = Math.floor(Date.now() / 1000) + IMPLICIT_TOKEN_TTL_SECONDS - 3600;
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(recent);
+
+    expect((await putFile(env, token)).status).toBeOneOf([200, 201]);
+    expect(rows(env, 'SELECT expires_at FROM oauth_tokens')[0].expires_at).toBe(recent);
+  });
+
+  it('stay dead once expired', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(Math.floor(Date.now() / 1000) - 1);
+    expect((await putFile(env, token)).status).toBe(401);
+  });
+
+  it('do not extend code-flow access tokens', async () => {
+    const env = devEnv();
+    const { access_token } = await (await redeem(env, await authorizationCode(env))).json() as any;
+    const [before] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    expect((await putFile(env, access_token)).status).toBeOneOf([200, 201]);
+    expect(rows(env, 'SELECT expires_at FROM oauth_tokens')[0].expires_at).toBe(before.expires_at);
   });
 });
 
