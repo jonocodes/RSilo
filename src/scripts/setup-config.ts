@@ -2,7 +2,6 @@
 // Instance var validation, [vars] editing in wrangler TOML, and the manual
 // Cloudflare Access steps. No I/O here, so it is unit-tested without Cloudflare.
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
-import { workerNameFromHost } from '../ui/setup-pages';
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
@@ -224,15 +223,16 @@ WebFinger, so your apps could no longer sync.`;
 }
 
 /**
- * How to change the sign-in email later (plain text). `host` is the Worker's
- * host when known, for the Worker name in the click path.
+ * How to change the sign-in email later (plain text), for an Instance set up
+ * from the CLI. Its OWNER_EMAIL lives in wrangler.prod.toml, which every
+ * `bun run deploy` sends, so a dashboard edit would be undone by the next one.
  */
-export function changeOwnerEmailSteps(host: string | null): string {
-  const worker = (host && workerNameFromHost(host)) || 'your Worker';
+export function changeOwnerEmailSteps(): string {
   return `To change your sign-in email later, update it in two places:
 
-  1. OWNER_EMAIL: Workers & Pages → ${worker} → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy
-     (or re-run: bun run setup --owner-email=new@example.com)
+  1. OWNER_EMAIL: re-run bun run setup --owner-email=new@example.com
+     (not in the Cloudflare dashboard: wrangler.prod.toml would put the old
+     email back on your next bun run deploy)
   2. The Access Allow policy: Zero Trust → Access → Applications → RSilo app → Policies
      (otherwise Cloudflare Access will not let the new email through at all)`;
 }

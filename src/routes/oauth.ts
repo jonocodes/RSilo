@@ -129,7 +129,6 @@ oauthRouter.post('/:user/token', ...forAccount, async (c) => {
 
 oauthRouter.get('/:user', requireInstanceConfig(), requireAccountPath(), async (c) => {
   const instance = c.get('instance');
-  const origin = c.req.header('Origin') || '*';
   const urls = accountUrls(instance);
 
   return c.json({
@@ -143,46 +142,5 @@ oauthRouter.get('/:user', requireInstanceConfig(), requireAccountPath(), async (
     token_endpoint: urls.token,
     code_challenge_methods_supported: PKCE_METHODS,
     storageapi: urls.storageRoot,
-  }, 200, {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-  } as any);
-});
-
-oauthRouter.options('/:user', (c) => {
-  const origin = c.req.header('Origin') || '*';
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    }
   });
 });
-
-oauthRouter.options('/:user/authorize', (c) => {
-  const origin = c.req.header('Origin') || '*';
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    }
-  });
-});
-
-oauthRouter.options('/:user/token', (c) => {
-  const origin = c.req.header('Origin') || '*';
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    }
-  });
-});
-

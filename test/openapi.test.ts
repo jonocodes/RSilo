@@ -24,7 +24,7 @@ describe('API docs', () => {
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
     expect(html).toContain('hideTestRequestButton');
-    expect(html).toContain('@scalar/api-reference');
+    expect(html).toMatch(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/@scalar\/api-reference@\d+\.\d+\.\d+\/[^"]+" integrity="sha384-[A-Za-z0-9+/]+={0,2}" crossorigin="anonymous">/);
   });
 
   it('serves a valid OpenAPI document covering the full surface', async () => {

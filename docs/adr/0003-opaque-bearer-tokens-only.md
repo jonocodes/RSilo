@@ -8,4 +8,4 @@ Status: accepted
 
 - `JWT_SECRET`, `verifyToken`, and `createTestToken` are removed; tests and the dev-token script seed opaque token rows (or use dev mode) instead.
 - Every storage request performs one D1 lookup; acceptable for a single-user instance.
-- Per-instance production configuration reduces to the Access variables; there are no application-held secrets.
+- Per-instance production configuration needs no secret for tokens. (Amended: ADR-0001 as implemented needs no Access variables, only `OWNER_EMAIL`; ADR-0005 adds RSilo's one secret, `S3_SECRET_ACCESS_KEY`, for S3 storage.)

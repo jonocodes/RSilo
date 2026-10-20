@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { storageAuth } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
-import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { FOLDER_MIME_TYPE, isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
@@ -86,16 +86,6 @@ storageRouter.delete('/:username/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handleStorageDelete(c, username, fullPath);
-});
-
-storageRouter.options('/*', () => {
-  const headers = new Headers();
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, If-Match, If-None-Match, Origin, X-Requested-With');
-  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Max-Age', '86400');
-  headers.set('Access-Control-Expose-Headers', 'ETag');
-  return new Response('', { status: 204, headers });
 });
 
 function extractStoragePath(fullPath: string, username: string): string {
@@ -233,7 +223,7 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   return new Response(folderJson, {
     status: 200,
     headers: {
-      'Content-Type': 'application/ld+json; charset=utf-8',
+      'Content-Type': FOLDER_MIME_TYPE,
       'ETag': etag,
       'Cache-Control': 'no-cache',
       'Content-Encoding': 'identity',

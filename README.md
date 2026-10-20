@@ -53,7 +53,7 @@ Clicking the button clones the repo into your account, asks you to name the Work
 
 On the setup page, fill in `OWNER_EMAIL` with your email. If you skip it, add it afterwards (see [Change your sign-in email](#change-your-sign-in-email) for the click path); until then, `/account` shows a *finish setup* page that tells you exactly what to enter.
 
-Then [set up Cloudflare Access](#set-up-cloudflare-access).
+Then [set up Cloudflare Access](#set-up-cloudflare-access). Your copy of the repository does not pick up later RSilo fixes by itself; see [Updating a Deploy-button Instance](#updating-a-deploy-button-instance).
 
 The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance). Its `OWNER_EMAIL` is empty on purpose: an empty value is never accepted, so a deploy that skipped it keeps `/account` closed behind the *finish setup* page.
 
@@ -99,13 +99,9 @@ wrangler d1 create remotestorage-db
 bun run deploy
 ```
 
-Alternatively, let wrangler provision the resources: delete the `database_id` line from `wrangler.prod.toml` and run `bun run deploy`. Wrangler creates the resources on first deploy; because `wrangler.toml`/`.prod.toml` are TOML, it will not write the new IDs back, so copy it from `wrangler d1 list` if you need them later.
-
 </details>
 
 Storage access tokens are opaque values stored in D1 (see [Authentication](#authentication)).
-
-`MAX_OBJECT_SIZE_BYTES` optionally sets the maximum stored-object size. It defaults to 10 MiB and must be a positive integer.
 
 ### Use an S3 bucket instead of R2
 
@@ -148,10 +144,11 @@ Only `OWNER_EMAIL` is **required**. Set settings under `[vars]` in your `wrangle
 | `S3_SECRET_ACCESS_KEY` | with S3 | The secret key. Set it as a **Secret**, never as a plain-text var: `bun run setup` does this, or use **Variables and Secrets → Add → Secret**, or `wrangler secret put S3_SECRET_ACCESS_KEY`. | none | none |
 | `S3_REGION` | no | The signing region. Only needed when it is not part of the endpoint host (AWS, B2 and R2 hosts are recognised). | from the endpoint, else `us-east-1` | same |
 | `PUBLIC_BASE_URL` | no | A canonical origin, e.g. a custom domain `https://rs.example.com` (no path). Every advertised URL — WebFinger, host-meta, the `/oauth/:user` discovery JSON, the consent URL and the storage root — is built from it. Unset, they are built from the origin the request arrived at, which on Cloudflare is always one of your Worker's own hostnames (Cloudflare's edge refuses any other `Host` with a `403` before the Worker runs). `X-Forwarded-Host` / `X-Forwarded-Proto` are never consulted. | the request's origin | `http://localhost:8787` (offline: `http://localhost:$PORT`) |
+| `MAX_OBJECT_SIZE_BYTES` | no | The largest file an app or the file manager may store, in bytes; a larger upload gets `413`. Unlike the settings above, a value that is not a positive integer is ignored and the default applies. | `10485760` (10 MiB) | same (offline too) |
 
 The dev-mode defaults apply only when `RSILO_DEV_MODE=true`; an invalid value is rejected even in dev mode. Dev mode keeps `alice` so local tooling and the spec-check run unchanged.
 
-`bun run deploy` (and `bun run setup`) never blank a value you set in the dashboard: they leave empty `[vars]` entries out of the deploy and pass `--keep-vars`, so dashboard values the config does not mention survive. A non-empty value in your config wins over the dashboard. A bare `wrangler deploy` of the committed `wrangler.toml` would overwrite them with the empty placeholders, so deploy with `bun run deploy`.
+`bun run deploy` (and `bun run setup`) never blank a value you set in the dashboard: they leave empty `[vars]` entries out of the deploy and pass `--keep-vars`, so dashboard values the config does not mention survive. A non-empty value in your config wins over the dashboard, so on an Instance set up with `bun run setup`, change a setting by re-running setup (or editing `wrangler.prod.toml`), not in the dashboard. A bare `wrangler deploy` of the committed `wrangler.toml` would overwrite them with the empty placeholders, so deploy with `bun run deploy`.
 
 **The Account row.** The first request that needs it creates the `users` row for `ACCOUNT_USERNAME` (an idempotent insert; the check is cached per Worker isolate). If that row is missing **and** the table already holds other users — you changed `ACCOUNT_USERNAME`, or migrated a multi-user deployment — RSilo will not create a second row: storage returns `503` and `/account` and the consent page show a *username mismatch* message. Set `ACCOUNT_USERNAME` to the existing account you want to keep: the `/account` page (shown only to you, the Owner) names the stored username and gives the exact click path; the public storage `503` never names it. Other rows are ignored, not deleted. Because the default is `me`, an Instance created before `ACCOUNT_USERNAME` became optional keeps its username only while the setting stays in place; if it was removed, the mismatch page tells you what to set it back to.
 
@@ -165,7 +162,35 @@ The committed `wrangler.toml` holds placeholder IDs so the Deploy to Cloudflare 
 bun run deploy
 ```
 
-If `wrangler.prod.toml` is missing, it falls back to the committed `wrangler.toml` — the path Cloudflare's button uses, where the IDs are injected for you. To rebuild the prod config after provisioning new resources, re-run `bun run setup` (or copy `wrangler.toml` and paste in the IDs by hand).
+If `wrangler.prod.toml` is missing, it looks your D1 database up by name and writes one for it (see [Automatic deploys](#automatic-deploys-cloudflare-workers-builds)); if that finds nothing, it deploys the committed `wrangler.toml`, the path Cloudflare's button uses, where the IDs are injected for you. To rebuild the prod config after provisioning new resources, re-run `bun run setup` (or copy `wrangler.toml` and paste in the IDs by hand).
+
+Each deploy first bundles the Worker without uploading it (`wrangler deploy --dry-run`), so a build error stops it before the database changes. It then applies pending D1 migrations, and stops without deploying if they were not applied (for example when you answer "no" at wrangler's prompt). It refuses a config that sets `RSILO_DEV_MODE=true`.
+
+### Rolling back a bad release
+
+Before it applies migrations, `bun run deploy` prints the commands that undo the release, with the D1 Time Travel bookmark of that moment. Workers Builds prints them in the build log; run them from a checkout after `wrangler login`.
+
+- **A release without migrations:** `wrangler rollback` puts the previous Worker version back.
+- **A release with migrations:** restore the database first, then roll back. The previous code may not run on the new schema.
+
+  ```bash
+  wrangler d1 time-travel restore DB --bookmark=<printed bookmark> --config wrangler.prod.toml
+  wrangler rollback --config wrangler.prod.toml
+  ```
+
+  In a checkout without `wrangler.prod.toml` (a Deploy-button Instance), drop `--config`, name the database (`remotestorage-db`) instead of `DB`, and give `wrangler rollback` your Worker's name with `--name`. Without the bookmark, `--timestamp=<a time just before the deploy>` (RFC 3339 or Unix seconds) works too. Time Travel reaches back 7 days on the Workers Free plan and 30 on Paid. Restoring D1 undoes token changes made since then (apps that connected afterwards connect again) and never touches your files.
+
+### Updating a Deploy-button Instance
+
+The button copied this repository into your GitHub account and connected the copy to Workers Builds, so a push to its `main` deploys. RSilo fixes made here do not reach your copy by themselves. To pull them in, use **Sync fork** on GitHub if your copy has it, or from a clone of your copy:
+
+```bash
+git remote add upstream https://github.com/jonocodes/RSilo.git   # once
+git pull upstream main
+git push
+```
+
+The push deploys. Check once, under your Worker's **Settings → Builds**, that the deploy command is `bun run deploy` (it applies migrations and keeps your dashboard settings; a bare `wrangler deploy` does neither), and set the build command recommended below.
 
 ### Automatic deploys (Cloudflare Workers Builds)
 
@@ -173,14 +198,21 @@ To release on every push to `main`, connect the repository to your Worker using 
 
 1. Cloudflare dashboard → **Workers & Pages** → your Worker → **Settings → Builds** → connect the Git repository.
 2. Set the **production branch** to `main`, and leave preview builds off (or on) as you prefer.
-3. Set the **deploy command** to:
+3. Set the **build command** to:
+
+   ```bash
+   bun run typecheck && bun run test
+   ```
+
+   Workers Builds does not wait for the GitHub checks, so without this a push to `main` with failing tests still deploys. The tests need Node 22.13 or newer; if the build image has an older one, add the build variable `NODE_VERSION=22`.
+4. Set the **deploy command** to:
 
    ```bash
    bun run deploy
    ```
 
-4. No build variables are needed. On the build, `bun run deploy` finds your D1 database by name (`remotestorage-db`), materialises `wrangler.prod.toml` for it, applies D1 migrations, and deploys, so a recreated database is picked up automatically. If you gave `bun run setup` other names with `RSILO_BUCKET` / `RSILO_DB`, add the same two as **Build variables**. A `D1_DATABASE_ID` build variable from older instructions is ignored; you can delete it.
-5. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them. If your files are in an [S3 bucket](#use-an-s3-bucket-instead-of-r2), keep the `S3_*` settings there too (`S3_SECRET_ACCESS_KEY` as a *Secret*) and add the build variable `RSILO_STORAGE=s3`.
+5. No build variables are needed. On the build, `bun run deploy` finds your D1 database by name (`remotestorage-db`), materialises `wrangler.prod.toml` for it, checks the bundle, applies D1 migrations, and deploys, so a recreated database is picked up automatically. If you gave `bun run setup` other names with `RSILO_BUCKET` / `RSILO_DB`, add the same two as **Build variables**. A `D1_DATABASE_ID` build variable from older instructions is ignored; you can delete it.
+6. Keep `OWNER_EMAIL` (and `ACCOUNT_USERNAME` / `PUBLIC_BASE_URL`, if you set them) in the Worker's **Variables and Secrets** (type *Text*); builds keep them. If your files are in an [S3 bucket](#use-an-s3-bucket-instead-of-r2), keep the `S3_*` settings there too (`S3_SECRET_ACCESS_KEY` as a *Secret*) and add the build variable `RSILO_STORAGE=s3`.
 
 `bun run deploy` uses the same entry point in both places, so local and CI deploys stay identical.
 
@@ -222,9 +254,9 @@ Every state-changing `/account` request must come from the page itself (`Sec-Fet
 
 ## Change your sign-in email
 
-Your dashboard shows **Signed in as \<email\>** and a **Change your sign-in email** section with these steps. The email lives in two places, and both must change, in the Cloudflare dashboard:
+Your dashboard shows **Signed in as \<email\>** and a **Change your sign-in email** section with these steps. The email lives in two places, and both must change:
 
-1. **The Worker's `OWNER_EMAIL`:** **Workers & Pages → \<worker name\> → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy** (or re-run `bun run setup --owner-email=new@example.com`).
+1. **The Worker's `OWNER_EMAIL`.** If you set up with `bun run setup`, re-run `bun run setup --owner-email=new@example.com`. Don't edit it in the dashboard: `wrangler.prod.toml` holds the old email, and your next `bun run deploy` would put it back. Otherwise (Deploy button, or settings kept in the dashboard): **Workers & Pages → \<worker name\> → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy**.
 2. **The Access application's Allow policy:** **Zero Trust → Access → Applications → RSilo app → Policies**, and include the new email. Otherwise Access will not let the new email through at all.
 
 If you update only the policy, you will see the *Not allowed* page, which shows the email you signed in with. If you unset `OWNER_EMAIL`, `/account` shows the *finish setup* page again (apps keep syncing) and, once you sign in through Access, offers your signed-in email to copy.
@@ -232,6 +264,40 @@ If you update only the policy, you will see the *Not allowed* page, which shows 
 ## Change your storage quota
 
 Your `/account` dashboard shows how much you have stored against your quota (10 GiB by default). To change it, enter a new value in GB under the usage bar and press **Save**. The quota is a limit you set for yourself, for example to stay inside R2's free tier. Setting it below what is already stored keeps your files but blocks new writes (apps get `507 Insufficient Storage`) until you free up space or raise it.
+
+## Backups
+
+Your Instance holds the only copy of what your apps store, and a delete is permanent, whether you made it in the file manager or an app synced a mistake. Keep a copy somewhere else.
+
+**Files in R2.** Create an R2 API token (**R2 → Manage API tokens → Create API token**, permission *Object Read only*, for your bucket) and add it as an [rclone](https://rclone.org/) remote:
+
+```ini
+# ~/.config/rclone/rclone.conf
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = <Access Key ID>
+secret_access_key = <Secret Access Key>
+endpoint = https://<account id>.r2.cloudflarestorage.com
+```
+
+Then copy the bucket on a schedule (cron, launchd or Task Scheduler):
+
+```bash
+rclone sync r2:remotestorage ./rsilo-backup --backup-dir "./rsilo-deleted/$(date +%F)"
+```
+
+`sync` makes `./rsilo-backup` match the bucket; `--backup-dir` moves files that were deleted or changed since the last run into a dated folder instead of losing them. To restore, copy files back with `rclone copy` (the usage figure on `/account` is not recomputed).
+
+**Files in an S3 bucket.** The same works with an rclone remote for your provider. Backblaze B2 also keeps every version of a file by default (the bucket's lifecycle setting *Keep all versions*), so a deleted or overwritten file can be brought back from the B2 web UI. Old versions count toward the 10 GB free tier.
+
+**The database.** D1 holds your app tokens, your quota and the usage counter, never files. Cloudflare's D1 Time Travel keeps restorable history automatically: 7 days on the Workers Free plan, 30 on Paid (see [Rolling back a bad release](#rolling-back-a-bad-release)). Were it lost, apps would connect again and your files would be untouched.
+
+**The offline server.** Copy `data/storage/`, and back up the database with SQLite's `.backup` rather than `cp`, which can catch it mid-write:
+
+```bash
+sqlite3 data/remotestorage.db ".backup 'rsilo-backup.db'"
+```
 
 ## Upgrading an existing deployment
 
@@ -256,18 +322,15 @@ Apps do **not** need any setup on your side — there is no client registration 
 3. The page shows the app (by its origin host), the modules it asks for and whether it wants read-only or read-write access, and **where it will send you back to**. Allow or deny.
 4. The app gets a token and starts syncing into that module.
 
+Apps built on remoteStorage.js get a one-hour token that cannot be renewed, so while you use one it sends you back to this page about once an hour (see [Token lifetimes](#token-lifetimes)).
+
 Your `/account` dashboard lists each app that still holds an unexpired token once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
 Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `http(s)` URL, and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
 
 ## Share a file publicly
 
-Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. The write uses the same `<module>` scope as the private data:
-
-```bash
-bun run dev-token alice 'documents:rw'
-# then PUT to /storage/alice/public/documents/hello.txt and GET it without auth
-```
+Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. An app writes there with the same `<module>` scope as its private data; for a by-hand example, see [Public files](#public-files).
 
 ## One Account per Instance
 
@@ -327,11 +390,21 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. "Local" is read from the request's `Host` header, which any client can set, so the offline server listens on `127.0.0.1` only: whoever can reach its port is the Owner, so don't forward or proxy it. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404. `bun run dev` runs `wrangler dev`; copy `.dev.vars.example` to `.dev.vars` to configure it and explicit local-development mode.
+`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. "Local" is read from the request's `Host` header, which any client can set, so the offline server listens on `127.0.0.1` only: whoever can reach its port is the Owner, so don't forward or proxy it. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404.
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
 Offline documents are stored under `data/storage/` with percent-encoded file names and their metadata in `data/storage/.meta/`; this layout is new, so delete `data/storage/` (or re-upload your files) after upgrading from an older RSilo.
+
+## Local development (wrangler dev)
+
+To run the Worker itself in workerd, with a local D1 and R2 simulation:
+
+```bash
+cp .dev.vars.example .dev.vars   # dev mode and the dev defaults
+bun run db:migrate               # applies drizzle/migrations to the local D1 (once, and after new migrations)
+bun run dev                      # wrangler dev on http://localhost:8787
+```
 
 ## API reference
 
@@ -342,7 +415,7 @@ GET    /api              Scalar UI (documentation only — no request console)
 GET    /openapi.json     The OpenAPI 3.1 spec
 ```
 
-A static, always-current list of every endpoint lives in **[docs/api.md](docs/api.md)**. The spec is derived from `app.routes` and a metadata registry, so it cannot drift: `bun run docs:api` regenerates the static list, `bun run docs:api:check` verifies it without writing, and a test (run in CI) fails if it is stale.
+A static, always-current list of every endpoint lives in **[docs/api.md](docs/api.md)**. The spec is derived from `app.routes` and a metadata registry, so the list of routes cannot drift (summaries and status codes in the registry are maintained by hand): `bun run docs:api` regenerates the static list, `bun run docs:api:check` verifies it without writing, and a test (run in CI) fails if it is stale.
 
 ## Authentication
 
@@ -358,8 +431,6 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. remoteStorage.js uses implicit, which returns the access token in the redirect fragment and has no refresh token. The code flow requires [PKCE](https://datatracker.ietf.org/doc/html/rfc7636) with `code_challenge_method=S256`, as OAuth 2.1 does for public clients. Without it the consent page answers `400`, and the token endpoint refuses a missing or wrong `code_verifier` with `invalid_grant`. A code is single-use: any attempt to redeem it spends it, even a failed one.
 
-Access tokens last 1 hour (both flows) and refresh tokens 30 days. Refresh tokens rotate on every use, and each rotation issues a fresh 30-day one; only the newest refresh token works, and a superseded or expired one gets `invalid_grant`. Expired tokens and codes are deleted whenever new tokens are issued.
-
 A `scope` is space-separated `<module>:r` or `<module>:rw` items (see [Storage scopes](#storage-scopes)). Anything else, including a bare `*`, sends the app back to its `redirect_uri` with `error=invalid_scope`; nothing is granted.
 
 The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
@@ -369,6 +440,19 @@ PKCE is `S256` only. The `plain` method, or a challenge with no method, is a `40
 Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
 
 The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) cache discovery results, so that URL still answers `GET` with a `302` to `/account/oauth/authorize`, passing the query string through unchanged. `POST` there returns `405`, and any `:user` other than the Account returns `404`.
+
+### Token lifetimes
+
+| Token | Lifetime | Renewal |
+|-------|----------|---------|
+| Authorization code | 10 minutes, single use | none |
+| Access token | 1 hour | code flow: the refresh token; implicit flow: none, the app asks again |
+| Refresh token (code flow only) | 30 days | each use rotates it, returning a new access token and a new 30-day refresh token |
+| Dev token (`bun run dev-token`) | 30 days | none |
+
+Only the newest refresh token works: a superseded or expired one gets `invalid_grant`. Expired tokens and codes are deleted whenever new tokens are issued, and revoking an app deletes all of its tokens at once.
+
+The implicit flow, which remoteStorage.js apps use, issues no refresh token. These apps lose access after an hour and send the Owner back through the consent page, and through an Access sign-in once that session has expired.
 
 ### Discovery
 
@@ -426,22 +510,33 @@ curl -X PUT http://localhost:8787/storage/alice/public/documents/shared.txt \
 curl http://localhost:8787/storage/alice/public/documents/shared.txt
 # → Cache-Control: no-cache
 ```
+
+## Project layout
+
+```
 src/
   index.ts            Worker entry (Hono app)
-  server-offline.ts   Offline dev server (Node + local filesystem/SQLite)
+  server-offline.ts   Offline dev server (Bun + local directory/SQLite)
+  config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL, S3_* settings) and dev defaults
+  types.ts            Worker bindings (AppEnv) and the StorageInterface every backend implements
   routes/             storage, webfinger, oauth (discovery, token, legacy consent redirect), account,
-                      consent (/account/oauth/authorize), debug, mount (shared route table)
-  config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL defaults) and dev defaults
-  services/           auth, identity (Owner resolver: Cloudflare Access or dev identity; CSRF check),
-                      account (Account row lifecycle), discovery (advertised URLs, WebFinger
-                      matching), r2 (+ getStorage adapter), local-storage, db/ (schema
-                      types, SQLite D1 shim that applies the migrations)
-  middleware/         auth, cors, instance (config + Account gates), owner (/account gate + CSRF)
+                      consent (/account/oauth/authorize), debug, docs (/api, /openapi.json),
+                      mount (shared route table and error handler)
+  middleware/         auth (storage authorization), cors, instance (config + Account gates),
+                      owner (/account gate + CSRF)
+  services/           auth (scopes), identity (Owner resolver: Cloudflare Access or dev identity),
+                      account (Account row lifecycle), discovery (advertised URLs, WebFinger matching),
+                      tokens (codes, tokens, refresh rotation), pkce, rate-limit,
+                      r2 (+ getStorage), s3, local-storage, quota-storage (quota-aware writes),
+                      object-size, storage-errors, db/ (schema types, SQLite D1 shim)
+  openapi/            route registry, OpenAPI spec and the docs/api.md renderer
   ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation, path validation)
-  scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, dev-token, setup-local-db
+  scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
+                      (bundle check + migrations, shared by both), wrangler-config,
+                      dev-token, setup-local-db, render-api-docs
 drizzle/migrations/   D1 migrations
-test/                 unit, compliance and E2E suites
+test/                 unit, contract, compliance and E2E suites; helpers/ holds the storage and D1 fakes
 ```
 
 ## Testing
@@ -455,7 +550,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**773 tests** across 36 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 
@@ -463,9 +558,12 @@ Every test that touches the database runs the real SQL that production runs: the
 
 ## Known limitations
 
-- **Rate limiting is per Cloudflare location** — the native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7)
-- **Buffered uploads** — upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately; downloads stream
-- **Conditional writes are not atomic on S3** — on R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them with a `HEAD` just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete
+- **Rate limiting is per Cloudflare location.** The native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7).
+- **Apps built on remoteStorage.js re-authorize hourly.** The implicit flow they use issues a one-hour access token and no refresh token, so they send the Owner back to the consent page about once an hour. See [Token lifetimes](#token-lifetimes).
+- **Buffered uploads.** Upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately. Downloads stream, except from the offline server.
+- **Conditional writes are not atomic on S3.** On R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them with a `HEAD` just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete.
+- **S3 folder listings have no content types.** S3 listings do not carry them, so on S3 storage a folder listing reports `application/octet-stream` for every document. A `GET` of the document returns its real type.
+- **The account area shares the storage origin.** The remoteStorage spec (§14) suggests a separate origin for consent and revocation ([ADR-0004](docs/adr/0004-merged-account-control-plane.md)). RSilo serves stored files with `Content-Security-Policy: sandbox`, so they cannot run scripts on that origin.
 
 ## References
 
