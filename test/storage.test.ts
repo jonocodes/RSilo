@@ -131,6 +131,19 @@ describe('PUT + GET storage', () => {
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('PUT');
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    expect(res.headers.get('Vary')).toBe('Origin');
+  });
+
+  it('echoes the Origin with Vary: Origin and never allows credentials', async () => {
+    const res = await app.request(
+      'http://localhost/storage/alice/public/documents/missing.txt',
+      { headers: { Origin: 'https://app.example' } },
+      TEST_ENV
+    );
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example');
+    expect(res.headers.get('Vary')).toContain('Origin');
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBeNull();
   });
 });
 

@@ -50,15 +50,3 @@ export function isValidPath(path: string): boolean {
   const segments = trimmed.split('/');
   return segments.every(s => s.length > 0 && !s.startsWith('.') && !s.includes('\0'));
 }
-
-// Generate ETag from content
-export function generateETag(content: string): string {
-  const hash = 0;
-  return `"${content.length}-${hash}"`;
-}
-
-// Parse bearer token
-export function parseAuthHeader(header: string | null): string | null {
-  if (!header?.startsWith('Bearer ')) return null;
-  return header.slice(7);
-}

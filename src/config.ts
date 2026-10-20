@@ -21,7 +21,8 @@ export function isLocalDevelopment(env?: unknown): boolean {
 // - PUBLIC_BASE_URL defaults to the request's own origin. On Cloudflare
 //   Workers that is trustworthy: the edge answers 403 to a Host that is not
 //   one of the Worker's own hostnames, so such a request never reaches the
-//   Worker. X-Forwarded-* and the raw Host header are never consulted.
+//   Worker. That edge check is the only reason the request's Host is trusted;
+//   X-Forwarded-* is never consulted.
 //
 // Dev mode (RSILO_DEV_MODE=true) keeps fixed defaults instead: username
 // "alice", Owner alice@example.com and origin http://localhost:8787, so local

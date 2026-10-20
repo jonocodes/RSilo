@@ -63,7 +63,7 @@ export function buildOpenApiDocument(app: { routes: readonly RouteLike[] }) {
         'The complete surface of this RemoteStorage-compatible server: storage, WebFinger, OAuth, account and debug routes. ' +
         'Documentation only — the interactive request console is disabled. ' +
         'Protocol routes follow the RemoteStorage specification and the referenced RFCs. ' +
-        'CORS preflight (OPTIONS) handlers are omitted.',
+        'CORS preflight (OPTIONS) is answered on every path and not listed.',
     },
     servers: [{ url: '/' }],
     tags: TAGS,

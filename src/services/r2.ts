@@ -50,7 +50,6 @@ export class R2Storage {
   async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
     const object = await this.bucket.put(key, body, {
       httpMetadata: { contentType },
-      customMetadata: { uploaded: new Date().toISOString() },
       onlyIf: r2OnlyIf(condition),
     });
     // R2 checks onlyIf atomically and answers a failed one with null, storing nothing.

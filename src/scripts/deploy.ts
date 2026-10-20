@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { withoutEmptyVars, withoutR2Buckets } from './setup-config';
+import { prepareRelease, devModeProblem, type Wrangler } from './release';
+import { readVars, withoutEmptyVars, withoutR2Buckets } from './setup-config';
 import { DEPLOY_CONFIG, PROD_CONFIG, configArgs } from './wrangler-config';
 
 const ROOT = process.cwd();
@@ -78,10 +79,19 @@ if (deployToml !== sourceToml) {
   console.log(`Leaving empty vars out of the deploy (${DEPLOY_CONFIG}); dashboard values are kept`);
 }
 
-function run(cliArgs: string[]): void {
-  const res = spawnSync(WRANGLER, [...cliArgs, ...args], { stdio: 'inherit' });
-  if ((res.status ?? 1) !== 0) process.exit(res.status ?? 1);
+function fail(msg: string): never {
+  console.error(`\n✘ ${msg}\n`);
+  process.exit(1);
 }
 
-run(['d1', 'migrations', 'apply', 'DB', '--remote']);
-if (!migrateOnly) run(['deploy', '--keep-vars']);
+const wrangler: Wrangler = (cliArgs, capture = false) => {
+  const res = spawnSync(WRANGLER, cliArgs, { encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit' });
+  return { status: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
+};
+
+const devMode = devModeProblem(readVars(deployToml));
+if (devMode) fail(devMode);
+
+const problem = prepareRelease(wrangler, args, { bundle: !migrateOnly });
+if (problem) fail(problem);
+if (!migrateOnly && wrangler(['deploy', '--keep-vars', ...args]).status !== 0) fail('Deploy failed.');

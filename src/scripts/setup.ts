@@ -1,7 +1,8 @@
 // `bun run setup`: provisions R2 + D1, writes wrangler.prod.toml (resource IDs
-// and the Instance vars), migrates, deploys, and prints the manual Cloudflare
-// Access steps. Sets no secrets. Safe to re-run: existing vars are kept unless
-// changed. Pure logic lives in ./setup-config.ts (unit-tested).
+// and the Instance vars), checks the bundle, migrates, deploys, and prints the
+// manual Cloudflare Access steps. With R2 it sets no secrets (S3 mode: below).
+// Safe to re-run: existing vars are kept unless changed. Pure logic lives in
+// ./setup-config.ts (unit-tested).
 //
 // It asks for one thing, OWNER_EMAIL. ACCOUNT_USERNAME (default "me") and
 // PUBLIC_BASE_URL (default: the request's own origin, so the workers.dev URL)
@@ -38,6 +39,7 @@ import {
   type S3SetupVar,
   type SetupVar,
 } from './setup-config';
+import { devModeProblem, prepareRelease } from './release';
 import { PROD_CONFIG } from './wrangler-config';
 
 const ROOT = process.cwd();
@@ -145,6 +147,9 @@ if (s3Mode) {
   }
 }
 
+const devMode = devModeProblem(existingVars);
+if (devMode) fail(devMode);
+
 async function askHidden(question: string): Promise<string> {
   process.stdout.write(question);
   const muted = new Writable({ write: (_chunk, _encoding, done) => done() });
@@ -230,10 +235,8 @@ function writeProdConfig(): void {
 writeProdConfig();
 console.log(`✓ ${PROD_CONFIG} written with resource IDs and vars (gitignored)`);
 
-console.log('\nApplying D1 migrations…');
-if (wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', PROD_CONFIG_PATH]).status !== 0) {
-  fail('D1 migrations failed.');
-}
+const releaseProblem = prepareRelease(wrangler, ['--config', PROD_CONFIG]);
+if (releaseProblem) fail(releaseProblem);
 
 // One deploy. The Worker needs no URL of its own (it answers on whatever host
 // Cloudflare routes to it); the workers.dev URL is read back only for the
@@ -258,7 +261,7 @@ if (!baseUrl) {
 
 ${accessSteps('https://your-worker.your-subdomain.workers.dev', settings.OWNER_EMAIL)}
 
-${changeOwnerEmailSteps(null)}
+${changeOwnerEmailSteps()}
 `);
   process.exit(0);
 }
@@ -279,5 +282,5 @@ console.log(`
 
 ${accessSteps(baseUrl, settings.OWNER_EMAIL)}
 
-${changeOwnerEmailSteps(new URL(deployedUrl ?? baseUrl).host)}
+${changeOwnerEmailSteps()}
 `);
