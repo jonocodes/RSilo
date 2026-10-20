@@ -7,6 +7,13 @@ import { generateToken, hashToken } from './auth';
 export const ACCESS_TOKEN_TTL_SECONDS = 3600;
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 86400;
 export const CODE_TTL_SECONDS = 600;
+// The implicit flow (remoteStorage.js) has no refresh token, so its access
+// token lasts 30 days from its last use instead: an app in use never asks the
+// Owner again, and an abandoned one still expires.
+export const IMPLICIT_TOKEN_TTL_SECONDS = 30 * 86400;
+// How often an implicit token's expiry is pushed forward, at most, so use
+// costs one D1 write a day rather than one per request.
+const IMPLICIT_RENEWAL_INTERVAL_SECONDS = 86400;
 
 export interface IssuedTokens {
   accessToken: string;
@@ -59,9 +66,9 @@ export async function redeemCode(db: D1Database, code: string): Promise<Authoriz
 }
 
 /**
- * Stores a new token row: a 1-hour access token and, if asked, a 30-day
- * refresh token. Expired rows and codes are purged first, so they never pile
- * up.
+ * Stores a new token row: a 1-hour access token and a 30-day refresh token,
+ * or for the implicit flow a sliding 30-day access token and none. Expired
+ * rows and codes are purged first, so they never pile up.
  */
 export async function issueTokens(
   db: D1Database,
@@ -81,13 +88,29 @@ export async function issueTokens(
     crypto.randomUUID(),
     await hashToken(accessToken),
     refreshToken ? await hashToken(refreshToken) : null,
-    now + ACCESS_TOKEN_TTL_SECONDS,
+    now + (refreshToken ? ACCESS_TOKEN_TTL_SECONDS : IMPLICIT_TOKEN_TTL_SECONDS),
     refreshToken ? now + REFRESH_TOKEN_TTL_SECONDS : null,
     grant.scope,
     grant.user,
     grant.clientId,
   ).run();
   return { accessToken, refreshToken };
+}
+
+/**
+ * Pushes an implicit-flow token's expiry to 30 days from now, if it was last
+ * pushed over a day ago. Code-flow tokens keep their 1-hour expiry; dev
+ * tokens, which also have no refresh token, slide too.
+ */
+export async function renewImplicitToken(
+  db: D1Database,
+  row: { access_token_hash: string; expires_at: number; has_refresh_token: number },
+): Promise<void> {
+  const now = nowSeconds();
+  if (row.has_refresh_token || row.expires_at > now + IMPLICIT_TOKEN_TTL_SECONDS - IMPLICIT_RENEWAL_INTERVAL_SECONDS) return;
+  await db.prepare('UPDATE oauth_tokens SET expires_at = ? WHERE access_token_hash = ? AND refresh_token_hash IS NULL')
+    .bind(now + IMPLICIT_TOKEN_TTL_SECONDS, row.access_token_hash)
+    .run();
 }
 
 /**
