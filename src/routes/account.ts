@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
+import { isValidPath } from '../protocol/constants';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
@@ -95,6 +96,12 @@ function escapeHtml(s: string): string {
 
 function encodePath(p: string): string {
   return p.split('/').map(encodeURIComponent).join('/');
+}
+
+// Files written here follow the storage API's path rules, so nothing is created
+// that apps could not read back and no `..` segment reaches a backend key.
+function isValidDocumentPath(path: string): boolean {
+  return path !== '' && !path.endsWith('/') && isValidPath(path);
 }
 
 const COMMON_CSS = `
@@ -422,7 +429,7 @@ accountRouter.get('/browse/*', async (c) => {
   let cumPath = '';
   for (const seg of pathSegments) {
     cumPath += (cumPath ? '/' : '') + seg;
-    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodeURIComponent(cumPath)}">${escapeHtml(seg)}</a>`);
+    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodePath(cumPath)}">${escapeHtml(seg)}</a>`);
   }
 
   const rows = items.length
@@ -535,7 +542,7 @@ accountRouter.get('/view/*', async (c) => {
   let cumPath = '';
   for (let i = 0; i < pathSegments.length - 1; i++) {
     cumPath += (cumPath ? '/' : '') + pathSegments[i];
-    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodeURIComponent(cumPath)}">${escapeHtml(pathSegments[i])}</a>`);
+    breadcrumb.push(`<span>/</span><a href="/account/browse/${encodePath(cumPath)}">${escapeHtml(pathSegments[i])}</a>`);
   }
   breadcrumb.push(`<span>/</span>${escapeHtml(filename)}`);
 
@@ -567,6 +574,7 @@ accountRouter.post('/save/*', async (c) => {
 
   const filePath = c.req.path.replace(/^\/account\/save\/?/, '');
   if (!filePath) return c.redirect('/account/browse', 302);
+  if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
   const body = await c.req.parseBody() as any;
   const content: string = body.content ?? '';
@@ -624,13 +632,16 @@ accountRouter.post('/upload/*', async (c) => {
   if (fileList.some((file) => file.size > maximum)) {
     return c.text('Object exceeds the configured size limit', 413);
   }
+  const filePaths = fileList.map((file) => folderPath ? `${folderPath}/${file.name}` : file.name);
+  if (fileList.some((file) => file.name.includes('/')) || !filePaths.every(isValidDocumentPath)) {
+    return c.text('Invalid path', 400);
+  }
 
   const storage = getStorage(c);
   const db = getDb(c);
 
-  for (const file of fileList) {
-    const filePath = folderPath ? `${folderPath}/${file.name}` : file.name;
-    const key = buildKey(username, filePath);
+  for (const [i, file] of fileList.entries()) {
+    const key = buildKey(username, filePaths[i]);
     const buffer = await file.arrayBuffer();
     const existing = await storage.head(key);
     try {
@@ -661,6 +672,7 @@ accountRouter.post('/delete/*', async (c) => {
 
   const filePath = c.req.path.replace(/^\/account\/delete\/?/, '');
   if (!filePath) return c.redirect('/account/browse', 302);
+  if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
   const storage = getStorage(c);
   const key = buildKey(username, filePath);
@@ -683,6 +695,6 @@ accountRouter.post('/delete/*', async (c) => {
   }
 
   const parentPath = filePath.split('/').slice(0, -1).join('/');
-  return c.redirect(`/account/browse${parentPath ? '/' + encodeURIComponent(parentPath) : ''}`, 302);
+  return c.redirect(`/account/browse${parentPath ? '/' + encodePath(parentPath) : ''}`, 302);
 });
 

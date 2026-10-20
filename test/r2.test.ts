@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { R2Storage } from '../src/services/r2';
+import { createServer } from '../src/index';
+import { createSqliteD1 } from '../src/services/db/sqlite';
+import { seedToken } from './helpers/tokens';
 
 describe('R2Storage.list', () => {
   it('follows every cursor until the listing is complete', async () => {
@@ -28,9 +31,39 @@ describe('R2Storage.list', () => {
       'users/alice/storage/b.txt',
     ]);
     expect(calls).toEqual([
-      { prefix: 'users/alice/storage/', cursor: undefined },
-      { prefix: 'users/alice/storage/', cursor: 'page-2' },
+      { prefix: 'users/alice/storage/', cursor: undefined, include: ['httpMetadata'] },
+      { prefix: 'users/alice/storage/', cursor: 'page-2', include: ['httpMetadata'] },
     ]);
+  });
+
+  it("gives folder listings each document's Content-Type", async () => {
+    const env = {
+      // An R2 binding (createMultipartUpload marks it) that, like R2, returns
+      // httpMetadata in a listing only when asked to.
+      STORAGE: {
+        createMultipartUpload() {},
+        list: async (options: { include?: string[] }) => ({
+          objects: [{
+            key: 'users/alice/storage/documents/note.txt',
+            size: 2,
+            etag: 'n',
+            ...(options.include?.includes('httpMetadata') ? { httpMetadata: { contentType: 'text/plain' } } : {}),
+          }],
+          truncated: false,
+        }),
+      },
+      DB: createSqliteD1(),
+    };
+    const token = seedToken(env, 'alice');
+
+    const res = await createServer(env).request(
+      'http://localhost/storage/alice/documents/',
+      { headers: { 'Authorization': `Bearer ${token}` } },
+      env
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json() as any).items['note.txt']['Content-Type']).toBe('text/plain');
   });
 
   it('rejects an incomplete truncated response without a cursor', async () => {

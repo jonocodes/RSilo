@@ -523,3 +523,90 @@ describe('Files — view binary redirect URL', () => {
     expect(location).not.toContain('%2F');
   });
 });
+
+describe('Files — nested paths keep real separators', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+  });
+
+  beforeEach(() => {
+    storage.clear();
+    storage.set('users/alice/storage/documents/a/b/note.txt', {
+      body: new TextEncoder().encode('hi').buffer,
+      contentType: 'text/plain',
+      etag: '"nested"',
+    });
+  });
+
+  it('browse and view breadcrumbs link each folder by its real path', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    for (const url of ['http://localhost/account/browse/documents/a/b', 'http://localhost/account/view/documents/a/b/note.txt']) {
+      const html = await (await app.request(url, { method: 'GET' }, env)).text();
+      expect(html).toContain('href="/account/browse/documents/a"');
+      expect(html).toContain('href="/account/browse/documents/a/b"');
+      expect(html).not.toContain('%2F');
+    }
+  });
+
+  it('delete redirects to the real parent path', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const res = await app.request('http://localhost/account/delete/documents/a/b/note.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/account/browse/documents/a/b');
+  });
+});
+
+describe('Files — path validation', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+  });
+
+  beforeEach(() => {
+    storage.clear();
+    storage.set('users/alice/storage/documents/.hidden', {
+      body: new TextEncoder().encode('legacy').buffer,
+      contentType: 'text/plain',
+      etag: '"hidden"',
+    });
+  });
+
+  const upload = (folder: string, filename: string) => {
+    const form = new FormData();
+    form.append('files', new File(['x'], filename, { type: 'text/plain' }));
+    return app.request(`http://localhost/account/upload/${folder}`, {
+      method: 'POST',
+      body: form,
+      headers: SAME_ORIGIN,
+    }, { STORAGE: mockStorage, DB: makeDb() } as any);
+  };
+
+  it('rejects upload file names the storage API would refuse, writing nothing', async () => {
+    for (const [folder, filename] of [
+      ['documents', '../../escape.txt'],
+      ['documents', 'sub/file.txt'],
+      ['documents', '.env'],
+      ['.config', 'file.txt'],
+    ]) {
+      const res = await upload(folder, filename);
+      expect(res.status).toBe(400);
+    }
+    expect([...storage.keys()]).toEqual(['users/alice/storage/documents/.hidden']);
+  });
+
+  it('rejects saving or deleting a path the storage API would refuse', async () => {
+    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const form = new FormData();
+    form.append('content', 'overwritten');
+    const save = await app.request('http://localhost/account/save/documents/.hidden', { method: 'POST', body: form, headers: SAME_ORIGIN }, env);
+    expect(save.status).toBe(400);
+
+    const del = await app.request('http://localhost/account/delete/documents/.hidden', { method: 'POST', headers: SAME_ORIGIN }, env);
+    expect(del.status).toBe(400);
+
+    expect(new TextDecoder().decode(storage.get('users/alice/storage/documents/.hidden')?.body as ArrayBuffer)).toBe('legacy');
+  });
+});

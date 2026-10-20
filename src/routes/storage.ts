@@ -68,7 +68,13 @@ storageRouter.get('/:username/public', async (c) => {
   return c.redirect('/storage/' + c.req.param('username') + '/public/', 301);
 });
 
-storageRouter.get('/:username/public/*', async (c) => {
+// Public documents are readable by anyone, but a public folder listing is a
+// normal folder read: it needs `<module>:r` (`*:r` for `public/` itself), the
+// same as a private one.
+storageRouter.get('/:username/public/*', async (c, next) => {
+  if (c.req.path.endsWith('/')) return requireScope('r')(c, next);
+  await next();
+}, async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handlePublicStorageGet(c, username, fullPath);
@@ -117,20 +123,31 @@ async function shortHash(input: string): Promise<string> {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
+// A folder's version: a hash of every document below it, as its path relative
+// to the folder plus its ETag. The parent's listing entry for a folder and the
+// folder's own GET hash the same inputs, so they agree and clients get a 304
+// until a descendant changes.
+function folderVersion(documents: { path: string; etag: string }[]): Promise<string> {
+  return shortHash(documents.map(d => `${d.path}:${stripQuotes(d.etag)}`).sort().join('\n'));
+}
+
+// Documents are app-supplied but served from the account origin: a browser
+// opening one must not run it there, nor sniff a more dangerous type.
+const DOCUMENT_HEADERS = {
+  'Content-Security-Policy': 'sandbox',
+  'X-Content-Type-Options': 'nosniff',
+};
+
 async function handlePublicStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
   const path = extractStoragePath(fullPath, username);
   const storage = getStorage(c);
 
-  if (path === '' || path.endsWith('/')) {
-    const payload = c.get('tokenPayload') as TokenPayload | undefined;
-    if (!payload || payload.sub !== username) {
-      return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-    }
-    return handleFolderGet(c, storage, username, path);
-  }
-
   if (!isValidPath(path)) {
     return c.text('Invalid path', 400);
+  }
+
+  if (path === '' || path.endsWith('/')) {
+    return handleFolderGet(c, storage, username, path);
   }
 
   const key = buildKey(username, path);
@@ -159,6 +176,7 @@ async function handlePublicStorageGet(c: any, username: string, fullPath: string
       'Cache-Control': 'no-cache',
       'Content-Encoding': 'identity',
       'Last-Modified': httpDate(result.metadata.lastModified),
+      ...DOCUMENT_HEADERS,
     },
   });
 }
@@ -208,6 +226,7 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
       'Cache-Control': 'no-cache',
       'Content-Encoding': 'identity',
       'Last-Modified': httpDate(result.metadata.lastModified),
+      ...DOCUMENT_HEADERS,
     },
   });
 }
@@ -219,13 +238,17 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   const { objects } = await storage.list(folderKey);
 
   const items: Record<string, any> = {};
-  const folderChildren: Record<string, string[]> = {};
+  // Directory markers (keys ending in `/`, which LocalStorage lists) are not
+  // documents, so they never count towards a folder's version.
+  const documents: { path: string; etag: string }[] = [];
+  const subfolderDocuments: Record<string, { path: string; etag: string }[]> = {};
 
   for (const obj of objects) {
     const relativePath = obj.key.slice(folderKey.length);
     if (!relativePath) continue;
     const isFolder = relativePath.endsWith('/');
     const segments = relativePath.split('/').filter(Boolean);
+    if (!isFolder) documents.push({ path: relativePath, etag: obj.etag });
     if (!isFolder && segments.length === 1) {
       items[segments[0]] = {
         ETag: stripQuotes(obj.etag),
@@ -235,20 +258,21 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
       };
     } else {
       const folderName = segments[0] + '/';
-      (folderChildren[folderName] ||= []).push(`${relativePath}:${obj.etag}`);
+      const children = (subfolderDocuments[folderName] ||= []);
+      if (!isFolder) children.push({ path: relativePath.slice(folderName.length), etag: obj.etag });
       if (!items[folderName]) items[folderName] = { ETag: '' };
     }
   }
 
-  for (const [folderName, children] of Object.entries(folderChildren)) {
-    items[folderName].ETag = await shortHash(children.sort().join('\n'));
+  for (const [folderName, children] of Object.entries(subfolderDocuments)) {
+    items[folderName].ETag = await folderVersion(children);
   }
 
   const folder = createEmptyFolder();
   folder.items = items;
 
   const folderJson = JSON.stringify(folder);
-  const etag = `"${await shortHash(folderJson)}"`;
+  const etag = `"${await folderVersion(documents)}"`;
 
   const ifNoneMatch = c.req.header('If-None-Match');
   if (ifNoneMatch) {
