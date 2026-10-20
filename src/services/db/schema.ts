@@ -32,8 +32,12 @@ export interface OAuthToken {
   id: string;
   access_token_hash: string;
   refresh_token_hash: string | null;
+  /** Unused since 0006 (a superseded refresh token is rejected); always NULL. */
   previous_refresh_token_hash: string | null;
+  /** Access token expiry. */
   expires_at: number;
+  /** Refresh token expiry; NULL when there is no refresh token (implicit flow). */
+  refresh_expires_at: number | null;
   scopes: string;
   user_id: string;
   client_id: string;

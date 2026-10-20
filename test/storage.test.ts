@@ -707,7 +707,8 @@ describe('Public storage', () => {
   });
 
   it('GET /storage/:user/public (no trailing slash) with auth redirects to /public/', async () => {
-    const token = seedToken(TEST_ENV, 'alice', 'public:rw');
+    // A root-level name, so it needs the root scope, as public/ itself does.
+    const token = seedToken(TEST_ENV, 'alice', '*:r');
     const res = await app.request(
       'http://localhost/storage/alice/public',
       { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },

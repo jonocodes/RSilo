@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
-import { generateToken, hashToken } from '../services/auth';
 import { requireAccountPath, requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { accountUrls } from '../services/discovery';
 import { PKCE_METHODS, verifyPkce } from '../services/pkce';
+import { ACCESS_TOKEN_TTL_SECONDS, issueTokens, redeemCode, rotateRefreshToken } from '../services/tokens';
+import type { IssuedTokens } from '../services/tokens';
+import type { Context } from '../types';
 
 export const oauthRouter = new Hono();
 
@@ -35,111 +37,87 @@ oauthRouter.post('/:user/authorize', requireInstanceConfig(), requireAccountPath
   return c.text('Method Not Allowed: consent is submitted at /account/oauth/authorize', 405, { Allow: 'GET, OPTIONS' });
 });
 
-oauthRouter.post('/:user/token', ...forAccount, async (c) => {
-  const contentType = c.req.header('Content-Type') || '';
-
-  let grantType: string;
-  let code: string | undefined;
-  let redirectUri: string | undefined;
-  let refreshToken: string | undefined;
-  let codeVerifier: string | undefined;
-
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const params = new URLSearchParams(await c.req.text());
-    grantType = params.get('grant_type') || '';
-    code = params.get('code') || undefined;
-    redirectUri = params.get('redirect_uri') || undefined;
-    refreshToken = params.get('refresh_token') || undefined;
-    codeVerifier = params.get('code_verifier') || undefined;
-  } else {
-    const json = await c.req.json() as any;
-    grantType = json.grant_type || '';
-    code = json.code;
-    redirectUri = json.redirect_uri;
-    refreshToken = json.refresh_token;
-    codeVerifier = json.code_verifier;
+// The token request's parameters, form-encoded (RFC 6749) or JSON. Null when
+// the body is not a well-formed object of either kind.
+async function tokenRequestParams(c: Context): Promise<Record<string, unknown> | null> {
+  try {
+    if ((c.req.header('Content-Type') || '').includes('application/x-www-form-urlencoded')) {
+      return Object.fromEntries(new URLSearchParams(await c.req.text()));
+    }
+    const json: unknown = await c.req.json();
+    return json !== null && typeof json === 'object' && !Array.isArray(json) ? json as Record<string, unknown> : null;
+  } catch {
+    return null;
   }
+}
 
-  const db = (c.env as any).DB;
+function tokenResponse(c: Context, tokens: IssuedTokens, scope: string): Response {
+  return c.json({
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+    token_type: 'Bearer',
+    expires_in: ACCESS_TOKEN_TTL_SECONDS,
+    scope,
+  });
+}
+
+oauthRouter.post('/:user/token', ...forAccount, async (c) => {
+  const params = await tokenRequestParams(c);
+  if (!params) {
+    return c.json({ error: 'invalid_request', error_description: 'body must be a form-encoded or JSON object' }, 400);
+  }
+  const param = (name: string) => (typeof params[name] === 'string' && params[name] ? params[name] as string : undefined);
+  const grantType = param('grant_type');
+
+  // Tokens and codes live in D1; dev mode may run without it.
+  const db = (c.env as { DB?: D1Database }).DB;
+  if (!db) return c.json({ error: 'server_error', error_description: 'Server database is not configured' }, 503);
 
   if (grantType === 'authorization_code') {
+    const code = param('code');
+    const redirectUri = param('redirect_uri');
     if (!code || !redirectUri) {
       return c.json({ error: 'invalid_request', error_description: 'code and redirect_uri required' }, 400);
     }
 
-    const codeHash = await hashToken(code);
-    const codeData = await db?.prepare?.(
-      'SELECT * FROM oauth_codes WHERE code_hash = ? AND expires_at > ?'
-    )?.bind?.(codeHash, Math.floor(Date.now() / 1000))?.first?.();
-
+    // A code is spent by any attempt to redeem it, successful or not.
+    const codeData = await redeemCode(db, code);
     if (!codeData) {
       return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
     }
-
-    // A code is spent by any attempt to redeem it, successful or not.
-    await db?.prepare?.('DELETE FROM oauth_codes WHERE code_hash = ?')?.bind?.(codeHash)?.run?.();
 
     if (codeData.redirect_uri !== redirectUri) {
       return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
     }
 
     // Every code carries an S256 challenge (the consent page requires one).
-    if (typeof codeVerifier !== 'string' || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
+    const codeVerifier = param('code_verifier');
+    if (!codeVerifier || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
       return c.json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' }, 400);
     }
 
-    const accessToken = generateToken();
-    const newRefreshToken = generateToken();
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-
-    await db?.prepare?.(
-      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )?.bind?.(crypto.randomUUID(), await hashToken(accessToken), await hashToken(newRefreshToken), expiresAt, codeData.scope, codeData.user_id, codeData.client_id)?.run?.();
-
-    return c.json({
-      access_token: accessToken,
-      refresh_token: newRefreshToken,
-      token_type: 'Bearer',
-      expires_in: 3600,
+    const tokens = await issueTokens(db, {
+      clientId: codeData.client_id,
+      user: codeData.user_id,
       scope: codeData.scope,
+      withRefreshToken: true,
     });
+    return tokenResponse(c, tokens, codeData.scope);
   }
 
   if (grantType === 'refresh_token') {
+    const refreshToken = param('refresh_token');
     if (!refreshToken) {
       return c.json({ error: 'invalid_request' }, 400);
     }
 
-    // Refresh tokens rotate on use, but the one just replaced stays valid
-    // until its replacement is first used, so a client that lost the refresh
-    // response can retry. Using the current token retires the previous one.
-    const refreshHash = await hashToken(refreshToken);
-    const tokenData = await db?.prepare?.(
-      'SELECT * FROM oauth_tokens WHERE refresh_token_hash = ? OR previous_refresh_token_hash = ?'
-    )?.bind?.(refreshHash, refreshHash)?.first?.();
-
-    if (!tokenData) {
-      return c.json({ error: 'invalid_grant', error_description: 'Invalid refresh token' }, 400);
+    // Refresh tokens rotate on use and expire after 30 days. Only the newest
+    // one works: a superseded refresh token is invalid_grant.
+    const rotated = await rotateRefreshToken(db, refreshToken);
+    if (!rotated) {
+      return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
     }
-
-    const previousHash = tokenData.refresh_token_hash === refreshHash
-      ? refreshHash
-      : tokenData.previous_refresh_token_hash;
-    const accessToken = generateToken();
-    const newRefreshToken = generateToken();
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-
-    await db?.prepare?.(
-      'UPDATE oauth_tokens SET access_token_hash = ?, refresh_token_hash = ?, previous_refresh_token_hash = ?, expires_at = ? WHERE id = ?'
-    )?.bind?.(await hashToken(accessToken), await hashToken(newRefreshToken), previousHash, expiresAt, tokenData.id)?.run?.();
-
-    return c.json({
-      access_token: accessToken,
-      refresh_token: newRefreshToken,
-      token_type: 'Bearer',
-      expires_in: 3600,
-      scope: tokenData.scopes,
-    });
+    return tokenResponse(c, rotated, rotated.scope);
   }
 
   if (grantType === 'client_credentials') {

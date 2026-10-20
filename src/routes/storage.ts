@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import { authMiddleware, requireScope } from '../middleware/auth';
+import { storageAuth } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
 import { isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
-import type { TokenPayload } from '../services/auth';
-import type { StorageInterface } from '../types';
+import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { isLocalDevelopment } from '../config';
 import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
@@ -62,37 +61,27 @@ storageRouter.use('/:username/*', async (c, next) => {
 });
 storageRouter.use('/*', requireAccountRow());
 
-storageRouter.use('/*', authMiddleware());
+// Every storage request is authorized here, once (services/auth.ts authorize).
+// Public documents are readable by anyone, but a public folder listing is a
+// normal folder read: it needs `<module>:r` (`*:r` for `public/` itself).
+storageRouter.use('/*', storageAuth());
 
 storageRouter.get('/:username/public', async (c) => {
   return c.redirect('/storage/' + c.req.param('username') + '/public/', 301);
 });
 
-// Public documents are readable by anyone, but a public folder listing is a
-// normal folder read: it needs `<module>:r` (`*:r` for `public/` itself), the
-// same as a private one.
-storageRouter.get('/:username/public/*', async (c, next) => {
-  if (c.req.path.endsWith('/')) return requireScope('r')(c, next);
-  await next();
-}, async (c) => {
-  const username = c.req.param('username') || '';
-  const fullPath = c.req.path;
-  return handlePublicStorageGet(c, username, fullPath);
-});
+const getRoute = (c: Context) => handleStorageGet(c, c.req.param('username') || '', c.req.path);
+// The same GET; registered on its own so the API docs list public reads.
+storageRouter.get('/:username/public/*', getRoute);
+storageRouter.get('/:username/*', getRoute);
 
-storageRouter.get('/:username/*', requireScope('r'), async (c) => {
-  const username = c.req.param('username') || '';
-  const fullPath = c.req.path;
-  return handleStorageGet(c, username, fullPath);
-});
-
-storageRouter.put('/:username/*', requireScope('rw'), async (c) => {
+storageRouter.put('/:username/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handleStoragePut(c, username, fullPath);
 });
 
-storageRouter.delete('/:username/*', requireScope('rw'), async (c) => {
+storageRouter.delete('/:username/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handleStorageDelete(c, username, fullPath);
@@ -138,56 +127,8 @@ const DOCUMENT_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 };
 
-async function handlePublicStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
-  const storage = getStorage(c);
-
-  if (!isValidPath(path)) {
-    return c.text('Invalid path', 400);
-  }
-
-  if (path === '' || path.endsWith('/')) {
-    return handleFolderGet(c, storage, username, path);
-  }
-
-  const key = buildKey(username, path);
-
-  const result = await storage.get(key);
-  if (!result) {
-    return c.text('Not Found', 404);
-  }
-
-  const etag = normalizeETag(result.metadata.etag);
-
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch && etag) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304 });
-    }
-  }
-
-  return new Response(result.body, {
-    status: 200,
-    headers: {
-      'Content-Type': result.metadata.contentType,
-      'Content-Length': result.metadata.contentLength.toString(),
-      'ETag': etag || '',
-      'Cache-Control': 'no-cache',
-      'Content-Encoding': 'identity',
-      'Last-Modified': httpDate(result.metadata.lastModified),
-      ...DOCUMENT_HEADERS,
-    },
-  });
-}
-
 async function handleStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
   const path = extractStoragePath(fullPath, username);
-
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
 
   if (!isValidPath(path)) {
     return c.text('Invalid path', 400);
@@ -296,11 +237,6 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
 async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {
   const path = extractStoragePath(fullPath, username);
 
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
-
   if (!isValidPath(path)) {
     return c.text('Invalid path', 400);
   }
@@ -367,11 +303,6 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
 
 async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
   const path = extractStoragePath(fullPath, username);
-
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
 
   if (!isValidPath(path)) {
     return c.text('Invalid path', 400);

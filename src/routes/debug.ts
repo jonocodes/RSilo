@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { hasScope, hashToken, scopeFromPath } from '../services/auth';
+import { grants, hashToken, moduleOf, parseScope } from '../services/auth';
 import { buildKey, getStorage } from '../services/r2';
 import { RATE_LIMITS } from '../services/rate-limit';
 import { S3_VARS, getInstanceConfig, getStorageConfig, isLocalDevelopment } from '../config';
@@ -112,7 +112,10 @@ async function tokenHandler(c: any) {
     .filter(Boolean);
   if (requested.length) {
     result.scope_checks = Object.fromEntries(
-      requested.map((scope: string) => [scope, !!result.scopes && hasScope(result.scopes, scope)]),
+      requested.map((scope: string) => {
+        const required = parseScope(scope);
+        return [scope, !!result.scopes && !!required && grants(result.scopes, required.module, required.access)];
+      }),
     );
   }
 
@@ -401,7 +404,7 @@ debugRouter.all('/echo', async (c) => {
     const username = segments[start] || '';
     const relSegments = segments.slice(start + 1);
     const path = relSegments.join('/');
-    const { module } = scopeFromPath(storagePath);
+    const module = moduleOf(storagePath.endsWith('/') ? `${path}/` : path);
     const method = (c.req.query('method') || c.req.method).toUpperCase();
     const permission = method === 'GET' || method === 'HEAD' ? 'r' : method === 'PUT' || method === 'DELETE' ? 'rw' : null;
 

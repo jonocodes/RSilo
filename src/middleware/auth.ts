@@ -1,16 +1,13 @@
 import type { Context, Next } from '../types';
-import { parseAuthHeader, hasScope, scopeFromPath, hashToken } from '../services/auth';
+import { authorize, parseAuthHeader, hashToken } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
 
 // Access tokens are opaque bearer tokens: a token is valid exactly while its
 // unexpired row exists in oauth_tokens (ADR-0003). Rows hold only its hash.
-async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayload | null> {
-  const db = (c.env as any)?.DB;
-  if (!db || typeof db.prepare !== 'function') return null;
-
+async function resolveTokenPayload(db: D1Database, token: string): Promise<TokenPayload | null> {
   const row = await db.prepare(
-    'SELECT * FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?'
-  ).bind(await hashToken(token), Math.floor(Date.now() / 1000)).first() as any;
+    'SELECT user_id, scopes, created_at, expires_at FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?'
+  ).bind(await hashToken(token), Math.floor(Date.now() / 1000)).first<{ user_id: string; scopes: string; created_at: number; expires_at: number }>();
 
   if (!row) return null;
   return {
@@ -21,81 +18,42 @@ async function resolveTokenPayload(c: Context, token: string): Promise<TokenPayl
   };
 }
 
-const PUBLIC_PATH = /^\/storage\/[^/]+\/public\//;
-
-export function authMiddleware() {
+/**
+ * Authenticates and authorizes every /storage request: resolves the bearer
+ * token, if any, and lets authorize() decide. Reads are GET and HEAD; any
+ * other method needs write access.
+ */
+export function storageAuth() {
   return async (c: Context, next: Next) => {
     // Tokens live in D1, so storage auth is configured once the DB is bound.
-    if (!(c.env as any)?.DB) {
+    const db = (c.env as { DB?: D1Database } | undefined)?.DB;
+    if (!db) {
       return c.text('Server authentication is not configured', 503);
     }
 
-    const path = c.req.path;
-    const method = c.req.method;
+    const token = parseAuthHeader(c.req.header('Authorization') ?? null);
+    const payload = token ? await resolveTokenPayload(db, token) : null;
 
-    // Public reads (/storage/<user>/public/...) may be anonymous, but still
-    // resolve a supplied token so that folder listings there can be authorised.
-    if (PUBLIC_PATH.test(path) && (method === 'GET' || method === 'HEAD')) {
-      const token = parseAuthHeader(c.req.header('Authorization') ?? null);
-      if (token) {
-        const payload = await resolveTokenPayload(c, token);
-        if (payload) c.set('tokenPayload', payload);
-      }
-      await next();
-      return;
+    // c.req.path is /storage/<username>/<path>.
+    const rest = c.req.path.slice('/storage/'.length);
+    const slash = rest.indexOf('/');
+    const username = slash === -1 ? rest : rest.slice(0, slash);
+    const path = slash === -1 ? '' : rest.slice(slash + 1);
+    const access = c.req.method === 'GET' || c.req.method === 'HEAD' ? 'r' : 'rw';
+
+    const denied = authorize(payload, username, path, access);
+    if (!denied) return next();
+
+    if (denied.status === 401) {
+      return token
+        ? c.text('Invalid token', 401, { 'WWW-Authenticate': 'Bearer realm="storage" error="invalid_token"' })
+        : c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
     }
-
-    const authHeader = c.req.header('Authorization') ?? null;
-    const token = parseAuthHeader(authHeader);
-
-    if (!token) {
-      return c.text('Unauthorized', 401, {
-        'WWW-Authenticate': 'Bearer realm="storage"',
-      });
-    }
-
-    const payload = await resolveTokenPayload(c, token);
-    if (payload) {
-      c.set('tokenPayload', payload);
-      await next();
-      return;
-    }
-
-    return c.text('Invalid token', 401, {
-      'WWW-Authenticate': 'Bearer realm="storage" error="invalid_token"',
-    });
-  };
-}
-
-export function requireScope(scope: 'r' | 'rw') {
-  return async (c: Context, next: Next) => {
-    const payload = c.get('tokenPayload') as TokenPayload | undefined;
-    if (!payload) {
-      return c.text('Unauthorized', 401, {
-        'WWW-Authenticate': 'Bearer realm="storage"',
-      });
-    }
-
-    const path = c.req.path;
-    const { module } = scopeFromPath(path);
-    const usernameFromUrl = c.req.param('username') || '';
-
-    if (!module || module === '..' || module === '.' || module.includes('..') || module.includes('/')) {
-      return c.text('Invalid path', 400);
-    }
-
-    if (usernameFromUrl !== payload.sub) {
-      return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-    }
-
-    const requiredScope = `${module}:${scope}`;
-
-    if (!hasScope(payload.scopes, requiredScope)) {
+    if (denied.requiredScope) {
       return c.text('Insufficient scope', 403, {
-        'WWW-Authenticate': `Bearer realm="storage" scope="${requiredScope}" error="insufficient_scope"`,
+        'WWW-Authenticate': `Bearer realm="storage" scope="${denied.requiredScope}" error="insufficient_scope"`,
       });
     }
-
-    await next();
+    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
   };
 }

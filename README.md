@@ -256,7 +256,7 @@ Apps do **not** need any setup on your side — there is no client registration 
 3. The page shows the app (by its origin host), the modules it asks for and whether it wants read-only or read-write access, and **where it will send you back to**. Allow or deny.
 4. The app gets a token and starts syncing into that module.
 
-Your `/account` dashboard lists each app once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
+Your `/account` dashboard lists each app that still holds an unexpired token once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
 Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `http(s)` URL, and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
 
@@ -356,7 +356,9 @@ A static, always-current list of every endpoint lives in **[docs/api.md](docs/ap
 
 Both `response_type=code` (authorization code) and `response_type=token` (implicit) are supported. remoteStorage.js uses implicit, which returns the access token in the redirect fragment and has no refresh token. The code flow requires [PKCE](https://datatracker.ietf.org/doc/html/rfc7636) with `code_challenge_method=S256`, as OAuth 2.1 does for public clients. Without it the consent page answers `400`, and the token endpoint refuses a missing or wrong `code_verifier` with `invalid_grant`. A code is single-use: any attempt to redeem it spends it, even a failed one.
 
-Refresh tokens rotate on every use. The refresh token just replaced stays valid until its replacement is first used, so an app that lost a refresh response can retry with the old one.
+Access tokens last 1 hour (both flows) and refresh tokens 30 days. Refresh tokens rotate on every use, and each rotation issues a fresh 30-day one; only the newest refresh token works, and a superseded or expired one gets `invalid_grant`. Expired tokens and codes are deleted whenever new tokens are issued.
+
+A `scope` is space-separated `<module>:r` or `<module>:rw` items (see [Storage scopes](#storage-scopes)). Anything else, including a bare `*`, sends the app back to its `redirect_uri` with `error=invalid_scope`; nothing is granted.
 
 The consent page is always for the Account, so its URL has no username; tokens are always issued for the Account, and `/oauth/:user/token` returns `404` when `:user` is not `ACCOUNT_USERNAME`. The token endpoint stays outside `/account` and is not behind Access, since apps call it directly.
 
@@ -404,9 +406,9 @@ Scopes are per-module and grant read (`r`) or read-write (`rw`) access:
 |-------|--------|
 | `documents:rw` | Read and write the `documents` module |
 | `pictures:r` | Read-only access to `pictures` |
-| `*:rw` | Read and write all modules |
+| `*:rw` | Read and write all of storage |
 
-Module names are arbitrary — any name works. Files under `public/<module>/` are readable without auth (files only; folder listings require auth).
+A module scope covers `/<module>/…` and `/public/<module>/…`. Everything else (root-level documents, the root folder, `public/` itself and documents directly in it) needs `*:r` or `*:rw`. Module names are lower-case letters, digits, `-` and `_`; `public` is reserved. `rw` includes `r`; any other level (`read`, `w`, a bare `*`) is invalid. Files under `public/<module>/` are readable without auth (files only; folder listings require auth).
 
 ### Public files
 

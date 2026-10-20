@@ -102,10 +102,10 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'POST /oauth/{user}/token': {
     summary: 'Exchange code or refresh token',
     tags: ['OAuth'],
-    description: 'Supports grant_type=authorization_code (with the PKCE code_verifier) and grant_type=refresh_token. Refresh tokens rotate; the previous one stays valid until its replacement is used. Tokens are issued for the Account only.',
+    description: 'Supports grant_type=authorization_code (with the PKCE code_verifier) and grant_type=refresh_token. Access tokens last 1 hour, refresh tokens 30 days. Refresh tokens rotate on every use; a superseded one is invalid_grant. Tokens are issued for the Account only.',
     responses: {
       '200': { description: 'Access token (and refresh token).' },
-      '400': { description: 'invalid_grant.' },
+      '400': { description: 'invalid_request (including a body that is not a form-encoded or JSON object), invalid_grant, or unsupported_grant_type.' },
       '404': { description: '{user} is not ACCOUNT_USERNAME.' },
     },
   },
@@ -199,13 +199,14 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s http(s) URL. Clients are not pre-registered.' },
       { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An http(s) URL on the same origin as client_id.' },
       { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
-      { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated scopes, e.g. documents:rw. Defaults to documents:rw.' },
+      { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated <module>:r or <module>:rw scopes, e.g. documents:rw; *:r or *:rw for all of storage. Defaults to documents:rw.' },
       { name: 'state', in: 'query', required: false, schema: { type: 'string' } },
       { name: 'code_challenge', in: 'query', required: false, schema: { type: 'string' }, description: 'PKCE (RFC 7636): base64url SHA-256 of the code_verifier, 43 characters. Required for response_type=code; ignored for token.' },
       { name: 'code_challenge_method', in: 'query', required: false, schema: { type: 'string', enum: ['S256'] }, description: 'Required with code_challenge. plain is refused.' },
     ],
     responses: {
       '200': { description: 'The consent page.' },
+      '302': { description: 'Back to the redirect_uri with error=invalid_scope when the scope is malformed.' },
       '400': { description: 'Invalid request, including a redirect_uri origin other than the client_id origin. Never redirects.' },
       '403': { description: 'A signed-in identity other than OWNER_EMAIL.' },
     },
@@ -216,9 +217,10 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     security: ACCESS,
     description: 'Form fields: action (approve or deny) plus the request parameters. Approving with response_type=token '
       + 'redirects with the access token in the fragment; with code, with a code for /oauth/{user}/token. '
-      + 'Deny redirects with error=access_denied.',
+      + 'Deny redirects with error=access_denied, a malformed scope with error=invalid_scope.',
     responses: {
       '302': { description: 'Back to the app\'s redirect_uri.' },
+      '503': { description: 'No database is bound, so nothing can be issued.' },
       '400': { description: 'Invalid request, including a redirect_uri origin other than the client_id origin. Never redirects.' },
       '403': { description: 'Cross-site request, or an identity other than OWNER_EMAIL.' },
     },

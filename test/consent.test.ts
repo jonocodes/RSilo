@@ -122,6 +122,14 @@ describe('consent page (GET /account/oauth/authorize)', () => {
     expect(await res.text()).toContain('name="scope" value="documents:rw"');
   });
 
+  it('renders every requested scope, the root scope included', async () => {
+    const res = await app.request(`${CONSENT_URL}?${query({ scope: '*:rw notes:r' })}`, {}, devEnv());
+    const html = await res.text();
+    expect(html).toContain('<strong>All your storage</strong>: read and write');
+    expect(html).toContain('<strong>notes</strong>: read only');
+    expect(html).not.toContain('access</div>');
+  });
+
   it('requires client_id and redirect_uri', async () => {
     const res = await app.request(CONSENT_URL, {}, devEnv());
     expect(res.status).toBe(400);
@@ -187,6 +195,52 @@ describe('redirect_uri origin check (protocol §10)', () => {
   it('accepts a redirect_uri on the client_id origin with a different path and query', async () => {
     const res = await app.request(`${CONSENT_URL}?${query({ client_id: 'https://app.example/some/page', redirect_uri: 'https://APP.example:443/x?y=1' })}`, {}, devEnv());
     expect(res.status).toBe(200);
+  });
+});
+
+describe('scope validation', () => {
+  const INVALID = ['*', 'documents', 'documents:read', 'documents:rwx', 'Documents:rw', 'public:rw', 'documents:rw pictures', '   '];
+
+  for (const scope of INVALID) {
+    it(`GET with scope "${scope}" sends the app invalid_scope and renders nothing`, async () => {
+      const res = await app.request(`${CONSENT_URL}?${query({ scope })}`, {}, devEnv());
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('Location')!);
+      expect(location.origin + location.pathname).toBe('https://app.example/cb');
+      expect(location.searchParams.get('error')).toBe('invalid_scope');
+      expect(location.searchParams.get('state')).toBe('s=1&t=2');
+    });
+  }
+
+  it('POST approve with an invalid scope issues nothing, in either flow', async () => {
+    const env = devEnv();
+    for (const responseType of ['code', 'token']) {
+      const res = await post(env, form({ scope: '*', response_type: responseType }));
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('Location')!);
+      expect(location.searchParams.get('error')).toBe('invalid_scope');
+      expect(location.searchParams.get('code')).toBeNull();
+      expect(location.hash).toBe('');
+    }
+    expect(count(env, 'oauth_codes')).toBe(0);
+    expect(count(env, 'oauth_tokens')).toBe(0);
+    expect(count(env, 'oauth_clients')).toBe(0);
+  });
+
+  it('an invalid scope with an untrusted redirect_uri is a 400 page, not a redirect', async () => {
+    const res = await app.request(`${CONSENT_URL}?${query({ scope: '*', redirect_uri: 'https://evil.example/cb' })}`, {}, devEnv());
+    expect(res.status).toBe(400);
+    expect(res.headers.get('Location')).toBeNull();
+  });
+});
+
+describe('approve without a database', () => {
+  it('is a 503 for both flows, never a token or code that was not stored', async () => {
+    for (const responseType of ['code', 'token']) {
+      const res = await post({ STORAGE: new MemoryStorage() }, form({ response_type: responseType }));
+      expect(res.status).toBe(503);
+      expect(res.headers.get('Location')).toBeNull();
+    }
   });
 });
 

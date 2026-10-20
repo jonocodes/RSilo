@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { generateToken, hashToken } from '../services/auth';
+import { generateToken, hashToken, parseScopes } from '../services/auth';
 import { createSqliteD1 } from '../services/db/sqlite';
 
 // Issues an opaque bearer token for local development by inserting a row into
@@ -24,6 +24,10 @@ if (args.includes('-h') || args.includes('--help')) {
 
 const useD1 = args.includes('--d1');
 const [username = 'alice', scopes = 'documents:rw pictures:rw'] = args.filter(arg => !arg.startsWith('--'));
+if (!parseScopes(scopes)) {
+  console.error(`Invalid scopes "${scopes}": use space-separated <module>:r or <module>:rw (*:rw for all of storage).`);
+  process.exit(1);
+}
 
 const now = Math.floor(Date.now() / 1000);
 const accessToken = generateToken();
