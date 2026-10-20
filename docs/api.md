@@ -84,7 +84,7 @@ app — the interactive view is at `GET /api`, the raw spec at `GET /openapi.jso
 
 ## Notes
 
-**Storage.** Requires `Authorization: Bearer <token>` with appropriate scope. Paths ending in `/` are folders. Downloads stream from object storage. Upload request bodies are read with a hard size bound and then buffered so RSilo can reserve the exact size delta before writing; the default limit is 10 MiB. PUT, account upload/save, and delete operations update per-user usage through the same quota-aware path. Reservations are atomic and are rolled back if object storage fails.
+**Storage.** Requires `Authorization: Bearer <token>` with appropriate scope. Paths ending in `/` are folders. Downloads stream from R2 or S3. Upload request bodies are read with a hard size bound and then buffered so RSilo can reserve the exact size delta before writing; the default limit is 10 MiB. PUT, account upload/save, and delete operations update the Account's usage through the same quota-aware path. Reservations are atomic and are rolled back if object storage fails. Each write is conditioned on the version it was accounted against, so usage stays exact when writes race (except on S3, see the README's Known limitations). A write over the quota gets `507`, a body over the size limit `413`, a failed `If-Match` / `If-None-Match: *` `412`, and a `PUT` where a document and a folder would share a name `409`. `HEAD` and a matching `If-None-Match` are answered from metadata without fetching the body.
 
 **WebFinger / OAuth.** Endpoints are listed above; the flow is documented under [Authentication](../README.md#authentication) in the README.
 

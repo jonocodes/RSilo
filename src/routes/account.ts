@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
-import { decodeItemPath } from '../protocol/item-path';
+import { decodeItemPath, isValidItemName } from '../protocol/item-path';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
-import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { deleteUserObject, putUserObject } from '../services/quota-storage';
+import { writeErrorResponse } from './storage';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
 import { requireAccountRow } from '../middleware/instance';
 import { requireOwner, requireSameOrigin } from '../middleware/owner';
@@ -98,12 +99,18 @@ function encodePath(p: string): string {
   return p.split('/').map(encodeURIComponent).join('/');
 }
 
-// The decoded item path after /account/<route>/ (see protocol/item-path.ts),
-// or "" for anything that isn't a valid path, which the routes treat as the
-// root / not found.
-function accountItemPath(c: { req: { path: string } }, route: string): string {
+// The decoded item path after /account/<route>/, by the storage API's rules
+// (protocol/item-path.ts), or null when it is not a valid path (a 400). Files
+// written here are then names apps can read back, and no `..` reaches a key.
+function accountItemPath(c: { req: { path: string } }, route: string): string | null {
   const raw = c.req.path.slice(`/account/${route}`.length).replace(/^\//, '');
-  return decodeItemPath(raw) ?? '';
+  return decodeItemPath(raw);
+}
+
+// Upload names are joined onto an already decoded folder path, so each name is
+// checked here too.
+function isValidDocumentPath(path: string): boolean {
+  return path !== '' && !path.endsWith('/') && path.split('/').every(isValidItemName);
 }
 
 const COMMON_CSS = `
@@ -240,16 +247,20 @@ accountRouter.get('/', async (c) => {
   const instance = c.get('instance');
   const username = instance.accountUsername;
   const db = getDb(c);
+  if (!db || typeof db.prepare !== 'function') return c.text('Server database is not configured', 503);
 
-  const usage = await db?.prepare?.('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
-    ?.bind?.(username)?.first?.() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
+  const usage = await db.prepare('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
+    .bind(username).first() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
   const quota = Number(usage?.storage_quota_bytes ?? 0);
   const used = Number(usage?.used_storage_bytes ?? 0);
   const percent = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;
 
-  const tokensResult = await db?.prepare?.('SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ?')
-    ?.bind?.(username)?.all?.() || { results: [] };
-  const grants = groupGrants(tokensResult.results || []);
+  // Only live tokens: an access token or refresh token that has not expired.
+  const now = Math.floor(Date.now() / 1000);
+  const tokensResult = await db.prepare(
+    'SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ? AND (expires_at > ? OR refresh_expires_at > ?)'
+  ).bind(username, now, now).all();
+  const grants = groupGrants(tokensResult.results);
 
   const address = `${username}@${instance.publicHost}`;
   const appRows = grants.length
@@ -423,6 +434,7 @@ accountRouter.get('/browse/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
   const browsePath = accountItemPath(c, 'browse');
+  if (browsePath === null) return c.text('Invalid path', 400);
   const storage = getStorage(c);
   const items = await listFolder(storage, username, browsePath);
 
@@ -486,6 +498,7 @@ accountRouter.get('/download/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
   const filePath = accountItemPath(c, 'download');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -517,6 +530,7 @@ accountRouter.get('/view/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
   const filePath = accountItemPath(c, 'view');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -575,7 +589,9 @@ accountRouter.post('/save/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
   const filePath = accountItemPath(c, 'save');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.redirect('/account/browse', 302);
+  if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
   const body = await c.req.parseBody() as any;
   const content: string = body.content ?? '';
@@ -596,12 +612,9 @@ accountRouter.post('/save/*', async (c) => {
       key,
       body: encoded.buffer as ArrayBuffer,
       contentType,
-      existing,
     });
   } catch (error) {
-    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
 
   return new Response(null, { status: 204 });
@@ -620,6 +633,7 @@ accountRouter.post('/upload/*', async (c) => {
     throw error;
   }
   const folderPath = accountItemPath(c, 'upload');
+  if (folderPath === null) return c.text('Invalid path', 400);
 
   const body = await c.req.parseBody({ all: true }) as any;
   const rawFiles = body['files'];
@@ -633,15 +647,17 @@ accountRouter.post('/upload/*', async (c) => {
   if (fileList.some((file) => file.size > maximum)) {
     return c.text('Object exceeds the configured size limit', 413);
   }
+  const filePaths = fileList.map((file) => folderPath ? `${folderPath}/${file.name}` : file.name);
+  if (fileList.some((file) => file.name.includes('/')) || !filePaths.every(isValidDocumentPath)) {
+    return c.text('Invalid path', 400);
+  }
 
   const storage = getStorage(c);
   const db = getDb(c);
 
-  for (const file of fileList) {
-    const filePath = folderPath ? `${folderPath}/${file.name}` : file.name;
-    const key = buildKey(username, filePath);
+  for (const [i, file] of fileList.entries()) {
+    const key = buildKey(username, filePaths[i]);
     const buffer = await file.arrayBuffer();
-    const existing = await storage.head(key);
     try {
       await putUserObject({
         storage,
@@ -651,12 +667,9 @@ accountRouter.post('/upload/*', async (c) => {
         key,
         body: buffer,
         contentType: file.type || 'application/octet-stream',
-        existing,
       });
     } catch (error) {
-      if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-      throw error;
+      return writeErrorResponse(c, error);
     }
   }
 
@@ -669,26 +682,20 @@ accountRouter.post('/delete/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
   const filePath = accountItemPath(c, 'delete');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.redirect('/account/browse', 302);
+  if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
-  const storage = getStorage(c);
-  const key = buildKey(username, filePath);
-
-  const existing = await storage.head(key);
-  if (existing) {
-    try {
-      await deleteUserObject({
-        storage,
-        db: getDb(c),
-        allowUnaccounted: isLocalDevelopment(c.env),
-        username,
-        key,
-        existing,
-      });
-    } catch (error) {
-      if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-      throw error;
-    }
+  try {
+    await deleteUserObject({
+      storage: getStorage(c),
+      db: getDb(c),
+      allowUnaccounted: isLocalDevelopment(c.env),
+      username,
+      key: buildKey(username, filePath),
+    });
+  } catch (error) {
+    return writeErrorResponse(c, error);
   }
 
   const parentPath = filePath.split('/').slice(0, -1).join('/');

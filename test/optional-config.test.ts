@@ -3,6 +3,7 @@ import { createServer } from '../src/index';
 import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { usernames } from './helpers/db';
 import { tokenHash } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // OWNER_EMAIL is the only required setting. ACCOUNT_USERNAME defaults to "me"
 // and PUBLIC_BASE_URL to the request's own origin; a missing OWNER_EMAIL closes
@@ -12,23 +13,6 @@ import { tokenHash } from './helpers/tokens';
 const app = createServer({});
 const HOST = 'rsilo.test-sub.workers.dev';
 const ORIGIN = `https://${HOST}`;
-
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
 
 function accessCtx(identity: { email?: string } | undefined) {
   return {
@@ -41,21 +25,21 @@ function accessCtx(identity: { email?: string } | undefined) {
 /** Only OWNER_EMAIL set, as after a fresh `bun run setup` or Deploy button. */
 function minimalEnv(extra: Record<string, unknown> = {}) {
   return {
-    STORAGE: new MemoryStorage() as any,
+    STORAGE: new MemoryStorage(),
     DB: createSqliteD1(),
     RSILO_DEV_MODE: 'false',
     STORAGE_LIMITER: { limit: async () => ({ success: true }) },
     OWNER_EMAIL: 'owner@example.com',
     ...extra,
-  } as any;
+  };
 }
 
 /** The Account "me" with an app token (access "tok", refresh "ref"). */
 function seedApp(db: SqliteD1, username = 'me') {
   db.sqlite.exec(`INSERT INTO users (id, username) VALUES ('u1', '${username}')`);
   db.sqlite.exec(`INSERT INTO oauth_clients (id, name, redirect_uris, user_id) VALUES ('https://app.example', 'app', '[]', '${username}')`);
-  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id)
-    VALUES ('t1', '${tokenHash('tok')}', '${tokenHash('ref')}', 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
+  db.sqlite.exec(`INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id)
+    VALUES ('t1', '${tokenHash('tok')}', '${tokenHash('ref')}', 9999999999, 9999999999, 'documents:rw', '${username}', 'https://app.example')`);
 }
 
 const q = (resource: string) => `resource=${encodeURIComponent(resource)}`;

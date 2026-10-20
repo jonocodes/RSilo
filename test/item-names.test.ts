@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
-import { createMemoryStorage } from './helpers/memory-storage';
+import { MemoryStorage } from './helpers/memory-storage';
 
 const ROOT = 'http://localhost/storage/alice/documents';
 
@@ -36,7 +36,7 @@ describe('item names', () => {
   let env: ReturnType<typeof makeEnv>;
   let auth: { Authorization: string };
   function makeEnv() {
-    return { STORAGE: createMemoryStorage() as any, DB: createSqliteD1() };
+    return { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
   }
   beforeEach(() => {
     env = makeEnv();
@@ -74,7 +74,7 @@ describe('item names', () => {
 
   it('stores the decoded name as the key', async () => {
     await req(`${ROOT}/a%3Fb%25c`, { method: 'PUT', body: 'x', headers: { 'Content-Type': 'text/plain' } });
-    expect([...env.STORAGE.items.keys()]).toEqual(['users/alice/storage/documents/a?b%c']);
+    expect([...env.STORAGE.objects.keys()]).toEqual(['users/alice/storage/documents/a?b%c']);
   });
 
   it('accepts other encodings of the same name', async () => {
@@ -96,7 +96,7 @@ describe('item names', () => {
       // request reaches us, so those land on a folder (400) or on the
       // storage root, which a documents:rw token can't write (403).
       expect(res.status).toBeOneOf([400, 403]);
-      expect(env.STORAGE.items.size).toBe(0);
+      expect(env.STORAGE.objects.size).toBe(0);
     });
   }
 });

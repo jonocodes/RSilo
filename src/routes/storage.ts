@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
-import { authMiddleware, requireScope } from '../middleware/auth';
+import { storageAuth } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
-import { normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { FOLDER_MIME_TYPE, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
 import { decodeItemPath } from '../protocol/item-path';
 import { contentRange, parseRange, type ByteRange } from '../protocol/range';
-import type { TokenPayload } from '../services/auth';
-import type { StorageInterface } from '../types';
+import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
+import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
 import { isLocalDevelopment } from '../config';
 import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
@@ -62,44 +62,30 @@ storageRouter.use('/:username/*', async (c, next) => {
 });
 storageRouter.use('/*', requireAccountRow());
 
-storageRouter.use('/*', authMiddleware());
+// Every storage request is authorized here, once (services/auth.ts authorize).
+// Public documents are readable by anyone, but a public folder listing is a
+// normal folder read: it needs `<module>:r` (`*:r` for `public/` itself).
+storageRouter.use('/*', storageAuth());
 
 storageRouter.get('/:username/public', async (c) => {
   return c.redirect('/storage/' + c.req.param('username') + '/public/', 301);
 });
 
-storageRouter.get('/:username/public/*', async (c) => {
-  const username = c.req.param('username') || '';
-  const fullPath = c.req.path;
-  return handlePublicStorageGet(c, username, fullPath);
-});
+const getRoute = (c: Context) => handleStorageGet(c, c.req.param('username') || '', c.req.path);
+// The same GET; registered on its own so the API docs list public reads.
+storageRouter.get('/:username/public/*', getRoute);
+storageRouter.get('/:username/*', getRoute);
 
-storageRouter.get('/:username/*', requireScope('r'), async (c) => {
-  const username = c.req.param('username') || '';
-  const fullPath = c.req.path;
-  return handleStorageGet(c, username, fullPath);
-});
-
-storageRouter.put('/:username/*', requireScope('rw'), async (c) => {
+storageRouter.put('/:username/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handleStoragePut(c, username, fullPath);
 });
 
-storageRouter.delete('/:username/*', requireScope('rw'), async (c) => {
+storageRouter.delete('/:username/*', async (c) => {
   const username = c.req.param('username') || '';
   const fullPath = c.req.path;
   return handleStorageDelete(c, username, fullPath);
-});
-
-storageRouter.options('/*', () => {
-  const headers = new Headers();
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, If-Match, If-None-Match, Origin, X-Requested-With');
-  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, PUT, DELETE, OPTIONS');
-  headers.set('Access-Control-Max-Age', '86400');
-  headers.set('Access-Control-Expose-Headers', 'ETag');
-  return new Response('', { status: 204, headers });
 });
 
 // The decoded path below the user's storage root, or null if it is not made of
@@ -120,102 +106,102 @@ async function shortHash(input: string): Promise<string> {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
-async function handlePublicStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = storagePath(fullPath, username);
-  if (path === null) {
-    return c.text('Invalid path', 400);
-  }
-  const storage = getStorage(c);
-
-  if (path === '' || path.endsWith('/')) {
-    const payload = c.get('tokenPayload') as TokenPayload | undefined;
-    if (!payload || payload.sub !== username) {
-      return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-    }
-    return handleFolderGet(c, storage, username, path);
-  }
-
-  return serveDocument(c, storage, buildKey(username, path));
+// A folder's version: a hash of every document below it, as its path relative
+// to the folder plus its ETag. The parent's listing entry for a folder and the
+// folder's own GET hash the same inputs, so they agree and clients get a 304
+// until a descendant changes.
+function folderVersion(documents: { path: string; etag: string }[]): Promise<string> {
+  return shortHash(documents.map(d => `${d.path}:${stripQuotes(d.etag)}`).sort().join('\n'));
 }
+
+// Documents are app-supplied but served from the account origin: a browser
+// opening one must not run it there, nor sniff a more dangerous type.
+const DOCUMENT_HEADERS = {
+  'Content-Security-Policy': 'sandbox',
+  'X-Content-Type-Options': 'nosniff',
+};
 
 async function handleStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
 
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
-
   if (path === null) {
     return c.text('Invalid path', 400);
   }
 
+  const isFolderRequest = path === '' || path.endsWith('/');
+  const key = buildKey(username, path);
+
   const storage = getStorage(c);
 
-  if (path === '' || path.endsWith('/')) {
+  if (isFolderRequest) {
     return handleFolderGet(c, storage, username, path);
   }
 
-  return serveDocument(c, storage, buildKey(username, path));
-}
-
-// Serves a document, honouring If-None-Match and a single byte Range.
-async function serveDocument(c: any, storage: StorageInterface, key: string): Promise<Response> {
-  const rangeHeader = c.req.header('Range');
-  const ifNoneMatch = c.req.header('If-None-Match');
-
-  // A range needs the size first; a suffix range or a 416 can't be worked
-  // out without it.
-  let range: ByteRange | null = null;
-  let size = 0;
-  if (rangeHeader) {
-    const meta = await storage.head(key);
-    if (!meta) return c.text('Not Found', 404);
-    if (isNotModified(ifNoneMatch, normalizeETag(meta.etag))) return new Response(null, { status: 304 });
-    size = meta.contentLength;
-    const parsed = parseRange(rangeHeader, size);
-    if (parsed === 'unsatisfiable') {
-      return c.text('Range Not Satisfiable', 416, { 'Content-Range': `bytes */${size}` });
+  // HEAD, a conditional GET and a range are answered from metadata first,
+  // without downloading the body. A conditional GET whose ETag no longer
+  // matches then takes a second call, the GET below; a range needs the size.
+  const isHead = c.req.method === 'HEAD';
+  const rangeHeader = isHead ? undefined : c.req.header('Range');
+  if (isHead || c.req.header('If-None-Match') || rangeHeader) {
+    const metadata = await storage.head(key);
+    if (!metadata) return c.text('Not Found', 404);
+    const etag = normalizeETag(metadata.etag) || '';
+    if (ifNoneMatchIncludes(c, etag)) {
+      return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
     }
-    range = parsed;
+    if (isHead) return new Response(null, { status: 200, headers: documentHeaders(metadata) });
+    if (rangeHeader) {
+      const range = parseRange(rangeHeader, metadata.contentLength);
+      if (range === 'unsatisfiable') {
+        return c.text('Range Not Satisfiable', 416, { 'Content-Range': `bytes */${metadata.contentLength}` });
+      }
+      if (range) return serveRange(c, storage, key, range, metadata.contentLength);
+    }
   }
 
-  const result = await storage.get(key, range ? { range } : undefined);
+  const result = await storage.get(key);
   if (!result) {
     return c.text('Not Found', 404);
   }
+  return new Response(result.body, { status: 200, headers: documentHeaders(result.metadata) });
+}
 
-  const etag = normalizeETag(result.metadata.etag);
-  if (!range && isNotModified(ifNoneMatch, etag)) {
-    return new Response(null, { status: 304 });
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': result.metadata.contentType,
-    'ETag': etag || '',
-    'Cache-Control': 'no-cache',
-    'Content-Encoding': 'identity',
-    'Last-Modified': httpDate(result.metadata.lastModified),
-    'Accept-Ranges': 'bytes',
-  };
-  if (!range) {
-    headers['Content-Length'] = result.metadata.contentLength.toString();
-    return new Response(result.body, { status: 200, headers });
-  }
-
+// A single byte range of a document of `size` bytes (protocol/range.ts).
+async function serveRange(c: Context, storage: StorageInterface, key: string, range: ByteRange, size: number): Promise<Response> {
+  const result = await storage.get(key, { range });
+  if (!result) return c.text('Not Found', 404);
   let body = result.body;
   if (body instanceof ArrayBuffer && body.byteLength !== range.length) {
     // the storage backend returned the whole object
     body = body.slice(range.offset, range.offset + range.length);
   }
-  headers['Content-Length'] = range.length.toString();
-  headers['Content-Range'] = contentRange(range, size);
-  return new Response(body, { status: 206, headers });
+  return new Response(body, {
+    status: 206,
+    headers: {
+      ...documentHeaders(result.metadata),
+      'Content-Length': range.length.toString(),
+      'Content-Range': contentRange(range, size),
+    },
+  });
 }
 
-function isNotModified(ifNoneMatch: string | undefined, etag: string | null): boolean {
+function documentHeaders(metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string }): Record<string, string> {
+  return {
+    'Content-Type': metadata.contentType,
+    'Content-Length': metadata.contentLength.toString(),
+    'ETag': normalizeETag(metadata.etag) || '',
+    'Cache-Control': 'no-cache',
+    'Content-Encoding': 'identity',
+    'Last-Modified': httpDate(metadata.lastModified),
+    'Accept-Ranges': 'bytes',
+    ...DOCUMENT_HEADERS,
+  };
+}
+
+function ifNoneMatchIncludes(c: Context, etag: string): boolean {
+  const ifNoneMatch = c.req.header('If-None-Match');
   if (!ifNoneMatch || !etag) return false;
-  return ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim())).includes(stripQuotes(etag));
+  return ifNoneMatch.split(',').map((e) => stripQuotes(e.trim())).includes(stripQuotes(etag));
 }
 
 async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
@@ -225,13 +211,17 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   const { objects } = await storage.list(folderKey);
 
   const items: Record<string, any> = {};
-  const folderChildren: Record<string, string[]> = {};
+  // Directory markers (keys ending in `/`, which some S3 tools create) are not
+  // documents, so they never count towards a folder's version.
+  const documents: { path: string; etag: string }[] = [];
+  const subfolderDocuments: Record<string, { path: string; etag: string }[]> = {};
 
   for (const obj of objects) {
     const relativePath = obj.key.slice(folderKey.length);
     if (!relativePath) continue;
     const isFolder = relativePath.endsWith('/');
     const segments = relativePath.split('/').filter(Boolean);
+    if (!isFolder) documents.push({ path: relativePath, etag: obj.etag });
     if (!isFolder && segments.length === 1) {
       items[segments[0]] = {
         ETag: stripQuotes(obj.etag),
@@ -241,33 +231,30 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
       };
     } else {
       const folderName = segments[0] + '/';
-      (folderChildren[folderName] ||= []).push(`${relativePath}:${obj.etag}`);
+      const children = (subfolderDocuments[folderName] ||= []);
+      if (!isFolder) children.push({ path: relativePath.slice(folderName.length), etag: obj.etag });
       if (!items[folderName]) items[folderName] = { ETag: '' };
     }
   }
 
-  for (const [folderName, children] of Object.entries(folderChildren)) {
-    items[folderName].ETag = await shortHash(children.sort().join('\n'));
+  for (const [folderName, children] of Object.entries(subfolderDocuments)) {
+    items[folderName].ETag = await folderVersion(children);
   }
 
   const folder = createEmptyFolder();
   folder.items = items;
 
   const folderJson = JSON.stringify(folder);
-  const etag = `"${await shortHash(folderJson)}"`;
+  const etag = `"${await folderVersion(documents)}"`;
 
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch) {
-    const requestedEtags = ifNoneMatch.split(',').map((e: string) => stripQuotes(e.trim()));
-    if (requestedEtags.includes(stripQuotes(etag))) {
-      return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
-    }
+  if (ifNoneMatchIncludes(c, etag)) {
+    return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
   }
 
   return new Response(folderJson, {
     status: 200,
     headers: {
-      'Content-Type': 'application/ld+json; charset=utf-8',
+      'Content-Type': FOLDER_MIME_TYPE,
       'ETag': etag,
       'Cache-Control': 'no-cache',
       'Content-Encoding': 'identity',
@@ -277,11 +264,6 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
 
 async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
-
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
 
   if (path === null) {
     return c.text('Invalid path', 400);
@@ -305,55 +287,26 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
     if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
     throw error;
   }
-  const existing = await storage.head(key);
-  const currentEtag = existing ? normalizeETag(existing.etag) : null;
 
-  const ifNoneMatch = c.req.header('If-None-Match');
-  if (ifNoneMatch === '*' && currentEtag) {
-    return c.text('Precondition Failed', 412);
-  }
-
-  const ifMatch = c.req.header('If-Match');
-  if (ifMatch) {
-    if (!currentEtag) {
-      return c.text('Precondition Failed', 412);
-    }
-    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
-      return c.text('Precondition Failed', 412);
-    }
-  }
-
-  const contentType = c.req.header('Content-Type') || 'application/octet-stream';
-  let newEtag: string;
   try {
-    newEtag = await putUserObject({
+    const { etag, created } = await putUserObject({
       storage,
       db: (c.env as any).DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
       key,
       body,
-      contentType,
-      existing,
+      contentType: c.req.header('Content-Type') || 'application/octet-stream',
+      condition: { ifMatch: c.req.header('If-Match'), ifNoneMatch: c.req.header('If-None-Match') },
     });
+    return c.text('', created ? 201 : 200, { 'ETag': normalizeETag(etag) || '' });
   } catch (error) {
-    if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 413);
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
-
-  return c.text('', existing ? 200 : 201, {
-    'ETag': normalizeETag(newEtag) || '',
-  });
 }
 
 async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
-
-  const payload = c.get('tokenPayload') as TokenPayload | undefined;
-  if (!payload || payload.sub !== username) {
-    return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
-  }
 
   if (path === null) {
     return c.text('Invalid path', 400);
@@ -363,39 +316,28 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
     return c.text("can't delete folder directly", 400);
   }
 
-  const key = buildKey(username, path);
-  const storage = getStorage(c);
-
-  const existing = await storage.head(key);
-
-  const ifMatch = c.req.header('If-Match');
-  if (ifMatch) {
-    if (!existing) {
-      return c.text('Precondition Failed', 412);
-    }
-    const currentEtag = normalizeETag(existing.etag) || '';
-    if (ifMatch !== '*' && stripQuotes(ifMatch) !== stripQuotes(currentEtag)) {
-      return c.text('Precondition Failed', 412);
-    }
-  }
-
-  if (!existing) {
-    return c.text('Not Found', 404);
-  }
-
   try {
-    await deleteUserObject({
-      storage,
+    const etag = await deleteUserObject({
+      storage: getStorage(c),
       db: (c.env as any).DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
-      key,
-      existing,
+      key: buildKey(username, path),
+      ifMatch: c.req.header('If-Match'),
     });
+    if (etag === null) return c.text('Not Found', 404);
+    return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(etag) || '' } });
   } catch (error) {
-    if (error instanceof StorageAccountingError) return c.text(error.message, 503);
-    throw error;
+    return writeErrorResponse(c, error);
   }
+}
 
-  return new Response(null, { status: 200, headers: { 'ETag': normalizeETag(existing.etag) || '' } });
+// The protocol's answers for a write that storage refused (the account UI
+// uses them too). Anything else is rethrown.
+export function writeErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof PreconditionFailedError) return c.text('Precondition Failed', 412);
+  if (error instanceof PathConflictError) return c.text(error.message, 409);
+  if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 507);
+  if (error instanceof StorageAccountingError) return c.text(error.message, 503);
+  throw error;
 }

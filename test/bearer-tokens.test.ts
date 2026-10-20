@@ -3,36 +3,15 @@ import { createServer } from '../src/index';
 import { seedToken, deleteToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // ADR-0003: storage accepts only opaque bearer tokens stored in oauth_tokens.
-
-function createStorage() {
-  const objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  return {
-    async get(key: string) {
-      const item = objects.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: '"etag"' } };
-    },
-    async put(key: string, body: ArrayBuffer, contentType?: string) {
-      objects.set(key, { body, contentType: contentType || 'application/octet-stream' });
-      return '"etag"';
-    },
-    async delete(key: string) { objects.delete(key); },
-    async head(key: string) {
-      const item = objects.get(key);
-      if (!item) return null;
-      return { etag: '"etag"', contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list() { return { objects: [] }; },
-  } as any;
-}
 
 // Production mode fails closed without a rate-limit binding.
 const allowAll = { limit: async () => ({ success: true }) };
 
 function createEnv(overrides: Record<string, unknown> = {}) {
-  return { STORAGE: createStorage(), DB: createSqliteD1(), ...overrides };
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...overrides };
 }
 
 function base64Url(input: string | ArrayBuffer): string {
@@ -62,7 +41,7 @@ async function signedJwt(username: string, secret: string): Promise<string> {
   return `${signingInput}.${base64Url(signature)}`;
 }
 
-async function getDocument(env: any, token: string) {
+async function getDocument(env: unknown, token: string) {
   const app = createServer(env);
   return app.request(
     'http://localhost/storage/alice/documents/note.txt',
@@ -134,7 +113,7 @@ describe('Opaque bearer tokens', () => {
   });
 
   it('returns 503 when the DB binding is missing', async () => {
-    const env = { STORAGE: createStorage(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
+    const env = { STORAGE: new MemoryStorage(), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
 
     const res = await getDocument(env, 'anything');
 

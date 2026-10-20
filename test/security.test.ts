@@ -2,36 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
 function createTestEnv() {
-  const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
-  
   return {
-    STORAGE: {
-      async get(key: string) {
-        const item = storage.get(key);
-        if (!item) return null;
-        return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-      },
-      async put(key: string, body: ArrayBuffer, contentType?: string): Promise<string> {
-        const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-        storage.set(key, { body, etag, contentType: contentType || 'application/octet-stream' });
-        return etag;
-      },
-      async delete(key: string) {
-        storage.delete(key);
-      },
-      async head(key: string) {
-        const item = storage.get(key);
-        if (!item) return null;
-        return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-      },
-      async list(options: { prefix?: string }) {
-        const prefix = options?.prefix || '';
-        const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-        return { objects: keys.map(k => ({ key: k, etag: storage.get(k)!.etag })) };
-      },
-    } as any,
+    STORAGE: new MemoryStorage(),
     DB: createSqliteD1(),
   };
 }
@@ -122,13 +97,7 @@ describe('Security Tests', () => {
   describe('Quota Enforcement', () => {
     it('rejects PUT when quota exceeded', async () => {
     const env = {
-      STORAGE: {
-        async get() { return null; },
-        async put() { return '"test"'; },
-        async delete() {},
-        async head() { return null; },
-        async list() { return { objects: [] }; },
-      } as any,
+      STORAGE: new MemoryStorage(),
       DB: createSqliteD1(),
       ACCOUNT_USERNAME: 'quotauser',
     };
@@ -146,7 +115,7 @@ describe('Security Tests', () => {
         env
       );
 
-      expect(res.status).toBe(413);
+      expect(res.status).toBe(507);
       expect(await res.text()).toContain('quota');
     });
   });

@@ -1,63 +1,111 @@
-// The offline stand-in for R2 (services/local-storage.ts) must store any item
-// name and list like R2: object keys only, no empty folders.
+// LocalStorage specifics beyond the shared contract (storage-contract.test.ts):
+// regressions for the offline backend's on-disk layout.
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorage } from '../src/services/local-storage';
+import { PathConflictError } from '../src/services/storage-errors';
 
-const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
-const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
 const P = 'users/alice/storage/documents/';
+const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
 
 describe('LocalStorage', () => {
+  let root: string;
   let dir: string;
   let storage: LocalStorage;
+
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rsilo-local-'));
+    root = mkdtempSync(join(tmpdir(), 'rsilo-local-'));
+    dir = join(root, 'storage');
     storage = new LocalStorage(dir);
   });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it('stores names the old layout mangled or hid', async () => {
-    for (const name of ['x.meta', 'back\\slash', '..double..dots..', '.hidden']) {
-      await storage.put(P + name, enc(name), 'text/plain');
-    }
-    const keys = (await storage.list(P)).objects.map(o => o.key).sort();
-    expect(keys).toEqual([P + '..double..dots..', P + '.hidden', P + 'back\\slash', P + 'x.meta'].sort());
-    expect(dec((await storage.get(P + 'x.meta'))!.body)).toBe('x.meta');
-    expect((await storage.head(P + 'back\\slash'))!.contentType).toBe('text/plain');
+  it('keeps metadata out of reach of user keys, so x.meta is just another document', async () => {
+    const etag = await storage.put(P + 'x', bytes('x'), 'text/plain');
+    expect(await storage.get(P + 'x.meta')).toBeNull();
+
+    await storage.put(P + 'x.meta', bytes('mine'), 'application/json');
+    expect(await storage.head(P + 'x')).toMatchObject({ contentType: 'text/plain', etag });
+    expect((await storage.list(P)).objects.map(o => o.key)).toEqual([P + 'x', P + 'x.meta']);
+    // The metadata tree itself is not a key either.
+    expect(await storage.list('.meta/')).toEqual({ objects: [] });
+    expect(await storage.get('.meta/' + P + 'x')).toBeNull();
   });
 
+  it('gives a file without metadata the same ETag on every read, changing when the file does', async () => {
+    mkdirSync(join(dir, 'users/alice/storage/documents'), { recursive: true });
+    const file = join(dir, 'users/alice/storage/documents/copied.txt');
+    writeFileSync(file, 'by hand');
+
+    const first = (await storage.head(P + 'copied.txt'))!;
+    expect(first).toMatchObject({ contentType: 'application/octet-stream', contentLength: 7 });
+    expect((await storage.head(P + 'copied.txt'))!.etag).toBe(first.etag);
+    expect((await storage.list(P)).objects[0].etag).toBe(first.etag);
+
+    writeFileSync(file, 'by hand, again');
+    utimesSync(file, new Date(), new Date(Date.now() + 5000));
+    expect((await storage.head(P + 'copied.txt'))!.etag).not.toBe(first.etag);
+  });
+
+  it('never aliases a..b and ab, and never writes outside its directory', async () => {
+    await storage.put(P + 'a..b', bytes('1'), 'text/plain');
+    expect(await storage.get(P + 'ab')).toBeNull();
+
+    await storage.put('../escape', bytes('2'), 'text/plain');
+    await storage.put('users/../../escape2', bytes('3'), 'text/plain');
+    expect(readdirSync(root)).toEqual(['storage']);
+    expect(new TextDecoder().decode((await storage.get('../escape'))!.body)).toBe('2');
+  });
+
+  it('removes folders that a delete leaves empty', async () => {
+    await storage.put(P + 'sub/deep/a.txt', bytes('a'), 'text/plain');
+    await storage.put(P + 'b.txt', bytes('b'), 'text/plain');
+
+    await storage.delete(P + 'sub/deep/a.txt');
+    expect(existsSync(join(dir, 'users/alice/storage/documents/sub'))).toBe(false);
+    expect(existsSync(join(dir, 'users/alice/storage/documents/b.txt'))).toBe(true);
+
+    await storage.delete(P + 'b.txt');
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('refuses a document and a folder of one name with PathConflictError, not a filesystem error', async () => {
+    await storage.put(P + 'a', bytes('a'), 'text/plain');
+    await storage.put(P + 'b/c', bytes('c'), 'text/plain');
+
+    await expect(storage.put(P + 'a/x', bytes('x'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
+    await expect(storage.put(P + 'b', bytes('b'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
+    expect((await storage.list(P)).objects.map((o) => o.key)).toEqual([P + 'a', P + 'b/c']);
+  });
+
+  it('refuses keys with empty segments rather than guessing a file', async () => {
+    await expect(storage.put('users//a', bytes('a'), 'text/plain')).rejects.toThrow('empty segments');
+  });
+});
+
+describe('LocalStorage ranges and item names', () => {
+  let root: string;
+  let storage: LocalStorage;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'rsilo-local-'));
+    storage = new LocalStorage(join(root, 'storage'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
   it('returns a byte range with the full size in metadata', async () => {
-    await storage.put(P + 'digits', enc('0123456789'), 'text/plain');
+    await storage.put(P + 'digits', bytes('0123456789'), 'text/plain');
     const result = await storage.get(P + 'digits', { range: { offset: 2, length: 3 } });
-    expect(dec(result!.body)).toBe('234');
+    expect(new TextDecoder().decode(result!.body)).toBe('234');
     expect(result!.metadata.contentLength).toBe(10);
   });
 
-  it('lists objects only and forgets emptied folders', async () => {
-    await storage.put(P + 'a/b/c.txt', enc('x'), 'text/plain');
-    await storage.put(P + 'keep.txt', enc('x'), 'text/plain');
-    expect((await storage.list(P)).objects.map(o => o.key).sort()).toEqual([P + 'a/b/c.txt', P + 'keep.txt']);
-    await storage.delete(P + 'a/b/c.txt');
-    expect((await storage.list(P)).objects.map(o => o.key)).toEqual([P + 'keep.txt']);
-    expect(existsSync(join(dir, P, 'a'))).toBe(false);
-  });
-
-  it('refuses keys that would escape the storage directory', async () => {
-    await expect(storage.put('users/alice/../../etc/x', enc('x'), 'text/plain')).rejects.toThrow('invalid storage key');
-    await expect(storage.get('users/alice/./x')).rejects.toThrow('invalid storage key');
-  });
-
-  it('moves legacy <file>.meta sidecars into the metadata tree', async () => {
-    const legacy = mkdtempSync(join(tmpdir(), 'rsilo-legacy-'));
-    mkdirSync(join(legacy, P), { recursive: true });
-    writeFileSync(join(legacy, P, 'note.txt'), 'hello');
-    writeFileSync(join(legacy, P, 'note.txt.meta'), JSON.stringify({ contentType: 'text/markdown', etag: '"abc"' }));
-    const migrated = new LocalStorage(legacy);
-    expect(readdirSync(join(legacy, P))).toEqual(['note.txt']);
-    expect(await migrated.head(P + 'note.txt')).toMatchObject({ contentType: 'text/markdown', etag: '"abc"', contentLength: 5 });
-    expect((await migrated.list(P)).objects.map(o => o.key)).toEqual([P + 'note.txt']);
+  it('stores and lists names the storage API now allows', async () => {
+    const names = ['back\\slash', '.hidden', '..double..dots..', 'a?b#c%d', '\nleading LF'];
+    for (const name of names) await storage.put(P + name, bytes(name), 'text/plain');
+    expect((await storage.list(P)).objects.map(o => o.key).sort()).toEqual(names.map(n => P + n).sort());
+    for (const name of names) expect(new TextDecoder().decode((await storage.get(P + name))!.body)).toBe(name);
   });
 });

@@ -1,5 +1,6 @@
 # Copy this file to .dev.vars and fill in values for local `wrangler dev`.
-# For offline dev (bun run dev:offline), set these as shell env vars instead.
+# The offline server (bun run dev:offline) reads .dev.vars too; shell env vars
+# win over it. It always runs in dev mode.
 
 # OWNER_EMAIL (the only identity allowed into /account) is the one setting
 # required in production. ACCOUNT_USERNAME (production default "me") and

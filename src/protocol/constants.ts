@@ -41,15 +41,3 @@ export function normalizeETag(etag: string | null | undefined): string | null {
 export function stripQuotes(etag: string): string {
   return etag.replace(/^W\//, '').replace(/^"|"$/g, '');
 }
-
-// Generate ETag from content
-export function generateETag(content: string): string {
-  const hash = 0;
-  return `"${content.length}-${hash}"`;
-}
-
-// Parse bearer token
-export function parseAuthHeader(header: string | null): string | null {
-  if (!header?.startsWith('Bearer ')) return null;
-  return header.slice(7);
-}

@@ -3,47 +3,9 @@ import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
 import { createSqliteD1 } from '../../src/services/db/sqlite';
 import { PRODUCTION_INSTANCE } from '../helpers/instance';
+import { MemoryStorage } from '../helpers/memory-storage';
 
-interface StorageMock {
-  get: (key: string) => Promise<{ body: ArrayBuffer; metadata: { contentType: string; contentLength: number; etag: string } } | null>;
-  put: (key: string, body: ArrayBuffer | ArrayBufferView, options?: { httpMetadata?: { contentType?: string } }) => Promise<string>;
-  delete: (key: string) => Promise<void>;
-  head: (key: string) => Promise<{ etag: string; contentType: string; contentLength: number } | null>;
-  list: (options: { prefix?: string }) => Promise<{ objects: { key: string; etag: string }[] }>;
-}
-
-function createTestStorage(): StorageMock {
-  const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
-
-  return {
-    get: async (key: string) => {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    put: async (key: string, body: ArrayBuffer | ArrayBufferView, options?: { httpMetadata?: { contentType?: string } }) => {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      const storedBody = body instanceof ArrayBuffer
-        ? body
-        : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
-      storage.set(key, { body: storedBody, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    delete: async (key: string) => { storage.delete(key); },
-    head: async (key: string) => {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    list: async (options: { prefix?: string }) => {
-      const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return { objects: keys.map(k => ({ key: k, etag: storage.get(k)!.etag })) };
-    },
-  };
-}
-
-function createEnv(storage: StorageMock) {
+function createEnv(storage: MemoryStorage) {
   return {
     STORAGE: storage,
     DB: createSqliteD1(),
@@ -54,12 +16,12 @@ describe('RemoteStorage Protocol Compliance', () => {
   describe('Section 2: Storage API', () => {
     describe('GET', () => {
       it('returns 200 with body for existing file', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode('hello'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/test.txt', 'hello');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/test.txt',
@@ -72,22 +34,22 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 503 when the DB binding is missing in production mode', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = { STORAGE: storage, RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
-        const app = createServer(env as any);
+        const app = createServer(env);
         const token = 'opaque-token';
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/test.txt',
           { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-          env as any
+          env
         );
 
         expect(res.status).toBe(503);
       });
 
       it('returns 404 for non-existent file', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -102,12 +64,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns Content-Type header', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/pictures/photo.jpg', new ArrayBuffer(10), { httpMetadata: { contentType: 'image/jpeg' } });
+        storage.seed('users/alice/storage/pictures/photo.jpg', new Uint8Array(10), 'image/jpeg');
 
         const res = await app.request(
           'http://localhost/storage/alice/pictures/photo.jpg',
@@ -119,12 +81,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns Content-Length header', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
         const content = 'Hello, World!';
-        await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode(content), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/test.txt', content);
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/test.txt',
@@ -136,12 +98,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns ETag header', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/test.txt', new TextEncoder().encode('test'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/test.txt', 'test');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/test.txt',
@@ -156,7 +118,7 @@ describe('RemoteStorage Protocol Compliance', () => {
 
     describe('PUT', () => {
       it('creates new resource with 201', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -171,12 +133,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('updates existing resource with 200', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/existing.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/existing.txt', 'original');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/existing.txt',
@@ -188,7 +150,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns ETag on PUT', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -203,7 +165,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 401 without authorization', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
 
@@ -218,7 +180,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 400 for folder path', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -233,12 +195,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('If-None-Match: * prevents overwrite of existing', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/immutable.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/immutable.txt', 'original');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/immutable.txt',
@@ -250,12 +212,12 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('If-Match succeeds with correct ETag', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/match-test.txt', new TextEncoder().encode('original'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/match-test.txt', 'original');
 
         const headRes = await storage.head('users/alice/storage/documents/match-test.txt');
         const etag = headRes!.etag;
@@ -272,12 +234,12 @@ describe('RemoteStorage Protocol Compliance', () => {
 
     describe('DELETE', () => {
       it('deletes existing file and returns 200', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/to-delete.txt', new TextEncoder().encode('delete me'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/to-delete.txt', 'delete me');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/to-delete.txt',
@@ -289,7 +251,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 404 when deleting non-existent', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -304,7 +266,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 400 for folder path', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -321,12 +283,12 @@ describe('RemoteStorage Protocol Compliance', () => {
 
     describe('HEAD', () => {
       it('returns headers without body', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
 
-        await storage.put('users/alice/storage/documents/head-test.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+        storage.seed('users/alice/storage/documents/head-test.txt', 'content');
 
         const res = await app.request(
           'http://localhost/storage/alice/documents/head-test.txt',
@@ -341,7 +303,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       });
 
       it('returns 404 for non-existent', async () => {
-        const storage = createTestStorage();
+        const storage = new MemoryStorage();
         const env = createEnv(storage);
         const app = createServer(env);
         const token = seedToken(env, 'alice');
@@ -359,12 +321,12 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 3: Folder Listing', () => {
     it('returns JSON-LD with @context', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/file1.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/',
@@ -378,12 +340,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('returns items with ETag', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/file1.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/',
@@ -397,12 +359,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('shows nested folders with trailing slash', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/subfolder/file.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/subfolder/file.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/',
@@ -416,7 +378,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('returns empty items for empty folder', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
@@ -432,12 +394,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('returns folder ETag', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/file1.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/file1.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/',
@@ -451,7 +413,7 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 4: Error Codes', () => {
     it('401 for missing auth', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
 
@@ -465,7 +427,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('403 for insufficient scope', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice', 'documents:rw');
@@ -480,7 +442,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('404 for non-existent', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
@@ -495,12 +457,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('412 for stale If-Match', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/stale.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/stale.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/stale.txt',
@@ -512,12 +474,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('412 for If-None-Match:* on existing', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/existing.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/existing.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/existing.txt',
@@ -529,7 +491,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('400 for invalid path', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
@@ -546,7 +508,7 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 5: CORS', () => {
     it('OPTIONS returns Allow header', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
 
@@ -563,12 +525,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('CORS headers on response', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/cors-test.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/cors-test.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/cors-test.txt',
@@ -582,12 +544,12 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 6: Caching', () => {
     it('returns 304 when ETag matches If-None-Match', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/immutable.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/immutable.txt', 'content');
 
       const getRes = await app.request(
         'http://localhost/storage/alice/documents/immutable.txt',
@@ -607,12 +569,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('ETag changes on content update', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
-      await storage.put('users/alice/storage/documents/etag-change.txt', new TextEncoder().encode('v1'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/etag-change.txt', 'v1');
       const res1 = await app.request(
         'http://localhost/storage/alice/documents/etag-change.txt',
         { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
@@ -620,7 +582,7 @@ describe('RemoteStorage Protocol Compliance', () => {
       );
       const etag1 = res1.headers.get('ETag');
 
-      await storage.put('users/alice/storage/documents/etag-change.txt', new TextEncoder().encode('v2'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/etag-change.txt', 'v2');
       const res2 = await app.request(
         'http://localhost/storage/alice/documents/etag-change.txt',
         { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
@@ -634,12 +596,12 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 7: User Isolation', () => {
     it('user A cannot read user B data', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const bobToken = seedToken(env, 'bob');
 
-      await storage.put('users/alice/storage/documents/private.txt', new TextEncoder().encode('alice secret'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/private.txt', 'alice secret');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/private.txt',
@@ -651,7 +613,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('user A cannot write to user B storage', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       // bob is not the Account, so his token cannot touch the Account's storage.
@@ -667,7 +629,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('storage of a user other than the Account is unreachable', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const aliceToken = seedToken(env, 'alice');
@@ -684,7 +646,7 @@ describe('RemoteStorage Protocol Compliance', () => {
 
   describe('Section 8: Module Scopes', () => {
     it('scope: documents:rw allows read and write', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice', 'documents:rw');
@@ -705,7 +667,7 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('scope: documents:r blocks write', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice', 'documents:r');
@@ -720,12 +682,12 @@ describe('RemoteStorage Protocol Compliance', () => {
     });
 
     it('scope: documents:r allows read', async () => {
-      const storage = createTestStorage();
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice', 'documents:r');
 
-      await storage.put('users/alice/storage/documents/readable.txt', new TextEncoder().encode('content'), { httpMetadata: { contentType: 'text/plain' } });
+      storage.seed('users/alice/storage/documents/readable.txt', 'content');
 
       const res = await app.request(
         'http://localhost/storage/alice/documents/readable.txt',
@@ -736,11 +698,24 @@ describe('RemoteStorage Protocol Compliance', () => {
       expect(res.status).toBe(200);
     });
 
-    it('wildcard scope: * grants access to all modules', async () => {
-      const storage = createTestStorage();
+    // §9: the root scope is `*:rw` (or `*:r`). A bare `*` is not a scope and
+    // grants nothing (it used to grant full read-write).
+    it('bare * scope grants nothing', async () => {
+      const env = createEnv(new MemoryStorage());
+      const token = seedToken(env, 'alice', '*');
+      const res = await createServer(env).request(
+        'http://localhost/storage/alice/documents/test.txt',
+        { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'content' },
+        env
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it('wildcard scope: *:rw grants access to all modules', async () => {
+      const storage = new MemoryStorage();
       const env = createEnv(storage);
       const app = createServer(env);
-      const token = seedToken(env, 'alice', '*');
+      const token = seedToken(env, 'alice', '*:rw');
 
       const docRes = await app.request(
         'http://localhost/storage/alice/documents/test.txt',

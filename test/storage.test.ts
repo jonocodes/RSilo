@@ -1,42 +1,17 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { createServer } from '../src/index';
+import { LocalStorage } from '../src/services/local-storage';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
+const storage = new MemoryStorage();
 
 const TEST_ENV = {
-  STORAGE: {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) {
-      storage.delete(key);
-    },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string; delimiter?: string }) {
-      const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return {
-        objects: keys.map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any,
+  STORAGE: storage,
   DB: createSqliteD1(),
 };
 
@@ -48,7 +23,7 @@ describe('PUT + GET storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('PUT a document and GET it back', async () => {
@@ -81,6 +56,7 @@ describe('PUT + GET storage', () => {
     );
 
     expect(getRes.status).toBe(200);
+    expect(getRes.headers.get('Content-Type')).toContain('text/plain');
     expect(await getRes.text()).toBe(body);
   });
 
@@ -155,6 +131,19 @@ describe('PUT + GET storage', () => {
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(res.headers.get('Access-Control-Allow-Methods')).toContain('PUT');
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    expect(res.headers.get('Vary')).toBe('Origin');
+  });
+
+  it('echoes the Origin with Vary: Origin and never allows credentials', async () => {
+    const res = await app.request(
+      'http://localhost/storage/alice/public/documents/missing.txt',
+      { headers: { Origin: 'https://app.example' } },
+      TEST_ENV
+    );
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example');
+    expect(res.headers.get('Vary')).toContain('Origin');
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBeNull();
   });
 });
 
@@ -171,10 +160,10 @@ describe('Object size limits', () => {
         'Content-Length': '5',
       },
       body: '12345',
-    }, env as any);
+    }, env);
 
     expect(res.status).toBe(413);
-    expect(storage.has('users/alice/storage/documents/large.txt')).toBe(false);
+    expect(storage.objects.has('users/alice/storage/documents/large.txt')).toBe(false);
   });
 });
 
@@ -186,7 +175,7 @@ describe('DELETE storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('DELETE removes file', async () => {
@@ -276,7 +265,7 @@ describe('HEAD storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('HEAD returns headers without body', async () => {
@@ -331,7 +320,7 @@ describe('Folder listing', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('GET folder listing returns JSON with items', async () => {
@@ -419,6 +408,33 @@ describe('Folder listing', () => {
     expect(getRes.status).toBe(200);
     const json = await getRes.json() as any;
     expect(json.items).toEqual({});
+  });
+
+  it("a subfolder's ETag in its parent listing is the ETag it serves, until a descendant changes", async () => {
+    const token = seedToken(TEST_ENV, 'alice');
+    const put = (body: string) => app.request(
+      'http://localhost/storage/alice/documents/a/b/c',
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body },
+      TEST_ENV
+    );
+    const get = (path: string, headers: Record<string, string> = {}) => app.request(
+      `http://localhost/storage/alice/documents/${path}`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}`, ...headers } },
+      TEST_ENV
+    );
+    const listedETag = async () => ((await (await get('a/')).json()) as any).items['b/'].ETag as string;
+
+    await put('one');
+    const listed = await listedETag();
+    const served = (await get('a/b/')).headers.get('ETag');
+    expect(served).toBe(`"${listed}"`);
+    expect((await get('a/b/', { 'If-None-Match': served! })).status).toBe(304);
+
+    await put('two');
+    const relisted = await listedETag();
+    expect(relisted).not.toBe(listed);
+    expect((await get('a/b/')).headers.get('ETag')).toBe(`"${relisted}"`);
+    expect((await get('a/b/', { 'If-None-Match': served! })).status).toBe(200);
   });
 });
 
@@ -522,7 +538,7 @@ describe('If-Match / If-None-Match', () => {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'text/plain',
-          'If-Match': etag,
+          'If-Match': etag!,
         },
         body: 'updated',
       },
@@ -620,13 +636,72 @@ describe('If-Match / If-None-Match', () => {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'If-None-Match': etag,
+          'If-None-Match': etag!,
         },
       },
       TEST_ENV
     );
 
     expect(getRes.status).toBe(304);
+  });
+});
+
+const requestAs = (env: Record<string, unknown>, method: string, path: string, headers: Record<string, string> = {}, body?: string) =>
+  createServer(env).request(`http://localhost/storage/alice/${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${seedToken(env, 'alice')}`, 'Content-Type': 'text/plain', ...headers },
+    body,
+  }, env);
+
+describe('Conditional deletes and name clashes', () => {
+  const localRoot = mkdtempSync(join(tmpdir(), 'rsilo-routes-'));
+  afterAll(() => rmSync(localRoot, { recursive: true, force: true }));
+
+  it('DELETE honours If-Match', async () => {
+    const env = { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
+    const etag = (await requestAs(env, 'PUT', 'documents/d.txt', {}, 'x')).headers.get('ETag')!;
+
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt', { 'If-Match': '"stale"' })).status).toBe(412);
+    expect((await requestAs(env, 'DELETE', 'documents/missing.txt', { 'If-Match': etag })).status).toBe(412);
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt', { 'If-Match': etag })).status).toBe(200);
+    expect((await requestAs(env, 'DELETE', 'documents/d.txt')).status).toBe(404);
+  });
+
+  for (const [name, storage] of [['MemoryStorage', new MemoryStorage()], ['LocalStorage', new LocalStorage(localRoot)]] as const) {
+    it(`answers 409 when a document and a folder would share a name (${name})`, async () => {
+      const env = { STORAGE: storage, DB: createSqliteD1() };
+      expect((await requestAs(env, 'PUT', 'documents/clash/doc', {}, 'a')).status).toBe(201);
+      expect((await requestAs(env, 'PUT', 'documents/clash/folder/child', {}, 'b')).status).toBe(201);
+
+      expect((await requestAs(env, 'PUT', 'documents/clash/doc/inside', {}, 'c')).status).toBe(409);
+      expect((await requestAs(env, 'PUT', 'documents/clash/folder', {}, 'd')).status).toBe(409);
+      const listing = await (await requestAs(env, 'GET', 'documents/clash/')).json() as { items: Record<string, unknown> };
+      expect(Object.keys(listing.items).sort()).toEqual(['doc', 'folder/']);
+    });
+  }
+});
+
+describe('Document reads from metadata', () => {
+  it('answers HEAD and a matching If-None-Match with the ETag, never downloading the body', async () => {
+    const storage = new MemoryStorage();
+    const env = { STORAGE: storage, DB: createSqliteD1() };
+    const etag = (await requestAs(env, 'PUT', 'documents/a.txt', {}, 'hello')).headers.get('ETag')!;
+    const get = vi.spyOn(storage, 'get');
+
+    const notModified = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': etag });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('ETag')).toBe(etag);
+
+    const head = await requestAs(env, 'HEAD', 'documents/a.txt');
+    expect(head.status).toBe(200);
+    expect(head.headers.get('ETag')).toBe(etag);
+    expect(head.headers.get('Content-Length')).toBe('5');
+    expect(head.headers.get('Content-Security-Policy')).toBe('sandbox');
+    expect(get).not.toHaveBeenCalled();
+
+    const changed = await requestAs(env, 'GET', 'documents/a.txt', { 'If-None-Match': '"other"' });
+    expect(changed.status).toBe(200);
+    expect(await changed.text()).toBe('hello');
   });
 });
 
@@ -681,7 +756,8 @@ describe('Public storage', () => {
   });
 
   it('GET /storage/:user/public (no trailing slash) with auth redirects to /public/', async () => {
-    const token = seedToken(TEST_ENV, 'alice', 'public:rw');
+    // A root-level name, so it needs the root scope, as public/ itself does.
+    const token = seedToken(TEST_ENV, 'alice', '*:r');
     const res = await app.request(
       'http://localhost/storage/alice/public',
       { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
@@ -689,6 +765,80 @@ describe('Public storage', () => {
     );
     expect(res.status).toBe(301);
     expect(res.headers.get('Location')).toBe('/storage/alice/public/');
+  });
+
+  it('serves public and private documents sandboxed and unsniffable, still readable cross-origin', async () => {
+    const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
+    const origin = 'https://app.example';
+    for (const path of ['public/documents/page.html', 'documents/page.html']) {
+      await app.request(
+        `http://localhost/storage/alice/${path}`,
+        { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/html' }, body: '<script>alert(1)</script>' },
+        TEST_ENV
+      );
+      const headers: Record<string, string> = { 'Origin': origin };
+      if (!path.startsWith('public/')) headers['Authorization'] = `Bearer ${token}`;
+      const res = await app.request(`http://localhost/storage/alice/${path}`, { method: 'GET', headers }, TEST_ENV);
+
+      expect(res.status).toBe(200);
+      // The stored type is served as is: the headers below are what keep it inert.
+      expect(res.headers.get('Content-Type')).toBe('text/html');
+      expect(res.headers.get('Content-Security-Policy')).toBe('sandbox');
+      expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(res.headers.get('Cross-Origin-Resource-Policy')).toBeNull();
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin);
+      expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag, Content-Length, Content-Type');
+    }
+  });
+});
+
+describe('Public folder listings', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer(TEST_ENV);
+    storage.objects.clear();
+    const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
+    await app.request(
+      'http://localhost/storage/alice/public/documents/shared.txt',
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'shared' },
+      TEST_ENV
+    );
+  });
+
+  const get = (path: string, scopes: string) => app.request(
+    `http://localhost/storage/alice/${path}`,
+    { method: 'GET', headers: { 'Authorization': `Bearer ${seedToken(TEST_ENV, 'alice', scopes)}` } },
+    TEST_ENV
+  );
+
+  it("needs the module's read scope, like a private listing", async () => {
+    const otherModule = await get('public/documents/', 'pictures:r');
+    expect(otherModule.status).toBe(403);
+    expect(otherModule.headers.get('WWW-Authenticate')).toContain('scope="documents:r"');
+
+    const sameModule = await get('public/documents/', 'documents:r');
+    expect(sameModule.status).toBe(200);
+    expect(Object.keys((await sameModule.json() as any).items)).toEqual(['shared.txt']);
+  });
+
+  it('needs the root scope for public/ itself', async () => {
+    expect((await get('public/', 'documents:r')).status).toBe(403);
+    expect((await get('public/', '*:r')).status).toBe(200);
+  });
+
+  it('leaves public documents readable whatever the token covers', async () => {
+    expect((await get('public/documents/shared.txt', 'pictures:r')).status).toBe(200);
+  });
+
+  it('only treats /storage/<user>/public/ as public, not a public/ folder deeper in a module', async () => {
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/public/x.txt',
+      { method: 'GET', headers: { 'Authorization': 'Bearer not-a-token' } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get('WWW-Authenticate')).toContain('error="invalid_token"');
   });
 });
 
@@ -700,7 +850,7 @@ describe('DB-backed OAuth token auth', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('accepts a valid DB-backed OAuth token for storage access', async () => {
@@ -745,7 +895,7 @@ describe('Storage quota — tracking', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   beforeAll(() => {
@@ -773,11 +923,7 @@ describe('Storage quota — tracking', () => {
 
   it('DELETE decrements used_storage_bytes in DB', async () => {
     const fileBody = new TextEncoder().encode('to be deleted');
-    storage.set('users/alice/storage/documents/todelete.txt', {
-      body: fileBody.buffer as ArrayBuffer,
-      etag: '"xyz"',
-      contentType: 'text/plain',
-    });
+    storage.seed('users/alice/storage/documents/todelete.txt', fileBody);
 
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
@@ -793,5 +939,28 @@ describe('Storage quota — tracking', () => {
 
     const row = dbEnv.DB.sqlite.prepare('SELECT used_storage_bytes AS used FROM users WHERE username = ?').get('alice') as any;
     expect(row.used).toBe(0);
+  });
+
+  it('answers 503 and leaves storage alone when usage cannot be recorded', async () => {
+    const db = createSqliteD1();
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      // Token checks work; the accounting UPDATE fails, as on a D1 outage mid-request.
+      DB: { ...db, prepare: (sql: string) => {
+        if (sql.startsWith('UPDATE users SET used_storage_bytes')) throw new Error('D1 unavailable');
+        return db.prepare(sql);
+      } },
+    };
+    const token = seedToken(dbEnv, 'alice');
+    const url = 'http://localhost/storage/alice/documents/unaccounted.txt';
+
+    const put = await app.request(url, { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` }, body: 'x' }, dbEnv);
+    expect(put.status).toBe(503);
+    expect(storage.objects.size).toBe(0);
+
+    storage.seed('users/alice/storage/documents/unaccounted.txt', 'x');
+    const del = await app.request(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }, dbEnv);
+    expect(del.status).toBe(503);
+    expect(storage.objects.has('users/alice/storage/documents/unaccounted.txt')).toBe(true);
   });
 });

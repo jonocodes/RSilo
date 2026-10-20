@@ -13,7 +13,7 @@ let devToken = '';
 
 // Issues an opaque token row in the server's offline DB via `bun run dev-token`.
 function createDevToken(): string {
-  const res = spawnSync('bun', ['run', 'src/scripts/dev-token.ts', 'alice', 'documents:rw pictures:rw public:rw'], {
+  const res = spawnSync('bun', ['run', 'src/scripts/dev-token.ts', 'alice', 'documents:rw pictures:rw'], {
     env: { ...process.env, DB_PATH },
     encoding: 'utf8',
   });
@@ -41,6 +41,7 @@ describe('Storage E2E', () => {
       STORAGE_DIR,
       DB_PATH,
       PORT: '8788',
+      MAX_OBJECT_SIZE_BYTES: '1000',
     };
 
     server = spawn('bun', ['run', 'src/server-offline.ts'], {
@@ -190,6 +191,17 @@ describe('Storage E2E', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain('RemoteStorage');
+  });
+
+  it('applies MAX_OBJECT_SIZE_BYTES from the environment', async () => {
+    const put = (size: number) => fetch(`${SERVER_URL}/storage/alice/documents/sized.bin`, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${createTestToken()}`, 'Content-Type': 'application/octet-stream' },
+      body: new Uint8Array(size),
+    });
+
+    expect((await put(1000)).status).toBeOneOf([200, 201]);
+    expect((await put(1001)).status).toBe(413);
   });
 
   it('health endpoint works', async () => {

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
-import { createSqliteD1 } from '../src/services/db/sqlite';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { PKCE } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // OAuth consent lives under the Owner-gated /account prefix (ADR-0004, #18):
 // GET renders it from the query string alone, POST approves or denies. The
@@ -16,28 +17,11 @@ const CONSENT_URL = 'http://localhost/account/oauth/authorize';
 const FORM = { 'Content-Type': 'application/x-www-form-urlencoded' };
 const SAME_ORIGIN = { ...FORM, 'Sec-Fetch-Site': 'same-origin' };
 
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
-
 function devEnv(extra: Record<string, unknown> = {}) {
-  return { STORAGE: new MemoryStorage() as any, DB: createSqliteD1(), ...extra } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...extra };
 }
 
-function count(env: any, table: string): number {
+function count(env: { DB: SqliteD1 }, table: string): number {
   return Number((env.DB.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as any).n);
 }
 
@@ -59,7 +43,7 @@ function form(params: Record<string, string> = {}): string {
   return new URLSearchParams({ ...REQUEST, action: 'approve', ...params }).toString();
 }
 
-function post(env: any, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
+function post(env: unknown, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
   return app.request(url, { method: 'POST', headers, body }, env, ctx);
 }
 
@@ -120,6 +104,14 @@ describe('consent page (GET /account/oauth/authorize)', () => {
     const res = await app.request(`${CONSENT_URL}?${params}`, {}, devEnv());
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('name="scope" value="documents:rw"');
+  });
+
+  it('renders every requested scope, the root scope included', async () => {
+    const res = await app.request(`${CONSENT_URL}?${query({ scope: '*:rw notes:r' })}`, {}, devEnv());
+    const html = await res.text();
+    expect(html).toContain('<strong>All your storage</strong>: read and write');
+    expect(html).toContain('<strong>notes</strong>: read only');
+    expect(html).not.toContain('access</div>');
   });
 
   it('requires client_id and redirect_uri', async () => {
@@ -187,6 +179,52 @@ describe('redirect_uri origin check (protocol §10)', () => {
   it('accepts a redirect_uri on the client_id origin with a different path and query', async () => {
     const res = await app.request(`${CONSENT_URL}?${query({ client_id: 'https://app.example/some/page', redirect_uri: 'https://APP.example:443/x?y=1' })}`, {}, devEnv());
     expect(res.status).toBe(200);
+  });
+});
+
+describe('scope validation', () => {
+  const INVALID = ['*', 'documents', 'documents:read', 'documents:rwx', 'Documents:rw', 'public:rw', 'documents:rw pictures', '   '];
+
+  for (const scope of INVALID) {
+    it(`GET with scope "${scope}" sends the app invalid_scope and renders nothing`, async () => {
+      const res = await app.request(`${CONSENT_URL}?${query({ scope })}`, {}, devEnv());
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('Location')!);
+      expect(location.origin + location.pathname).toBe('https://app.example/cb');
+      expect(location.searchParams.get('error')).toBe('invalid_scope');
+      expect(location.searchParams.get('state')).toBe('s=1&t=2');
+    });
+  }
+
+  it('POST approve with an invalid scope issues nothing, in either flow', async () => {
+    const env = devEnv();
+    for (const responseType of ['code', 'token']) {
+      const res = await post(env, form({ scope: '*', response_type: responseType }));
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('Location')!);
+      expect(location.searchParams.get('error')).toBe('invalid_scope');
+      expect(location.searchParams.get('code')).toBeNull();
+      expect(location.hash).toBe('');
+    }
+    expect(count(env, 'oauth_codes')).toBe(0);
+    expect(count(env, 'oauth_tokens')).toBe(0);
+    expect(count(env, 'oauth_clients')).toBe(0);
+  });
+
+  it('an invalid scope with an untrusted redirect_uri is a 400 page, not a redirect', async () => {
+    const res = await app.request(`${CONSENT_URL}?${query({ scope: '*', redirect_uri: 'https://evil.example/cb' })}`, {}, devEnv());
+    expect(res.status).toBe(400);
+    expect(res.headers.get('Location')).toBeNull();
+  });
+});
+
+describe('approve without a database', () => {
+  it('is a 503 for both flows, never a token or code that was not stored', async () => {
+    for (const responseType of ['code', 'token']) {
+      const res = await post({ STORAGE: new MemoryStorage() }, form({ response_type: responseType }));
+      expect(res.status).toBe(503);
+      expect(res.headers.get('Location')).toBeNull();
+    }
   });
 });
 

@@ -1,38 +1,14 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 // Requests go to http://localhost in dev mode (vitest sets RSILO_DEV_MODE), so
 // the dev identity signs them in as the Owner; see identity.test.ts for the
 // production resolver. State changes carry the header a browser sends for a
 // same-origin form post or fetch.
 const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin' };
 
-const storage = new Map<string, { body: ArrayBufferLike; contentType: string; etag: string }>();
-
-const mockStorage = {
-  async get(key: string) {
-    const item = storage.get(key);
-    if (!item) return null;
-    return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-  },
-  async put(key: string, body: ArrayBuffer, contentType: string) {
-    const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-    storage.set(key, { body, contentType, etag });
-    return etag;
-  },
-  async delete(key: string) { storage.delete(key); },
-  async head(key: string) {
-    const item = storage.get(key);
-    if (!item) return null;
-    return { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag };
-  },
-  async list(prefix: string) {
-    const objects = Array.from(storage.entries())
-      .filter(([k]) => k.startsWith(prefix))
-      .map(([k, v]) => ({ key: k, size: v.body.byteLength, etag: v.etag }));
-    return { objects };
-  },
-} as any;
+const storage = new MemoryStorage();
 
 interface TokenRow {
   id: string;
@@ -40,6 +16,8 @@ interface TokenRow {
   scopes: string;
   user_id: string;
   expires_at: number;
+  /** Set for a token with a refresh token. */
+  refresh_expires_at?: number;
   created_at: number;
 }
 
@@ -57,8 +35,11 @@ function makeDb(
     db.sqlite.prepare('INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, created_at, user_id) VALUES (?, ?, ?, ?, ?)')
       .run(token.client_id, token.client_id, '[]', token.created_at, token.user_id);
     db.sqlite.prepare(
-      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)'
-    ).run(token.id, `hash-${token.id}`, token.expires_at, token.scopes, token.user_id, token.client_id, token.created_at);
+      'INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      token.id, `hash-${token.id}`, token.refresh_expires_at ? `refresh-${token.id}` : null, token.expires_at,
+      token.refresh_expires_at ?? null, token.scopes, token.user_id, token.client_id, token.created_at,
+    );
   }
   return db;
 }
@@ -67,13 +48,13 @@ describe('Files — browse', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
-  beforeEach(() => storage.clear());
+  beforeEach(() => storage.objects.clear());
 
   it('GET /account/browse shows empty state when no files', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -82,12 +63,8 @@ describe('Files — browse', () => {
   });
 
   it('GET /account/browse lists uploaded files', async () => {
-    storage.set('users/alice/storage/documents/hello.txt', {
-      body: new TextEncoder().encode('hello').buffer,
-      contentType: 'text/plain',
-      etag: '"abc"',
-    });
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    storage.seed('users/alice/storage/documents/hello.txt', 'hello');
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -95,12 +72,8 @@ describe('Files — browse', () => {
   });
 
   it('GET /account/browse/documents lists files in module', async () => {
-    storage.set('users/alice/storage/documents/notes.txt', {
-      body: new TextEncoder().encode('notes').buffer,
-      contentType: 'text/plain',
-      etag: '"def"',
-    });
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    storage.seed('users/alice/storage/documents/notes.txt', 'notes');
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse/documents', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -110,12 +83,8 @@ describe('Files — browse', () => {
 
   it('renders quote-bearing filenames without executable attributes', async () => {
     const filename = `quote'\"><img src=x onerror=alert(1)>.txt`;
-    storage.set(`users/alice/storage/documents/${filename}`, {
-      body: new TextEncoder().encode('safe').buffer,
-      contentType: 'text/plain',
-      etag: '"quoted"',
-    });
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    storage.seed(`users/alice/storage/documents/${filename}`, 'safe');
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse/documents', { method: 'GET' }, env);
     const html = await res.text();
 
@@ -126,7 +95,7 @@ describe('Files — browse', () => {
   });
 
   it('breadcrumb shows correct path segments', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse/documents/sub', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -140,21 +109,13 @@ describe('Files — download', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
-    storage.set('users/alice/storage/documents/hello.txt', {
-      body: new TextEncoder().encode('hello world').buffer,
-      contentType: 'text/plain',
-      etag: '"abc123"',
-    });
-    storage.set('users/alice/storage/documents/sub/nested.md', {
-      body: new TextEncoder().encode('# nested').buffer,
-      contentType: 'text/markdown',
-      etag: '"def456"',
-    });
+    app = createServer({ STORAGE: storage, DB: makeDb() });
+    storage.seed('users/alice/storage/documents/hello.txt', 'hello world');
+    storage.seed('users/alice/storage/documents/sub/nested.md', '# nested', 'text/markdown');
   });
 
   it('GET /account/download serves file with correct content', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/download/documents/hello.txt', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/plain');
@@ -164,14 +125,14 @@ describe('Files — download', () => {
   });
 
   it('GET /account/download returns 404 for missing file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/download/documents/missing.txt', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
 
 
   it('GET /account/download serves nested path file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/download/documents/sub/nested.md', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Disposition')).toContain('nested.md');
@@ -183,26 +144,14 @@ describe('Files — view', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
-    storage.set('users/alice/storage/documents/readme.md', {
-      body: new TextEncoder().encode('# Hello World').buffer,
-      contentType: 'text/plain',
-      etag: '"etag-view"',
-    });
-    storage.set('users/alice/storage/documents/data.bin', {
-      body: new Uint8Array([0x00, 0xff, 0xfe]).buffer,
-      contentType: 'application/octet-stream',
-      etag: '"etag-bin"',
-    });
-    storage.set('users/alice/storage/documents/malicious.txt', {
-      body: new TextEncoder().encode('</script><script>alert("stored-xss")</script>').buffer,
-      contentType: 'text/plain',
-      etag: '"etag-malicious"',
-    });
+    app = createServer({ STORAGE: storage, DB: makeDb() });
+    storage.seed('users/alice/storage/documents/readme.md', '# Hello World');
+    storage.seed('users/alice/storage/documents/data.bin', new Uint8Array([0x00, 0xff, 0xfe]), 'application/octet-stream');
+    storage.seed('users/alice/storage/documents/malicious.txt', '</script><script>alert("stored-xss")</script>');
   });
 
   it('GET /account/view renders text file as HTML', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/view/documents/readme.md', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -211,7 +160,7 @@ describe('Files — view', () => {
   });
 
   it('renders script terminators as inert text under a restrictive CSP', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/view/documents/malicious.txt', { method: 'GET' }, env);
     const html = await res.text();
 
@@ -225,7 +174,7 @@ describe('Files — view', () => {
   });
 
   it('serves account behavior as same-origin JavaScript', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/client.js', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('text/javascript');
@@ -233,14 +182,14 @@ describe('Files — view', () => {
   });
 
   it('GET /account/view redirects binary file to download', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/view/documents/data.bin', { method: 'GET' }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toContain('/account/download/');
   });
 
   it('GET /account/view returns 404 for missing file', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/view/documents/missing.txt', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
@@ -250,26 +199,22 @@ describe('Files — delete', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
   beforeEach(() => {
-    storage.set('users/alice/storage/documents/todelete.txt', {
-      body: new TextEncoder().encode('bye').buffer,
-      contentType: 'text/plain',
-      etag: '"xyz"',
-    });
+    storage.seed('users/alice/storage/documents/todelete.txt', 'bye');
   });
 
   it('POST /account/delete removes file and redirects', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
     expect(res.status).toBe(302);
-    expect(storage.has('users/alice/storage/documents/todelete.txt')).toBe(false);
+    expect(storage.objects.has('users/alice/storage/documents/todelete.txt')).toBe(false);
   });
 
   it('POST /account/delete redirects to parent folder', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/delete/documents/todelete.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
     expect(res.headers.get('Location')).toContain('/account/browse');
   });
@@ -282,14 +227,18 @@ describe('Dashboard', () => {
     { id: 'tok-1', client_id: 'https://notes.example', scopes: 'documents:rw', user_id: 'alice', expires_at: now + 3600, created_at: now - 86400 * 3 },
     { id: 'tok-2', client_id: 'https://notes.example', scopes: 'pictures:r', user_id: 'alice', expires_at: now - 1, created_at: now },
     { id: 'tok-3', client_id: 'another-app', scopes: 'music:r', user_id: 'alice', expires_at: now + 3600, created_at: now },
+    // Access token expired, refresh token still valid: the app keeps access.
+    { id: 'tok-4', client_id: 'https://sync.example', scopes: 'notes:rw', user_id: 'alice', expires_at: now - 1, refresh_expires_at: now + 86400, created_at: now },
+    // Everything expired: not an app with access any more.
+    { id: 'tok-5', client_id: 'https://gone.example', scopes: 'videos:rw', user_id: 'alice', expires_at: now - 1, refresh_expires_at: now - 1, created_at: now },
   ];
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb(null, mockTokens) });
   });
 
   it('GET /account shows the Storage address, usage and sign-out', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb({ username: 'alice', storage_quota_bytes: 10737418240, used_storage_bytes: 1048576 }, []) } as any;
+    const env = { STORAGE: storage, DB: makeDb({ username: 'alice', storage_quota_bytes: 10737418240, used_storage_bytes: 1048576 }, []) };
     const res = await app.request('http://localhost/account', { method: 'GET' }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -303,25 +252,38 @@ describe('Dashboard', () => {
   });
 
   it('GET /account lists apps grouped by client, shown by origin host', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb(null, mockTokens) } as any;
+    const env = { STORAGE: storage, DB: makeDb(null, mockTokens) };
     const res = await app.request('http://localhost/account', { method: 'GET' }, env);
     const html = await res.text();
-    expect(html.split('action="/account/apps/revoke"')).toHaveLength(3);
+    expect(html.split('action="/account/apps/revoke"')).toHaveLength(4);
     expect(html).toContain('<strong>notes.example</strong>');
-    expect(html).toContain('documents:rw pictures:r');
     expect(html).toContain(new Date((now - 86400 * 3) * 1000).toISOString().slice(0, 10));
     expect(html).toContain('<strong>another-app</strong>');
+    expect(html).toContain('<strong>sync.example</strong>');
+  });
+
+  it('GET /account leaves out expired tokens and apps whose grants have all expired', async () => {
+    const env = { STORAGE: storage, DB: makeDb(null, mockTokens) };
+    const html = await (await app.request('http://localhost/account', { method: 'GET' }, env)).text();
+    expect(html).toContain('>documents:rw</span>');
+    expect(html).not.toContain('pictures:r');
+    expect(html).not.toContain('gone.example');
+  });
+
+  it('GET /account without a database is a 503, not an empty dashboard', async () => {
+    const res = await app.request('http://localhost/account', { method: 'GET' }, { STORAGE: storage });
+    expect(res.status).toBe(503);
   });
 
   it('GET /account/tokens redirects to the dashboard', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/tokens', { method: 'GET' }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/account');
   });
 
   it('serves the copy button behaviour from client.js', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/client.js', { method: 'GET' }, env);
     expect(await res.text()).toContain('navigator.clipboard.writeText');
   });
@@ -331,13 +293,13 @@ describe('Files — upload', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
-  beforeEach(() => storage.clear());
+  beforeEach(() => storage.objects.clear());
 
   it('POST /account/upload stores file and redirects', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const formData = new FormData();
     formData.append('files', new File(['hello upload'], 'test.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/documents', {
@@ -346,11 +308,11 @@ describe('Files — upload', () => {
       headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
-    expect(storage.has('users/alice/storage/documents/test.txt')).toBe(true);
+    expect(storage.objects.has('users/alice/storage/documents/test.txt')).toBe(true);
   });
 
   it('POST /account/upload with no file redirects without storing', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const formData = new FormData();
     const res = await app.request('http://localhost/account/upload/documents', {
       method: 'POST',
@@ -358,7 +320,7 @@ describe('Files — upload', () => {
       headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
-    expect(storage.size).toBe(0);
+    expect(storage.objects.size).toBe(0);
   });
 });
 
@@ -366,19 +328,19 @@ describe('Account routing', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
   for (const path of ['/admin', '/admin/', '/admin/users', '/admin/debug/env']) {
     it(`GET ${path} redirects to /account with 301`, async () => {
-      const res = await app.request(`http://localhost${path}`, { method: 'GET' }, { STORAGE: mockStorage, DB: makeDb() } as any);
+      const res = await app.request(`http://localhost${path}`, { method: 'GET' }, { STORAGE: storage, DB: makeDb() });
       expect(res.status).toBe(301);
       expect(res.headers.get('Location')).toBe('/account');
     });
   }
 
   it('GET /account/ redirects to /account (no trailing slash) with 301', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/', { method: 'GET' }, env);
     expect(res.status).toBe(301);
     expect(res.headers.get('Location')).toBe('/account');
@@ -389,20 +351,16 @@ describe('Files — save (edit)', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
   beforeEach(() => {
-    storage.clear();
-    storage.set('users/alice/storage/documents/note.txt', {
-      body: new TextEncoder().encode('original content').buffer,
-      contentType: 'text/plain',
-      etag: '"orig"',
-    });
+    storage.objects.clear();
+    storage.seed('users/alice/storage/documents/note.txt', 'original content', 'text/markdown');
   });
 
   it('POST /account/save updates file content', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const form = new FormData();
     form.append('content', 'updated content');
     const res = await app.request('http://localhost/account/save/documents/note.txt', {
@@ -411,12 +369,11 @@ describe('Files — save (edit)', () => {
       headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(204);
-    const stored = storage.get('users/alice/storage/documents/note.txt');
-    expect(new TextDecoder().decode(stored?.body as ArrayBuffer)).toBe('updated content');
+    expect(storage.text('users/alice/storage/documents/note.txt')).toBe('updated content');
   });
 
   it('POST /account/save preserves content type', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const form = new FormData();
     form.append('content', 'new');
     await app.request('http://localhost/account/save/documents/note.txt', {
@@ -424,7 +381,7 @@ describe('Files — save (edit)', () => {
       body: form,
       headers: SAME_ORIGIN,
     }, env);
-    expect(storage.get('users/alice/storage/documents/note.txt')?.contentType).toBe('text/plain');
+    expect(storage.objects.get('users/alice/storage/documents/note.txt')?.contentType).toBe('text/markdown');
   });
 });
 
@@ -432,25 +389,17 @@ describe('Files — root browse listing', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
   beforeEach(() => {
-    storage.clear();
-    storage.set('users/alice/storage/photos/img.jpg', {
-      body: new Uint8Array([0xff, 0xd8]).buffer,
-      contentType: 'image/jpeg',
-      etag: '"ph1"',
-    });
-    storage.set('users/alice/storage/documents/note.txt', {
-      body: new TextEncoder().encode('hi').buffer,
-      contentType: 'text/plain',
-      etag: '"doc1"',
-    });
+    storage.objects.clear();
+    storage.seed('users/alice/storage/photos/img.jpg', new Uint8Array([0xff, 0xd8]), 'image/jpeg');
+    storage.seed('users/alice/storage/documents/note.txt', 'hi');
   });
 
   it('root browse shows full folder names without truncation', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/browse', {
       method: 'GET',
       headers: SAME_ORIGIN,
@@ -468,13 +417,13 @@ describe('Files — nested path upload', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
+    app = createServer({ STORAGE: storage, DB: makeDb() });
   });
 
-  beforeEach(() => storage.clear());
+  beforeEach(() => storage.objects.clear());
 
   it('POST /account/upload/a/b/c stores file at full nested path', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const form = new FormData();
     form.append('files', new File(['data'], 'file.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/photos/2024/summer', {
@@ -483,11 +432,11 @@ describe('Files — nested path upload', () => {
       headers: SAME_ORIGIN,
     }, env);
     expect(res.status).toBe(302);
-    expect(storage.has('users/alice/storage/photos/2024/summer/file.txt')).toBe(true);
+    expect(storage.objects.has('users/alice/storage/photos/2024/summer/file.txt')).toBe(true);
   });
 
   it('POST /account/upload redirects to correct nested browse path', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const form = new FormData();
     form.append('files', new File(['x'], 'x.txt', { type: 'text/plain' }));
     const res = await app.request('http://localhost/account/upload/photos/2024', {
@@ -503,16 +452,12 @@ describe('Files — view binary redirect URL', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    app = createServer({ STORAGE: mockStorage, DB: makeDb() } as any);
-    storage.set('users/alice/storage/photos/2024/img.png', {
-      body: new Uint8Array([0x89, 0x50]).buffer,
-      contentType: 'image/png',
-      etag: '"png1"',
-    });
+    app = createServer({ STORAGE: storage, DB: makeDb() });
+    storage.seed('users/alice/storage/photos/2024/img.png', new Uint8Array([0x89, 0x50]), 'image/png');
   });
 
   it('view redirects binary to download using real path separators', async () => {
-    const env = { STORAGE: mockStorage, DB: makeDb() } as any;
+    const env = { STORAGE: storage, DB: makeDb() };
     const res = await app.request('http://localhost/account/view/photos/2024/img.png', {
       method: 'GET',
       headers: SAME_ORIGIN,
@@ -521,5 +466,92 @@ describe('Files — view binary redirect URL', () => {
     const location = res.headers.get('Location') || '';
     expect(location).toBe('/account/download/photos/2024/img.png');
     expect(location).not.toContain('%2F');
+  });
+});
+
+describe('Files — nested paths keep real separators', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: storage, DB: makeDb() });
+  });
+
+  beforeEach(() => {
+    storage.objects.clear();
+    storage.seed('users/alice/storage/documents/a/b/note.txt', 'hi');
+  });
+
+  it('browse and view breadcrumbs link each folder by its real path', async () => {
+    const env = { STORAGE: storage, DB: makeDb() };
+    for (const url of ['http://localhost/account/browse/documents/a/b', 'http://localhost/account/view/documents/a/b/note.txt']) {
+      const html = await (await app.request(url, { method: 'GET' }, env)).text();
+      expect(html).toContain('href="/account/browse/documents/a"');
+      expect(html).toContain('href="/account/browse/documents/a/b"');
+      expect(html).not.toContain('%2F');
+    }
+  });
+
+  it('delete redirects to the real parent path', async () => {
+    const env = { STORAGE: storage, DB: makeDb() };
+    const res = await app.request('http://localhost/account/delete/documents/a/b/note.txt', { method: 'POST', headers: SAME_ORIGIN }, env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/account/browse/documents/a/b');
+  });
+});
+
+describe('Files — path validation', () => {
+  let app: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    app = createServer({ STORAGE: storage, DB: makeDb() });
+  });
+
+  beforeEach(() => {
+    storage.objects.clear();
+    storage.seed('users/alice/storage/documents/.hidden', 'legacy');
+  });
+
+  const upload = (folder: string, filename: string) => {
+    const form = new FormData();
+    form.append('files', new File(['x'], filename, { type: 'text/plain' }));
+    return app.request(`http://localhost/account/upload/${folder}`, {
+      method: 'POST',
+      body: form,
+      headers: SAME_ORIGIN,
+    }, { STORAGE: storage, DB: makeDb() });
+  };
+
+  it('rejects upload file names the storage API would refuse, writing nothing', async () => {
+    for (const [folder, filename] of [
+      ['documents', '../../escape.txt'],
+      ['documents', 'sub/file.txt'],
+      ['documents', '..'],
+    ]) {
+      const res = await upload(folder, filename);
+      expect(res.status).toBe(400);
+    }
+    expect([...storage.objects.keys()]).toEqual(['users/alice/storage/documents/.hidden']);
+  });
+
+  it('accepts dot-leading names, which the storage API allows (protocol §4)', async () => {
+    expect((await upload('documents', '.env')).status).toBe(302);
+    expect((await upload('.config', 'file.txt')).status).toBe(302);
+    expect(storage.objects.has('users/alice/storage/documents/.env')).toBe(true);
+    expect(storage.objects.has('users/alice/storage/.config/file.txt')).toBe(true);
+  });
+
+  it('rejects saving or deleting a path the storage API would refuse', async () => {
+    const env = { STORAGE: storage, DB: makeDb() };
+    const form = new FormData();
+    form.append('content', 'overwritten');
+    // An encoded "/" or a NUL can't be part of a name (protocol §4)
+    for (const bad of ['documents/a%2Fb', 'documents/a%00b']) {
+      const save = await app.request(`http://localhost/account/save/${bad}`, { method: 'POST', body: form, headers: SAME_ORIGIN }, env);
+      expect(save.status).toBe(400);
+      const del = await app.request(`http://localhost/account/delete/${bad}`, { method: 'POST', headers: SAME_ORIGIN }, env);
+      expect(del.status).toBe(400);
+    }
+
+    expect(storage.text('users/alice/storage/documents/.hidden')).toBe('legacy');
   });
 });

@@ -1,165 +1,211 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync, renameSync, rmdirSync } from 'fs';
-import { join, dirname, resolve, sep } from 'path';
-import { randomUUID } from 'crypto';
-import type { StorageGetOptions } from '../types';
+import { mkdirSync } from 'node:fs';
+import { mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join, resolve } from 'node:path';
+import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
+import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
 
-export interface BlobMetadata {
-  contentType: string;
-  contentLength: number;
-  etag: string;
-  lastModified?: string;
+// The offline (dev-only) Storage backend: one file per object under baseDir.
+//
+// Each key segment is percent-encoded byte by byte, keeping only a-z, 0-9,
+// '-', '_' and any '.' but a leading one. Distinct keys therefore never share
+// a file, even on a case-insensitive filesystem, and no segment is '..' or
+// starts with '.'. Content type and ETag live in a parallel tree under
+// `.meta/`, a name no key can produce.
+
+type Metadata = NonNullable<Awaited<ReturnType<StorageInterface['head']>>>;
+type Listing = Awaited<ReturnType<StorageInterface['list']>>;
+type ListedObject = Listing['objects'][number];
+
+const META_DIR = '.meta';
+const KEPT = /[a-z0-9_-]/;
+
+function encodeSegment(segment: string): string {
+  if (!segment) throw new Error('Storage keys cannot have empty segments');
+  let encoded = '';
+  for (const byte of new TextEncoder().encode(segment)) {
+    const char = String.fromCharCode(byte);
+    encoded += KEPT.test(char) || (char === '.' && encoded) ? char : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return encoded;
 }
 
-// Offline stand-in for R2: each object is a file at <baseDir>/<key>, and its
-// metadata a JSON file at <baseDir>/.meta/<key>.json. Keys always start with
-// "users/", so the .meta tree can't collide with an object, and any item name
-// (e.g. "x.meta", "a\b", ".hidden") is stored as is. Like R2, list() returns
-// object keys only; folders exist only as prefixes of objects.
-export class LocalStorage {
+/** The key segment a file name encodes, or null for a name RSilo did not write. */
+function decodeSegment(name: string): string | null {
+  try {
+    const segment = decodeURIComponent(name);
+    return encodeSegment(segment) === name ? segment : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMissing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+async function fileStats(path: string): Promise<Stats | null> {
+  try {
+    const stats = await stat(path);
+    return stats.isFile() ? stats : null;
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+}
+
+export class LocalStorage implements StorageInterface {
   private baseDir: string;
-  private metaDir: string;
+  private locks = new Map<string, Promise<void>>();
 
   constructor(baseDir?: string) {
-    this.baseDir = resolve(baseDir || join(process.cwd(), 'data', 'storage'));
-    this.metaDir = join(this.baseDir, '.meta');
-    if (!existsSync(this.baseDir)) {
-      mkdirSync(this.baseDir, { recursive: true });
-    }
-    this.migrateSidecars();
+    this.baseDir = resolve(baseDir || join('data', 'storage'));
+    mkdirSync(this.baseDir, { recursive: true });
   }
 
-  // Keys are made of item names checked by the routes (protocol/item-path.ts);
-  // refuse anything that could still escape baseDir.
-  private resolveKey(key: string, root = this.baseDir): string {
-    const segments = key.replace(/^\//, '').replace(/\/$/, '').split('/');
-    if (segments.some(s => s === '' || s === '.' || s === '..' || s.includes('\0'))) {
-      throw new Error(`invalid storage key: ${JSON.stringify(key)}`);
-    }
-    const path = resolve(root, ...segments);
-    if (!path.startsWith(root + sep)) {
-      throw new Error(`invalid storage key: ${JSON.stringify(key)}`);
-    }
-    return path;
+  private dataPath(key: string): string {
+    return join(this.baseDir, ...key.split('/').map(encodeSegment));
   }
 
   private metaPath(key: string): string {
-    return this.resolveKey(key, this.metaDir) + '.json';
+    return join(this.baseDir, META_DIR, ...key.split('/').map(encodeSegment));
   }
 
-  private readMeta(key: string, filePath: string): BlobMetadata {
-    const stats = statSync(filePath);
-    let metadata: BlobMetadata = {
-      contentType: 'application/octet-stream',
+  private async metadata(key: string, stats: Stats): Promise<Metadata> {
+    let stored: { contentType?: string; etag?: string } = {};
+    try {
+      stored = JSON.parse(await readFile(this.metaPath(key), 'utf-8'));
+    } catch {
+      // No (readable) metadata, e.g. a file copied in by hand: fall back to
+      // an ETag that still changes only when the file does.
+    }
+    return {
+      contentType: stored.contentType || 'application/octet-stream',
       contentLength: stats.size,
-      etag: `"${randomUUID().slice(0, 8)}"`,
+      etag: stored.etag || `"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs * 1000).toString(16)}"`,
       lastModified: stats.mtime.toISOString(),
     };
+  }
+
+  async get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer; metadata: Metadata } | null> {
+    const path = this.dataPath(key);
+    const stats = await fileStats(path);
+    if (!stats) return null;
+    try {
+      let bytes = await readFile(path);
+      if (options?.range) bytes = bytes.subarray(options.range.offset, options.range.offset + options.range.length);
+      const body = Uint8Array.from(bytes).buffer;
+      return { body, metadata: await this.metadata(key, stats) };
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
+  }
+
+  // One write or delete per key at a time, so a condition is checked and the
+  // change made with nothing in between. Enough for the one offline process.
+  private async locked<T>(key: string, change: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(key) ?? Promise.resolve()).then(change);
+    const tail = run.then(() => {}, () => {});
+    this.locks.set(key, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(key) === tail) this.locks.delete(key);
+    }
+  }
+
+  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
+    const path = this.dataPath(key);
     const metaPath = this.metaPath(key);
-    if (existsSync(metaPath)) {
+    const bytes = new Uint8Array(body);
+    const etag = `"${createHash('sha256').update(bytes).digest('hex').slice(0, 32)}"`;
+
+    return this.locked(key, async () => {
+      if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
       try {
-        metadata = { ...metadata, ...JSON.parse(readFileSync(metaPath, 'utf-8')), contentLength: stats.size };
-      } catch {}
-    }
-    return metadata;
+        await mkdir(dirname(path), { recursive: true });
+        await mkdir(dirname(metaPath), { recursive: true });
+        await writeFile(path, bytes);
+      } catch (error) {
+        // A file cannot also be a directory, nor sit inside a file.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST' || code === 'ENOTDIR' || code === 'EISDIR') throw new PathConflictError();
+        throw error;
+      }
+      await writeFile(metaPath, JSON.stringify({ contentType, etag }));
+      return etag;
+    });
   }
 
-  async get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer; metadata: BlobMetadata } | null> {
-    const filePath = this.resolveKey(key);
-    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-      return null;
-    }
-    const metadata = this.readMeta(key, filePath);
-    let body = readFileSync(filePath);
-    if (options?.range) {
-      body = body.subarray(options.range.offset, options.range.offset + options.range.length);
-    }
-    return { body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer, metadata };
-  }
-
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
-    const filePath = this.resolveKey(key);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, Buffer.from(body));
-
-    const etag = `"${randomUUID().slice(0, 8)}"`;
-    const metadata: BlobMetadata = {
-      contentType,
-      contentLength: body.byteLength,
-      etag,
-      lastModified: statSync(filePath).mtime.toISOString(),
-    };
+  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
+    const path = this.dataPath(key);
     const metaPath = this.metaPath(key);
-    mkdirSync(dirname(metaPath), { recursive: true });
-    writeFileSync(metaPath, JSON.stringify(metadata));
-    return etag;
-  }
-
-  async delete(key: string): Promise<void> {
-    const filePath = this.resolveKey(key);
-    if (existsSync(filePath)) unlinkSync(filePath);
-    const metaPath = this.metaPath(key);
-    if (existsSync(metaPath)) unlinkSync(metaPath);
-    // An emptied folder no longer exists (draft-dejong-remotestorage §4)
-    this.pruneEmptyDirs(dirname(filePath), this.baseDir);
-    this.pruneEmptyDirs(dirname(metaPath), this.metaDir);
-  }
-
-  async head(key: string): Promise<BlobMetadata | null> {
-    const filePath = this.resolveKey(key);
-    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-      return null;
-    }
-    return this.readMeta(key, filePath);
-  }
-
-  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
-    const objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] = [];
-    const keyPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
-
-    const walk = (dir: string, prefixKey: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = join(dir, entry.name);
-        const key = prefixKey + entry.name;
-        if (entry.isDirectory()) {
-          walk(fullPath, key + '/');
-        } else if (entry.isFile()) {
-          const meta = this.readMeta(key, fullPath);
-          objects.push({ key, size: meta.contentLength, etag: meta.etag, contentType: meta.contentType, lastModified: meta.lastModified });
+    return this.locked(key, async () => {
+      if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+      if (!(await fileStats(path))) return;
+      for (const file of [path, metaPath]) {
+        try {
+          await unlink(file);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
         }
       }
-    };
-
-    const baseDir = this.resolveKey(keyPrefix);
-    if (existsSync(baseDir) && statSync(baseDir).isDirectory()) walk(baseDir, keyPrefix);
-    return { objects };
+      // Folders exist only while they hold documents.
+      await this.removeEmptyParents(dirname(path));
+      await this.removeEmptyParents(dirname(metaPath));
+    });
   }
 
-  private pruneEmptyDirs(dir: string, root: string): void {
-    while (dir.startsWith(root + sep) && existsSync(dir) && readdirSync(dir).length === 0) {
-      rmdirSync(dir);
+  private async removeEmptyParents(dir: string): Promise<void> {
+    while (dir.length > this.baseDir.length && dir.startsWith(this.baseDir)) {
+      try {
+        await rmdir(dir);
+      } catch {
+        return; // not empty (or already gone)
+      }
       dir = dirname(dir);
     }
   }
 
-  // Older offline data kept metadata in a "<file>.meta" sidecar next to each
-  // file, which hid documents named "*.meta". Move sidecars into .meta/.
-  private migrateSidecars(): void {
-    const usersDir = join(this.baseDir, 'users');
-    if (!existsSync(usersDir)) return;
-    const walk = (dir: string, prefixKey: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(fullPath, prefixKey + entry.name + '/');
-        } else if (entry.name.endsWith('.meta')) {
-          const owner = fullPath.slice(0, -'.meta'.length);
-          if (!existsSync(owner) || !statSync(owner).isFile()) continue;
-          const metaPath = this.metaPath(prefixKey + entry.name.slice(0, -'.meta'.length));
-          mkdirSync(dirname(metaPath), { recursive: true });
-          renameSync(fullPath, metaPath);
-        }
-      }
+  async head(key: string): Promise<Metadata | null> {
+    const stats = await fileStats(this.dataPath(key));
+    return stats ? this.metadata(key, stats) : null;
+  }
+
+  async list(prefix: string, options: { limit?: number } = {}): Promise<Listing> {
+    // Walk the deepest folder the prefix names, then keep keys that match it.
+    const folderKey = prefix.slice(0, prefix.lastIndexOf('/') + 1);
+    const folderPath = folderKey ? this.dataPath(folderKey.slice(0, -1)) : this.baseDir;
+    const objects: ListedObject[] = [];
+    await this.walk(folderPath, folderKey, objects);
+    return {
+      objects: objects
+        .filter(object => object.key.startsWith(prefix))
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+        .slice(0, options.limit),
     };
-    walk(usersDir, 'users/');
+  }
+
+  private async walk(dir: string, keyPrefix: string, objects: ListedObject[]): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (isMissing(error)) return;
+      throw error;
+    }
+    await Promise.all(entries.map(async (entry) => {
+      const segment = decodeSegment(entry.name);
+      if (segment === null) return; // `.meta/` and anything RSilo did not write
+      const key = keyPrefix + segment;
+      if (entry.isDirectory()) return this.walk(join(dir, entry.name), key + '/', objects);
+      const stats = entry.isFile() ? await fileStats(join(dir, entry.name)) : null;
+      if (!stats) return;
+      const { contentType, etag, lastModified } = await this.metadata(key, stats);
+      objects.push({ key, size: stats.size, etag, contentType, lastModified });
+    }));
   }
 }

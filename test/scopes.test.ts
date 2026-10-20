@@ -2,41 +2,10 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
-
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
+import { MemoryStorage } from './helpers/memory-storage';
 
 const TEST_ENV = {
-  STORAGE: {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) {
-      storage.delete(key);
-    },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string; delimiter?: string }) {
-      const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return {
-        objects: keys.map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any,
+  STORAGE: new MemoryStorage(),
   DB: createSqliteD1(),
 };
 
@@ -116,8 +85,50 @@ describe('Scope-based access control', () => {
     expect(getRes.status).toBe(403);
   });
 
-  it('wildcard scope can access any module', async () => {
-    const adminToken = seedToken(TEST_ENV, 'alice', '*');
+  // A bare `*` used to grant full read-write; it is not a valid scope, so it
+  // grants nothing. The root scope is `*:r` or `*:rw`.
+  it('bare * scope grants nothing', async () => {
+    const bareToken = seedToken(TEST_ENV, 'alice', '*');
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/bare-wildcard',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${bareToken}` } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('a module scope cannot write root-level documents or public/ itself; *:rw can', async () => {
+    const fooToken = seedToken(TEST_ENV, 'alice', 'foo:rw');
+    const rootToken = seedToken(TEST_ENV, 'alice', '*:rw');
+    const put = (path: string, token: string) => app.request(
+      `http://localhost/storage/alice/${path}`,
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'x' },
+      TEST_ENV
+    );
+
+    for (const path of ['foo', 'public/foo']) {
+      const res = await put(path, fooToken);
+      expect(res.status, path).toBe(403);
+      expect(res.headers.get('WWW-Authenticate')).toContain('scope="*:rw"');
+      expect((await put(path, rootToken)).status, path).toBeOneOf([200, 201]);
+    }
+    // Past the scope check: refused only because the documents foo and public/foo now exist.
+    expect((await put('foo/bar', fooToken)).status).toBe(409);
+    expect((await put('public/foo/bar', fooToken)).status).toBe(409);
+  });
+
+  it('a read level that only starts with r grants nothing', async () => {
+    const token = seedToken(TEST_ENV, 'alice', 'documents:read');
+    const res = await app.request(
+      'http://localhost/storage/alice/documents/read-test',
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
+      TEST_ENV
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('wildcard scope *:rw can access any module', async () => {
+    const adminToken = seedToken(TEST_ENV, 'alice', '*:rw');
 
     const putRes1 = await app.request(
       'http://localhost/storage/alice/documents/wildcard-test',

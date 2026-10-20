@@ -23,8 +23,8 @@ function escapeCell(value: string): string {
 
 /**
  * Renders the OpenAPI surface as Markdown, grouped by tag. The output is
- * committed into README.md between markers by `bun run docs:readme`; a test
- * fails if the committed copy is stale.
+ * committed into docs/api.md between markers by `bun run docs:api`; a test
+ * (and `bun run docs:api:check`) fails if the committed copy is stale.
  */
 export function renderApiMarkdown(doc: OpenApiDocument): string {
   const byTag = new Map<string, RenderedOperation[]>();

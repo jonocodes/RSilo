@@ -28,55 +28,70 @@ export function hashToken(token: string): Promise<string> {
   return sha256(token);
 }
 
-export function hasScope(tokenScopes: string, requiredScope: string): boolean {
-  const colonIdx = requiredScope.indexOf(':');
-  if (colonIdx === -1) return false;
-  const requiredName = requiredScope.slice(0, colonIdx);
-  const requiredPerm = requiredScope.slice(colonIdx + 1);
+export type Access = 'r' | 'rw';
 
-  const scopes = tokenScopes.split(/\s+/);
-  for (const scope of scopes) {
-    if (scope === '*') {
-      return true;
-    }
-    const scopeColonIdx = scope.indexOf(':');
-    if (scopeColonIdx === -1) continue;
-
-    const name = scope.slice(0, scopeColonIdx);
-    const perms = scope.slice(scopeColonIdx + 1);
-
-    if (name === requiredName && perms.startsWith(requiredPerm)) {
-      return true;
-    }
-    if (name === '*' && perms.startsWith(requiredPerm)) {
-      return true;
-    }
-  }
-  return false;
+/** One access scope: a Module (`*` for the whole storage root) and its access level. */
+export interface Scope {
+  module: string;
+  access: Access;
 }
 
-function safeDecode(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
+// `<module>:<r|rw>`. Module names are lower-case alphanumeric, as the protocol
+// asks (§9), with `-` and `_` also allowed; `public` is reserved.
+const SCOPE = /^(\*|[a-z0-9_-]+):(r|rw)$/;
+
+export function parseScope(item: string): Scope | null {
+  const match = SCOPE.exec(item);
+  if (!match || match[1] === 'public') return null;
+  return { module: match[1], access: match[2] as Access };
 }
 
-export function scopeFromPath(fullPath: string): { module: string; permission: string } {
-  const segments = fullPath.split('/').filter(Boolean);
-  let startIdx = 0;
-  if (segments[0] === 'storage') {
-    startIdx = 1;
-  }
-  let categoryIdx = startIdx + 1;
-  if (segments[categoryIdx] === 'public') {
-    categoryIdx += 1;
-  }
-  // Paths arrive raw (percent-encoded, see protocol/item-path.ts); the
-  // category is compared with scopes by name.
-  const module = segments.length > categoryIdx ? safeDecode(segments[categoryIdx]) : '*';
-  return { module, permission: 'rw' };
+/** A scope parameter: space-separated scopes. Null if it is empty or any item is malformed. */
+export function parseScopes(scope: string): Scope[] | null {
+  const scopes = scope.split(' ').filter(Boolean).map(parseScope);
+  return scopes.length && scopes.every(s => s !== null) ? scopes as Scope[] : null;
+}
+
+/**
+ * The Module a storage path (relative to the Account's root) belongs to:
+ * `<module>/…` and `public/<module>/…`. Everything else (the root folder,
+ * root-level documents, `public/` and documents directly in it) is `*`.
+ */
+export function moduleOf(path: string): string {
+  const segments = path.split('/');
+  const inModule = segments[0] === 'public' ? segments.slice(1) : segments;
+  return inModule.length > 1 && inModule[0] ? inModule[0] : '*';
+}
+
+/** Whether a token's scopes give `access` to `module`. `rw` includes `r`; malformed items grant nothing. */
+export function grants(tokenScopes: string, module: string, access: Access): boolean {
+  return tokenScopes.split(' ').map(parseScope).some(scope =>
+    scope !== null
+    && (scope.module === '*' || scope.module === module)
+    && (scope.access === 'rw' || scope.access === access));
+}
+
+/** Why a storage request is refused: no valid token (401), or not for this token (403). */
+export interface Denial {
+  status: 401 | 403;
+  /** Set when the token lacks this scope. */
+  requiredScope?: string;
+}
+
+/**
+ * The storage authorization decision, for every storage request: may this
+ * token (null when none, or an unknown one, was presented) have `access` to
+ * `path` under `username`'s storage root? Null when it may. Public documents
+ * (not folders) are readable by anyone; everything else needs a token for the
+ * Account whose scopes cover the path's Module.
+ */
+export function authorize(payload: TokenPayload | null, username: string, path: string, access: Access): Denial | null {
+  if (access === 'r' && path.startsWith('public/') && !path.endsWith('/')) return null;
+  if (!payload) return { status: 401 };
+  if (payload.sub !== username) return { status: 403 };
+  const module = moduleOf(path);
+  if (!grants(payload.scopes, module, access)) return { status: 403, requiredScope: `${module}:${access}` };
+  return null;
 }
 
 export function parseAuthHeader(header: string | null): string | null {

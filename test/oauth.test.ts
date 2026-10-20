@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import type { SqliteD1, SqliteStatement } from '../src/services/db/sqlite';
 import { PKCE, seedToken, tokenHash } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // OAuth discovery and the token endpoint. The whole consent -> code -> token
 // flow lives in consent.test.ts, PKCE enforcement in pkce.test.ts, and refresh
@@ -9,46 +11,13 @@ import { PKCE, seedToken, tokenHash } from './helpers/tokens';
 // discovery, the error grants and the few endpoint behaviours not covered
 // there, all against the real SQLite database.
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
-
-function makeStorage() {
-  return {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) { storage.delete(key); },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string }) {
-      const prefix = options.prefix || '';
-      return {
-        objects: Array.from(storage.keys()).filter(k => k.startsWith(prefix)).map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any;
-}
-
 function makeEnv(extra: Record<string, unknown> = {}) {
-  return { STORAGE: makeStorage(), DB: createSqliteD1(), ...extra } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...extra };
 }
 
 const REDIRECT_URI = 'https://example.com/callback';
 
-function insertCode(env: any, code: string, overrides: { redirect_uri?: string; expires_at?: number } = {}) {
+function insertCode(env: { DB: SqliteD1 }, code: string, overrides: { redirect_uri?: string; expires_at?: number } = {}) {
   env.DB.sqlite.prepare(
     'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
@@ -62,7 +31,20 @@ function insertCode(env: any, code: string, overrides: { redirect_uri?: string; 
   );
 }
 
-function exchange(env: any, body: Record<string, string>) {
+// D1 answers over the network: each statement runs at once, but its result
+// arrives later, so concurrent requests interleave between statements.
+function withLatency(db: SqliteD1): SqliteD1 {
+  const later = <T>(result: Promise<T>) => new Promise<T>(resolve => setTimeout(() => resolve(result), 5));
+  const statement = (s: SqliteStatement): SqliteStatement => ({
+    bind: (...values: unknown[]) => statement(s.bind(...values)),
+    first: () => later(s.first()),
+    all: () => later(s.all()),
+    run: () => later(s.run()),
+  }) as unknown as SqliteStatement;
+  return { ...db, prepare: (sql: string) => statement(db.prepare(sql)) };
+}
+
+function exchange(env: unknown, body: Record<string, string>) {
   return createServer(env).request('http://localhost/oauth/alice/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -193,6 +175,18 @@ describe('OAuth token endpoint', () => {
     expect((await second.json() as any).error).toBe('invalid_grant');
   });
 
+  it('redeems a code once when two requests race for it', async () => {
+    const env = makeEnv();
+    env.DB = withLatency(env.DB);
+    seedToken(env, 'alice');
+    insertCode(env, 'raced-code');
+    const body = { grant_type: 'authorization_code', code: 'raced-code', redirect_uri: REDIRECT_URI, code_verifier: PKCE.verifier };
+
+    const results = await Promise.all([exchange(env, body), exchange(env, body)]);
+    expect(results.map(res => res.status).sort()).toEqual([200, 400]);
+    expect(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM oauth_tokens WHERE refresh_token_hash IS NOT NULL').get()).toEqual({ n: 1 });
+  });
+
   it('rejects an unknown refresh_token with invalid_grant', async () => {
     const res = await exchange(makeEnv(), {
       grant_type: 'refresh_token',
@@ -204,28 +198,65 @@ describe('OAuth token endpoint', () => {
   });
 });
 
+describe('malformed token requests', () => {
+  const BODIES: [string, Record<string, string>, string][] = [
+    ['invalid JSON', { 'Content-Type': 'application/json' }, '{"grant_type":'],
+    ['a JSON array', { 'Content-Type': 'application/json' }, '["refresh_token"]'],
+    ['JSON null', { 'Content-Type': 'application/json' }, 'null'],
+    ['a multipart body', { 'Content-Type': 'multipart/form-data; boundary=x' }, '--x--'],
+    ['no Content-Type', {}, 'grant_type=refresh_token'],
+  ];
+
+  for (const [name, headers, body] of BODIES) {
+    it(`answers ${name} with 400 invalid_request`, async () => {
+      const env = makeEnv();
+      const res = await createServer(env).request('http://localhost/oauth/alice/token', { method: 'POST', headers, body }, env);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: 'invalid_request' });
+    });
+  }
+
+  it('treats non-string JSON values as missing', async () => {
+    const env = makeEnv();
+    const res = await createServer(env).request('http://localhost/oauth/alice/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: 123 }),
+    }, env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'invalid_request' });
+  });
+
+  it('is a 503 without a database (dev mode), not tokens that were never stored', async () => {
+    const env = { STORAGE: new MemoryStorage() };
+    const res = await exchange(env, { grant_type: 'refresh_token', refresh_token: 'x' });
+    expect(res.status).toBe(503);
+  });
+});
+
 describe('database and storage failures surface as 500', () => {
-  it('a database that throws during token lookup is a 500, not a silent 401', async () => {
+  it('a database that throws during token lookup is a logged 500 that reveals nothing, not a silent 401', async () => {
     const env = {
-      STORAGE: makeStorage(),
+      STORAGE: new MemoryStorage(),
       DB: { prepare: () => { throw new Error('Database connection failed'); } } as any,
     };
-    const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
-      method: 'GET',
-      headers: { Authorization: 'Bearer opaque-token' },
-    }, env);
-    expect(res.status).toBe(500);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
+        method: 'GET',
+        headers: { Authorization: 'Bearer opaque-token' },
+      }, env);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+      expect(log).toHaveBeenCalledWith(expect.objectContaining({ message: 'Database connection failed' }));
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('a storage get failure after auth is a 500', async () => {
     const env = makeEnv();
-    env.STORAGE = {
-      async get() { throw new Error('Storage get failed'); },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
+    env.STORAGE.get = async () => { throw new Error('Storage get failed'); };
     const token = seedToken(env, 'alice', '*:rw');
     const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
       method: 'GET',

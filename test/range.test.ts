@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
-import { createMemoryStorage } from './helpers/memory-storage';
+import { MemoryStorage } from './helpers/memory-storage';
 
 const URL_ = 'http://localhost/storage/alice/documents/digits.txt';
 
@@ -17,7 +17,7 @@ describe('range requests', () => {
     app.request(URL_, { method, headers: { ...auth, ...headers } }, env);
 
   beforeEach(async () => {
-    env = { STORAGE: createMemoryStorage(), DB: createSqliteD1() };
+    env = { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
     auth = { Authorization: `Bearer ${seedToken(env, 'alice', 'documents:rw')}` };
     const put = await app.request(URL_, { method: 'PUT', body: '0123456789', headers: { ...auth, 'Content-Type': 'text/plain' } }, env);
     expect(put.status).toBe(201);
@@ -68,8 +68,9 @@ describe('range requests', () => {
   });
 
   it('slices in the route when a storage backend ignores the range', async () => {
-    const storage = env.STORAGE;
-    env.STORAGE = { ...storage, get: (key: string) => storage.get(key) };
+    const storage = env.STORAGE as MemoryStorage;
+    const whole = storage.get.bind(storage);
+    storage.get = (key: string) => whole(key);
     const res = await get({ Range: 'bytes=2-4' });
     expect(res.status).toBe(206);
     expect(await res.text()).toBe('234');

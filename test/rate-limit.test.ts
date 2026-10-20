@@ -5,6 +5,7 @@ import { seedToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { RATE_LIMITS, RATE_LIMIT_PERIOD_SECONDS } from '../src/services/rate-limit';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // Mirrors the native Workers rate-limit binding: limit() counts the call and
 // reports whether the key is still within its budget.
@@ -20,37 +21,20 @@ function fakeLimiter(max: number) {
   };
 }
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string }>();
-const mockStorage = {
-  async get(key: string) {
-    const item = storage.get(key);
-    return item ? { body: item.body, metadata: { contentType: 'text/plain', contentLength: item.body.byteLength, etag: item.etag } } : null;
-  },
-  async put(key: string, body: ArrayBuffer) {
-    const etag = `"etag-${storage.size}"`;
-    storage.set(key, { body, etag });
-    return etag;
-  },
-  async delete(key: string) { storage.delete(key); },
-  async head(key: string) {
-    const item = storage.get(key);
-    return item ? { contentType: 'text/plain', contentLength: item.body.byteLength, etag: item.etag } : null;
-  },
-  async list() { return { objects: [] }; },
-} as any;
+const storage = new MemoryStorage();
 
 const db = createSqliteD1();
 
 function makeEnv(overrides: Record<string, unknown> = {}) {
   return {
-    STORAGE: mockStorage,
+    STORAGE: storage,
     DB: db,
     STORAGE_LIMITER: fakeLimiter(RATE_LIMITS.STORAGE_LIMITER),
     ...overrides,
-  } as any;
+  };
 }
 
-function storageGet(env: any, token: string, user = 'alice', ip = '203.0.113.20') {
+function storageGet(env: ReturnType<typeof makeEnv>, token: string, user = 'alice', ip = '203.0.113.20') {
   return createServer(env).request(`http://localhost/storage/${user}/documents/`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}`, 'CF-Connecting-IP': ip },

@@ -2,19 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
 import { createSqliteD1 } from '../../src/services/db/sqlite';
+import { MemoryStorage } from '../helpers/memory-storage';
 
-function createTestEnv() {
-  return {
-    STORAGE: {
-      async get() { return null; },
-      async put() { return '"test-etag"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    } as any,
-    DB: createSqliteD1(),
-  };
+function createTestEnv(storage = new MemoryStorage()) {
+  return { STORAGE: storage, DB: createSqliteD1() };
 }
+
+const FILE = 'users/alice/storage/documents/test.txt';
 
 describe('WebFinger Compliance', () => {
   describe('RFC 7033 Discovery', () => {
@@ -218,140 +212,82 @@ describe('WebFinger Compliance', () => {
 });
 
 describe('ETag Compliance', () => {
-  it('ETag is always quoted', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: 'abc123' } };
-      },
-      async put() { return '"abc123"'; },
-      async delete() {},
-      async head() { return { etag: 'abc123', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
+  async function getWithIfNoneMatch(env: ReturnType<typeof createTestEnv>, ifNoneMatch?: string) {
     const token = seedToken(env, 'alice');
-
-    const res = await app.request(
+    return createServer(env).request(
       'http://localhost/storage/alice/documents/test.txt',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      { method: 'GET', headers: { Authorization: `Bearer ${token}`, ...(ifNoneMatch && { 'If-None-Match': ifNoneMatch }) } },
       env
     );
+  }
 
-    const etag = res.headers.get('ETag');
-    expect(etag).toMatch(/^"[^"]+"$/);
+  it('ETag is always quoted', async () => {
+    const storage = new MemoryStorage();
+    storage.seed(FILE, 'hello');
+    // A backend handing back an unquoted ETag must still be served quoted.
+    storage.objects.get(FILE)!.etag = 'abc123';
+    const res = await getWithIfNoneMatch(createTestEnv(storage));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('ETag')).toBe('"abc123"');
   });
 
   it('If-None-Match with quoted ETag works', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"abc123"' } };
-      },
-      async put() { return { etag: '"abc123"' }; },
-      async delete() {},
-      async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/test.txt',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}`, 'If-None-Match': '"abc123"' } },
-      env
-    );
+    const storage = new MemoryStorage();
+    const etag = storage.seed(FILE, 'hello');
+    const res = await getWithIfNoneMatch(createTestEnv(storage), etag);
 
     expect(res.status).toBe(304);
   });
 
   it('If-None-Match with unquoted ETag works', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"abc123"' } };
-      },
-      async put() { return { etag: '"abc123"' }; },
-      async delete() {},
-      async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/test.txt',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}`, 'If-None-Match': 'abc123' } },
-      env
-    );
+    const storage = new MemoryStorage();
+    const etag = storage.seed(FILE, 'hello');
+    const res = await getWithIfNoneMatch(createTestEnv(storage), etag.slice(1, -1));
 
     expect(res.status).toBe(304);
   });
 
   it('multiple ETags in If-None-Match works', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"abc123"' } };
-      },
-      async put() { return { etag: '"abc123"' }; },
-      async delete() {},
-      async head() { return { etag: '"abc123"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/test.txt',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}`, 'If-None-Match': '"abc", "def", "abc123"' } },
-      env
-    );
+    const storage = new MemoryStorage();
+    const etag = storage.seed(FILE, 'hello');
+    const res = await getWithIfNoneMatch(createTestEnv(storage), `"abc", "def", ${etag}`);
 
     expect(res.status).toBe(304);
   });
 });
 
 describe('Content-Type Compliance', () => {
+  const URL = 'http://localhost/storage/alice/documents/custom.json';
+  const KEY = 'users/alice/storage/documents/custom.json';
+
   it('stores Content-Type from PUT request', async () => {
-    const storage = {
-      async get() { return null; },
-      async put(_key: string, _body: ArrayBuffer, _options?: { httpMetadata?: { contentType?: string } }) {
-        return '"test"';
-      },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/custom.txt',
+    const put = await app.request(
+      URL,
       { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{"key": "value"}' },
       env
     );
+    expect(put.status).toBeOneOf([200, 201]);
+    expect(storage.objects.get(KEY)?.contentType).toBe('application/json');
 
-    expect(res.status).toBeOneOf([200, 201]);
+    const get = await app.request(URL, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, env);
+    expect(get.headers.get('Content-Type')).toBe('application/json');
+    expect(await get.text()).toBe('{"key": "value"}');
   });
 
   it('returns correct Content-Type on GET', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'application/json', contentLength: 5, etag: '"test"' } };
-      },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return { etag: '"test"', contentType: 'application/json', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
+    const storage = new MemoryStorage();
+    storage.seed(KEY, '{}', 'application/json');
+    const env = createTestEnv(storage);
     const token = seedToken(env, 'alice');
 
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/data.json',
+    const res = await createServer(env).request(
+      URL,
       { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
       env
     );
@@ -360,16 +296,8 @@ describe('Content-Type Compliance', () => {
   });
 
   it('defaults to application/octet-stream when no Content-Type provided', async () => {
-    const storage = {
-      async get() { return null; },
-      async put(_key: string, _body: ArrayBuffer, _options?: { httpMetadata?: { contentType?: string } }) {
-        return '"test"';
-      },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -380,29 +308,23 @@ describe('Content-Type Compliance', () => {
     );
 
     expect(res.status).toBeOneOf([200, 201]);
+    expect(storage.objects.get('users/alice/storage/documents/no-type.txt')?.contentType).toBe('application/octet-stream');
   });
 });
 
 describe('Folder Listing Compliance', () => {
-  it('returns valid JSON-LD context', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list(_options: { prefix: string }) {
-        return { objects: [] };
-      },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
+  async function listDocuments(storage: MemoryStorage) {
+    const env = createTestEnv(storage);
     const token = seedToken(env, 'alice');
-
-    const res = await app.request(
+    return createServer(env).request(
       'http://localhost/storage/alice/documents/',
       { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
       env
     );
+  }
+
+  it('returns valid JSON-LD context', async () => {
+    const res = await listDocuments(new MemoryStorage());
 
     const json = await res.json() as any;
     expect(json['@context']).toBeTruthy();
@@ -410,26 +332,9 @@ describe('Folder Listing Compliance', () => {
   });
 
   it('items is a flat object, not array', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list(_options: { prefix: string }) {
-        return { objects: [
-          { key: 'users/alice/storage/documents/file.txt', etag: '"abc"' }
-        ] };
-      },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-      env
-    );
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/file.txt', 'content');
+    const res = await listDocuments(storage);
 
     const json = await res.json() as any;
     expect(typeof json.items).toBe('object');
@@ -438,52 +343,23 @@ describe('Folder Listing Compliance', () => {
   });
 
   it('subfolders end with /', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list(_options: { prefix: string }) {
-        return { objects: [
-          { key: 'users/alice/storage/documents/sub/file.txt', etag: '"abc"' }
-        ] };
-      },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-      env
-    );
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/sub/file.txt', 'content');
+    const res = await listDocuments(storage);
 
     const json = await res.json() as any;
     expect(json.items['sub/']).toBeDefined();
   });
 
   it('etag for folder is computed from content', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list(_options: { prefix: string }) {
-        return { objects: [] };
-      },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
-    const app = createServer(env);
-    const token = seedToken(env, 'alice');
-
-    const res = await app.request(
-      'http://localhost/storage/alice/documents/',
-      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-      env
-    );
-
-    const etag = res.headers.get('ETag');
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/file.txt', 'one');
+    const etag = (await listDocuments(storage)).headers.get('ETag');
     expect(etag).toMatch(/^"[^"]+"$/);
+
+    // Same listing, same ETag; changed content, different ETag.
+    expect((await listDocuments(storage)).headers.get('ETag')).toBe(etag);
+    storage.seed('users/alice/storage/documents/file.txt', 'two');
+    expect((await listDocuments(storage)).headers.get('ETag')).not.toBe(etag);
   });
 });

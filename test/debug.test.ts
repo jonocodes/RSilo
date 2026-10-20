@@ -3,52 +3,17 @@ import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
-class FakeStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
-    this.objects.set(key, { body, contentType });
-    return '"etag"';
-  }
-
-  async get(key: string) {
-    const entry = this.objects.get(key);
-    if (!entry) return null;
-    return {
-      body: entry.body,
-      metadata: {
-        contentType: entry.contentType,
-        contentLength: entry.body.byteLength,
-        etag: '"etag"',
-      },
-    };
-  }
-
-  async delete(key: string): Promise<void> {
-    this.objects.delete(key);
-  }
-
-  async head(key: string) {
-    const entry = this.objects.get(key);
-    if (!entry) return null;
-    return {
-      contentType: entry.contentType,
-      contentLength: entry.body.byteLength,
-      etag: '"etag"',
-    };
-  }
-
-  async list(prefix: string) {
-    const objects = [
-      { key: 'users/alice/storage/documents/a.txt', size: 100, etag: '"a"', contentType: 'text/plain' },
-      { key: 'users/alice/storage/documents/b.txt', size: 50, etag: '"b"', contentType: 'text/plain' },
-      { key: 'users/alice/storage/documents/', size: 0, etag: '' },
-      { key: 'users/alice/storage/pictures/c.png', size: 300, etag: '"c"', contentType: 'image/png' },
-      { key: 'users/alice/storage/public/documents/d.txt', size: 20, etag: '"d"', contentType: 'text/plain' },
-    ].filter((o) => o.key.startsWith(prefix));
-    return { objects };
-  }
+/** Alice's storage with four objects (470 bytes) and a folder marker. */
+function seededStorage() {
+  const storage = new MemoryStorage();
+  storage.seed('users/alice/storage/documents/a.txt', 'a'.repeat(100));
+  storage.seed('users/alice/storage/documents/b.txt', 'b'.repeat(50));
+  storage.seed('users/alice/storage/documents/', '');
+  storage.seed('users/alice/storage/pictures/c.png', 'c'.repeat(300), 'image/png');
+  storage.seed('users/alice/storage/public/documents/d.txt', 'd'.repeat(20));
+  return storage;
 }
 
 function makeDb(user: { username: string; storage_quota_bytes?: number; used_storage_bytes?: number } | null = null) {
@@ -68,7 +33,7 @@ const testUser = {
 
 describe('GET /debug/token', () => {
   let app: ReturnType<typeof createServer>;
-  const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
+  const env = { STORAGE: new MemoryStorage(), DB: makeDb() };
 
   beforeAll(() => {
     app = createServer(env);
@@ -157,11 +122,11 @@ describe('GET /debug/storage', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
-    app = createServer({ STORAGE: new FakeStorage() as any, DB: makeDb(testUser) });
+    app = createServer({ STORAGE: new MemoryStorage(), DB: makeDb(testUser) });
   });
 
   it('summarises actual storage and reports drift against the DB counter', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(testUser) };
+    const env = { STORAGE: seededStorage(), DB: makeDb(testUser) };
     const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
@@ -176,13 +141,13 @@ describe('GET /debug/storage', () => {
   });
 
   it('returns 404 when the Account row is missing', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(null) };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb(null) };
     const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
 
   it('returns 503 when the DB is unavailable', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: null };
+    const env = { STORAGE: new MemoryStorage(), DB: null };
     const res = await app.request('http://localhost/debug/storage', { method: 'GET' }, env);
     expect(res.status).toBe(503);
   });
@@ -192,11 +157,11 @@ describe('GET /debug/health/deep', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
-    app = createServer({ STORAGE: new FakeStorage() as any, DB: makeDb() });
+    app = createServer({ STORAGE: new MemoryStorage(), DB: makeDb() });
   });
 
   it('reports ok with a storage round-trip and a DB check', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb() };
     const res = await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
@@ -210,21 +175,16 @@ describe('GET /debug/health/deep', () => {
   });
 
   it('does not leave health-check objects behind', async () => {
-    const storage = new FakeStorage();
-    const env = { STORAGE: storage as any, DB: makeDb() };
+    const storage = new MemoryStorage();
+    const env = { STORAGE: storage, DB: makeDb() };
     await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
-    expect([...storage.objects.keys()].filter((k) => k.startsWith('_healthcheck/'))).toHaveLength(0);
+    expect(storage.objects.size).toBe(0);
   });
 
   it('returns 503 when storage round-trip fails', async () => {
-    const brokenStorage = {
-      put: async () => { throw new Error('r2 down'); },
-      get: async () => null,
-      delete: async () => {},
-      head: async () => null,
-      list: async () => ({ objects: [] }),
-    };
-    const env = { STORAGE: brokenStorage as any, DB: makeDb() };
+    const brokenStorage = new MemoryStorage();
+    brokenStorage.put = async () => { throw new Error('r2 down'); };
+    const env = { STORAGE: brokenStorage, DB: makeDb() };
     const res = await app.request('http://localhost/debug/health/deep', { method: 'GET' }, env);
 
     expect(res.status).toBe(503);
@@ -238,11 +198,11 @@ describe('GET /debug/env', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {
-    app = createServer({ STORAGE: new FakeStorage() as any, DB: makeDb() });
+    app = createServer({ STORAGE: new MemoryStorage(), DB: makeDb() });
   });
 
   it('reports bindings and reduces config to booleans', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), OWNER_EMAIL: 'super-secret-value@example.com' };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb(), OWNER_EMAIL: 'super-secret-value@example.com' };
     const res = await app.request('http://localhost/debug/env', { method: 'GET' }, env);
 
     expect(res.status).toBe(200);
@@ -271,26 +231,26 @@ describe('debug endpoints are dev-only', () => {
 
   for (const path of paths) {
     it(`${path} is a 404 in production`, async () => {
-      const env = { STORAGE: new FakeStorage() as any, DB: makeDb(testUser), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
+      const env = { STORAGE: new MemoryStorage(), DB: makeDb(testUser), RSILO_DEV_MODE: 'false', ...PRODUCTION_INSTANCE };
       const res = await app.request(`https://rsilo.example${path}`, { method: 'GET' }, env);
       expect(res.status).toBe(404);
     });
   }
 
   it('is a 404 in dev mode on a non-local host', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb(), RSILO_DEV_MODE: 'true' };
     const res = await app.request('https://rsilo.example/debug/env', { method: 'GET' }, env);
     expect(res.status).toBe(404);
   });
 
   it('is a 404 in dev mode when Cloudflare Access is present', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb(), RSILO_DEV_MODE: 'true' };
     const res = await app.request('http://localhost/debug/env', { method: 'GET' }, env, accessCtx);
     expect(res.status).toBe(404);
   });
 
   it('answers in dev mode on localhost', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeDb(), RSILO_DEV_MODE: 'true' };
+    const env = { STORAGE: new MemoryStorage(), DB: makeDb(), RSILO_DEV_MODE: 'true' };
     for (const host of ['localhost', '127.0.0.1', '[::1]']) {
       const res = await app.request(`http://${host}:8787/debug/env`, { method: 'GET' }, env);
       expect(res.status).toBe(200);
@@ -317,7 +277,7 @@ function makeOAuthDb(): ReturnType<typeof createSqliteD1> {
 
 describe('GET /debug/oauth', () => {
   it('summarises clients, tokens and codes without leaking secrets', async () => {
-    const env = { STORAGE: new FakeStorage() as any, DB: makeOAuthDb() };
+    const env = { STORAGE: new MemoryStorage(), DB: makeOAuthDb() };
     const app = createServer(env);
     const res = await app.request('http://localhost/debug/oauth', { method: 'GET' }, env);
 
@@ -335,7 +295,7 @@ describe('GET /debug/oauth', () => {
 });
 
 describe('GET /debug/echo', () => {
-  const env = { STORAGE: new FakeStorage() as any, DB: makeDb() };
+  const env = { STORAGE: new MemoryStorage(), DB: makeDb() };
   let app: ReturnType<typeof createServer>;
 
   beforeAll(() => {

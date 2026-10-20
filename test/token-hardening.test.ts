@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1 } from '../src/services/db/sqlite';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { PKCE, tokenHash as sha256 } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 import { generateToken, hashToken } from '../src/services/auth';
+import { IMPLICIT_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS } from '../src/services/tokens';
 
 // Hardening borrowed from cloudflare/workers-oauth-provider (see
-// docs/research/workers-oauth-provider.md): secrets are stored only as hashes,
-// a refresh token survives one lost response, and generated secrets are
-// unbiased base64url. Required PKCE is covered in test/pkce.test.ts.
+// docs/research/workers-oauth-provider.md): secrets are stored only as hashes
+// and generated secrets are unbiased base64url. Refresh tokens rotate, expire
+// after 30 days, and only the newest one works. Required PKCE is covered in
+// test/pkce.test.ts.
 
 const app = createServer({});
 const CONSENT_URL = 'http://localhost/account/oauth/authorize';
@@ -25,32 +28,15 @@ const REQUEST = {
   code_challenge_method: 'S256',
 };
 
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
-
 function devEnv() {
-  return { STORAGE: new MemoryStorage() as any, DB: createSqliteD1() } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
 }
 
-function rows(env: any, sql: string): any[] {
+function rows(env: { DB: SqliteD1 }, sql: string): any[] {
   return env.DB.sqlite.prepare(sql).all() as any[];
 }
 
-async function approve(env: any, params: Record<string, string> = {}) {
+async function approve(env: unknown, params: Record<string, string> = {}) {
   return app.request(CONSENT_URL, {
     method: 'POST',
     headers: SAME_ORIGIN,
@@ -58,25 +44,25 @@ async function approve(env: any, params: Record<string, string> = {}) {
   }, env);
 }
 
-async function authorizationCode(env: any): Promise<string> {
+async function authorizationCode(env: unknown): Promise<string> {
   const res = await approve(env);
   expect(res.status).toBe(302);
   return new URL(res.headers.get('Location')!).searchParams.get('code')!;
 }
 
-function exchange(env: any, params: Record<string, string>) {
+function exchange(env: unknown, params: Record<string, string>) {
   return app.request(TOKEN_URL, { method: 'POST', headers: FORM, body: new URLSearchParams(params).toString() }, env);
 }
 
-function redeem(env: any, code: string) {
+function redeem(env: unknown, code: string) {
   return exchange(env, { grant_type: 'authorization_code', code, redirect_uri: REQUEST.redirect_uri, code_verifier: PKCE.verifier });
 }
 
-function refresh(env: any, refreshToken: string) {
+function refresh(env: unknown, refreshToken: string) {
   return exchange(env, { grant_type: 'refresh_token', refresh_token: refreshToken });
 }
 
-function putFile(env: any, token: string) {
+function putFile(env: unknown, token: string) {
   return app.request('http://localhost/storage/alice/documents/a.txt', {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
@@ -139,7 +125,7 @@ describe('secrets at rest', () => {
 });
 
 describe('refresh token rotation', () => {
-  async function tokens(env: any) {
+  async function tokens(env: { DB: SqliteD1 }) {
     return await (await redeem(env, await authorizationCode(env))).json() as any;
   }
 
@@ -154,24 +140,122 @@ describe('refresh token rotation', () => {
     expect((await putFile(env, second.access_token)).status).toBeOneOf([200, 201]);
   });
 
-  it('accepts the previous refresh token again if the client lost the response', async () => {
-    const env = devEnv();
-    const first = await tokens(env);
-    const lost = await (await refresh(env, first.refresh_token)).json() as any;
-
-    const retry = await refresh(env, first.refresh_token);
-    expect(retry.status).toBe(200);
-    const second = await retry.json() as any;
-    expect((await putFile(env, second.access_token)).status).toBeOneOf([200, 201]);
-    // The response that never arrived is superseded.
-    expect((await refresh(env, lost.refresh_token)).status).toBe(400);
-  });
-
-  it('retires the previous refresh token once its replacement is used', async () => {
+  it('rejects a superseded refresh token, and replaying it does not disturb the current one', async () => {
     const env = devEnv();
     const first = await tokens(env);
     const second = await (await refresh(env, first.refresh_token)).json() as any;
+
+    for (let i = 0; i < 2; i++) {
+      const replay = await refresh(env, first.refresh_token);
+      expect(replay.status).toBe(400);
+      expect((await replay.json() as any).error).toBe('invalid_grant');
+    }
+    expect((await putFile(env, second.access_token)).status).toBeOneOf([200, 201]);
     expect((await refresh(env, second.refresh_token)).status).toBe(200);
-    expect((await refresh(env, first.refresh_token)).status).toBe(400);
+  });
+
+  it('issues refresh tokens for 30 days, and each rotation starts a fresh 30 days', async () => {
+    const env = devEnv();
+    const first = await tokens(env);
+    const [issued] = rows(env, 'SELECT expires_at, refresh_expires_at FROM oauth_tokens');
+    const now = Math.floor(Date.now() / 1000);
+    expect(issued.refresh_expires_at - now).toBeGreaterThan(REFRESH_TOKEN_TTL_SECONDS - 60);
+    expect(issued.refresh_expires_at - now).toBeLessThanOrEqual(REFRESH_TOKEN_TTL_SECONDS);
+    expect(issued.expires_at - now).toBeLessThanOrEqual(3600);
+
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET refresh_expires_at = ?').run(now + 60);
+    expect((await refresh(env, first.refresh_token)).status).toBe(200);
+    const [rotated] = rows(env, 'SELECT refresh_expires_at FROM oauth_tokens');
+    expect(rotated.refresh_expires_at - now).toBeGreaterThan(REFRESH_TOKEN_TTL_SECONDS - 60);
+  });
+
+  it('rejects an expired refresh token', async () => {
+    const env = devEnv();
+    const first = await tokens(env);
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET refresh_expires_at = ?').run(Math.floor(Date.now() / 1000) - 1);
+    const res = await refresh(env, first.refresh_token);
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toBe('invalid_grant');
+  });
+});
+
+describe('implicit-flow tokens', () => {
+  async function implicitToken(env: unknown): Promise<URLSearchParams> {
+    const res = await approve(env, { response_type: 'token', code_challenge: '', code_challenge_method: '' });
+    expect(res.status).toBe(302);
+    return new URLSearchParams(new URL(res.headers.get('Location')!).hash.slice(1));
+  }
+
+  it('last 30 days, as the redirect says', async () => {
+    const env = devEnv();
+    const fragment = await implicitToken(env);
+    expect(fragment.get('expires_in')).toBe(String(IMPLICIT_TOKEN_TTL_SECONDS));
+    const [issued] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    const now = Math.floor(Date.now() / 1000);
+    expect(issued.expires_at - now).toBeGreaterThan(IMPLICIT_TOKEN_TTL_SECONDS - 60);
+    expect(issued.expires_at - now).toBeLessThanOrEqual(IMPLICIT_TOKEN_TTL_SECONDS);
+  });
+
+  it('slide forward on use, so an app in use never re-authorizes', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    const now = Math.floor(Date.now() / 1000);
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(now + 3600);
+
+    expect((await putFile(env, token)).status).toBeOneOf([200, 201]);
+    const [renewed] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    expect(renewed.expires_at - now).toBeGreaterThan(IMPLICIT_TOKEN_TTL_SECONDS - 60);
+  });
+
+  it('are renewed at most once a day', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    const recent = Math.floor(Date.now() / 1000) + IMPLICIT_TOKEN_TTL_SECONDS - 3600;
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(recent);
+
+    expect((await putFile(env, token)).status).toBeOneOf([200, 201]);
+    expect(rows(env, 'SELECT expires_at FROM oauth_tokens')[0].expires_at).toBe(recent);
+  });
+
+  it('stay dead once expired', async () => {
+    const env = devEnv();
+    const token = (await implicitToken(env)).get('access_token')!;
+    env.DB.sqlite.prepare('UPDATE oauth_tokens SET expires_at = ?').run(Math.floor(Date.now() / 1000) - 1);
+    expect((await putFile(env, token)).status).toBe(401);
+  });
+
+  it('do not extend code-flow access tokens', async () => {
+    const env = devEnv();
+    const { access_token } = await (await redeem(env, await authorizationCode(env))).json() as any;
+    const [before] = rows(env, 'SELECT expires_at FROM oauth_tokens');
+    expect((await putFile(env, access_token)).status).toBeOneOf([200, 201]);
+    expect(rows(env, 'SELECT expires_at FROM oauth_tokens')[0].expires_at).toBe(before.expires_at);
+  });
+});
+
+describe('expired rows', () => {
+  it('are purged when tokens are issued; live ones stay', async () => {
+    const env = devEnv();
+    const live = await (await redeem(env, await authorizationCode(env))).json() as any;
+    const past = Math.floor(Date.now() / 1000) - 1;
+    const raw = env.DB.sqlite;
+    raw.prepare("INSERT INTO oauth_tokens (id, access_token_hash, expires_at, scopes, user_id, client_id) VALUES ('implicit-expired', 'h1', ?, 'documents:rw', 'alice', ?)")
+      .run(past, REQUEST.client_id);
+    raw.prepare("INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id) VALUES ('refresh-expired', 'h2', 'r2', ?, ?, 'documents:rw', 'alice', ?)")
+      .run(past, past, REQUEST.client_id);
+    raw.prepare("INSERT INTO oauth_tokens (id, access_token_hash, refresh_token_hash, expires_at, refresh_expires_at, scopes, user_id, client_id) VALUES ('refresh-live', 'h3', 'r3', ?, ?, 'documents:rw', 'alice', ?)")
+      .run(past, past + 86400, REQUEST.client_id);
+    raw.prepare("INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES ('c-expired', ?, 'alice', ?, 'documents:rw', 'x', ?)")
+      .run(REQUEST.client_id, REQUEST.redirect_uri, past);
+
+    await approve(env, { response_type: 'token', code_challenge: '', code_challenge_method: '' });
+
+    const ids = rows(env, 'SELECT id, access_token_hash FROM oauth_tokens').map(row => row.id);
+    expect(ids).not.toContain('implicit-expired');
+    expect(ids).not.toContain('refresh-expired');
+    expect(ids).toContain('refresh-live');
+    expect(ids).toHaveLength(3);
+    expect(rows(env, "SELECT * FROM oauth_codes WHERE code_hash = 'c-expired'")).toHaveLength(0);
+    expect((await putFile(env, live.access_token)).status).toBeOneOf([200, 201]);
   });
 });

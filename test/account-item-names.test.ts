@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
-import { createMemoryStorage } from './helpers/memory-storage';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // Dev mode signs localhost requests in as the Owner (see account.test.ts)
 const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin' };
@@ -12,12 +12,12 @@ const KEY = 'users/alice/storage/documents/my notes?/to do#1.txt';
 
 describe('file manager with special characters in names', () => {
   const app = createServer({});
-  let env: { STORAGE: ReturnType<typeof createMemoryStorage>; DB: ReturnType<typeof createSqliteD1> };
+  let env: { STORAGE: MemoryStorage; DB: ReturnType<typeof createSqliteD1> };
   const get = (path: string) => app.request(`http://localhost${path}`, {}, env as any);
 
   beforeEach(async () => {
-    env = { STORAGE: createMemoryStorage(), DB: createSqliteD1() };
-    await env.STORAGE.put(KEY, new TextEncoder().encode('hello').buffer as ArrayBuffer, 'text/plain');
+    env = { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
+    env.STORAGE.seed(KEY, 'hello');
   });
 
   it('links folders and documents with each name encoded', async () => {
@@ -45,6 +45,6 @@ describe('file manager with special characters in names', () => {
       { method: 'POST', headers: SAME_ORIGIN }, env as any);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/account/browse/documents/my%20notes%3F');
-    expect(env.STORAGE.items.has(KEY)).toBe(false);
+    expect(env.STORAGE.objects.has(KEY)).toBe(false);
   });
 });

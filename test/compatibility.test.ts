@@ -2,41 +2,12 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
+const storage = new MemoryStorage();
 
 const TEST_ENV = {
-  STORAGE: {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, contentType?: string) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) {
-      storage.delete(key);
-    },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string; delimiter?: string }) {
-      const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return {
-        objects: keys.map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any,
+  STORAGE: storage,
   DB: createSqliteD1(),
   // The Instance serves one Account; these tests use it under this name.
   ACCOUNT_USERNAME: 'testuser',
@@ -50,7 +21,7 @@ describe('RemoteStorage.js client compatibility', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('WebFinger returns remoteStorage link with api: simple', async () => {
@@ -315,7 +286,7 @@ describe('Error handling compatibility', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('returns 412 Precondition Failed for stale If-Match', async () => {
@@ -536,23 +507,9 @@ describe('Error handling compatibility', () => {
     expect(await res.text()).toBe(content);
   });
 
-  it('PUT exceeds quota returns 413', async () => {
-    const dbStorage = {
-      async get(key: string) {
-        const item = storage.get(key);
-        if (!item) return null;
-        return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-      },
-      async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-        const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-        storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-        return etag;
-      },
-      async head() { return null; },
-    };
-
+  it('PUT exceeds quota returns 507', async () => {
     const quotaEnv = {
-      STORAGE: dbStorage,
+      STORAGE: new MemoryStorage(),
       DB: createSqliteD1(),
       ACCOUNT_USERNAME: 'quotauser',
     };
@@ -571,7 +528,7 @@ describe('Error handling compatibility', () => {
       quotaEnv
     );
 
-    expect(res.status).toBe(413);
+    expect(res.status).toBe(507);
     const text = await res.text();
     expect(text).toContain('quota');
   });
