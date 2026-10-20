@@ -1,15 +1,20 @@
 import type { Context, Next } from '../types';
 import { authorize, parseAuthHeader, hashToken } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
+import { renewImplicitToken } from '../services/tokens';
 
 // Access tokens are opaque bearer tokens: a token is valid exactly while its
 // unexpired row exists in oauth_tokens (ADR-0003). Rows hold only its hash.
 async function resolveTokenPayload(db: D1Database, token: string): Promise<TokenPayload | null> {
   const row = await db.prepare(
-    'SELECT user_id, scopes, created_at, expires_at FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?'
-  ).bind(await hashToken(token), Math.floor(Date.now() / 1000)).first<{ user_id: string; scopes: string; created_at: number; expires_at: number }>();
+    'SELECT access_token_hash, user_id, scopes, created_at, expires_at, refresh_token_hash IS NOT NULL AS has_refresh_token '
+    + 'FROM oauth_tokens WHERE access_token_hash = ? AND expires_at > ?'
+  ).bind(await hashToken(token), Math.floor(Date.now() / 1000)).first<{
+    access_token_hash: string; user_id: string; scopes: string; created_at: number; expires_at: number; has_refresh_token: number;
+  }>();
 
   if (!row) return null;
+  await renewImplicitToken(db, row);
   return {
     sub: row.user_id,
     scopes: row.scopes,

@@ -322,7 +322,7 @@ Apps do **not** need any setup on your side — there is no client registration 
 3. The page shows the app (by its origin host), the modules it asks for and whether it wants read-only or read-write access, and **where it will send you back to**. Allow or deny.
 4. The app gets a token and starts syncing into that module.
 
-Apps built on remoteStorage.js get a one-hour token that cannot be renewed, so while you use one it sends you back to this page about once an hour (see [Token lifetimes](#token-lifetimes)).
+Apps built on remoteStorage.js get a token that lasts 30 days from its last use, so an app you keep using never sends you back here (see [Token lifetimes](#token-lifetimes)).
 
 Your `/account` dashboard lists each app that still holds an unexpired token once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
@@ -446,13 +446,14 @@ The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) ca
 | Token | Lifetime | Renewal |
 |-------|----------|---------|
 | Authorization code | 10 minutes, single use | none |
-| Access token | 1 hour | code flow: the refresh token; implicit flow: none, the app asks again |
+| Access token (code flow) | 1 hour | the refresh token |
 | Refresh token (code flow only) | 30 days | each use rotates it, returning a new access token and a new 30-day refresh token |
-| Dev token (`bun run dev-token`) | 30 days | none |
+| Access token (implicit flow) | 30 days from last use | pushed forward on use, at most once a day |
+| Dev token (`bun run dev-token`) | 30 days from last use | like an implicit-flow token |
 
 Only the newest refresh token works: a superseded or expired one gets `invalid_grant`. Expired tokens and codes are deleted whenever new tokens are issued, and revoking an app deletes all of its tokens at once.
 
-The implicit flow, which remoteStorage.js apps use, issues no refresh token. These apps lose access after an hour and send the Owner back through the consent page, and through an Access sign-in once that session has expired.
+The implicit flow, which remoteStorage.js apps use, issues no refresh token. Its access token instead stays valid until 30 days pass without the app using it, so an app in regular use never sends the Owner back to the consent page. Revoke it from the dashboard to cut it off sooner.
 
 ### Discovery
 
@@ -559,7 +560,6 @@ Every test that touches the database runs the real SQL that production runs: the
 ## Known limitations
 
 - **Rate limiting is per Cloudflare location.** The native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7).
-- **Apps built on remoteStorage.js re-authorize hourly.** The implicit flow they use issues a one-hour access token and no refresh token, so they send the Owner back to the consent page about once an hour. See [Token lifetimes](#token-lifetimes).
 - **Buffered uploads.** Upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately. Downloads stream, except from the offline server.
 - **Conditional writes are not atomic on S3.** On R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them with a `HEAD` just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete.
 - **S3 folder listings have no content types.** S3 listings do not carry them, so on S3 storage a folder listing reports `application/octet-stream` for every document. A `GET` of the document returns its real type.
