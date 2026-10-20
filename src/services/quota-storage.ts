@@ -1,4 +1,6 @@
 import type { StorageInterface } from '../types';
+import { buildKey } from './r2';
+import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
 
 export class QuotaExceededError extends Error {}
 export class StorageAccountingError extends Error {}
@@ -10,6 +12,12 @@ interface UsageDatabase {
   prepare(sql: string): { bind(...values: unknown[]): { run(): Promise<{ meta: { changes: number } }> } };
 }
 
+/** A request's preconditions as sent: If-Match is an ETag or `*`; only `If-None-Match: *` counts. */
+export interface RequestCondition {
+  ifMatch?: string;
+  ifNoneMatch?: string;
+}
+
 interface PutObjectOptions {
   storage: StorageInterface;
   db: UsageDatabase | undefined;
@@ -18,7 +26,7 @@ interface PutObjectOptions {
   key: string;
   body: ArrayBuffer;
   contentType: string;
-  existing: ExistingObject;
+  condition?: RequestCondition;
 }
 
 interface DeleteObjectOptions {
@@ -27,8 +35,12 @@ interface DeleteObjectOptions {
   allowUnaccounted?: boolean;
   username: string;
   key: string;
-  existing: NonNullable<ExistingObject>;
+  ifMatch?: string;
 }
+
+// How often a write is retried when another write to the same key lands
+// between reading the object and changing it.
+const MAX_ATTEMPTS = 3;
 
 async function adjustUsage(db: UsageDatabase | undefined, username: string, delta: number, enforceQuota = true, allowUnaccounted = false): Promise<void> {
   if (!db || typeof db.prepare !== 'function') {
@@ -56,27 +68,82 @@ async function adjustUsage(db: UsageDatabase | undefined, username: string, delt
   if (changes === 0) throw new QuotaExceededError('Storage quota exceeded');
 }
 
-export async function putUserObject(options: PutObjectOptions): Promise<string> {
-  const oldSize = options.existing?.contentLength || 0;
-  const delta = options.body.byteLength - oldSize;
-  await adjustUsage(options.db, options.username, delta, true, options.allowUnaccounted);
+function requestConditionHolds(existing: ExistingObject, condition: RequestCondition | undefined): boolean {
+  if (condition?.ifNoneMatch === '*' && existing) return false;
+  if (condition?.ifMatch === '*') return existing !== null;
+  return conditionHolds(existing, condition?.ifMatch ? { ifMatch: condition.ifMatch } : undefined);
+}
 
-  try {
-    return await options.storage.put(options.key, options.body, options.contentType);
-  } catch (error) {
-    await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
-    throw error;
+// remoteStorage's 409: no folder on the path may be an existing document, and
+// the document may not be an existing folder. Keys are flat in R2 and S3, so
+// this costs one HEAD per ancestor folder and a one-key listing of the
+// document's own folder (on B2, Class B and Class C calls), all in parallel.
+async function assertNoPathConflict(storage: StorageInterface, username: string, key: string): Promise<void> {
+  const root = buildKey(username, '');
+  const ancestors = key.startsWith(root)
+    ? key.slice(root.length).split('/').slice(0, -1).map((_, i, parts) => root + parts.slice(0, i + 1).join('/'))
+    : [];
+  const [documents, children] = await Promise.all([
+    Promise.all(ancestors.map((ancestor) => storage.head(ancestor))),
+    storage.list(key + '/', { limit: 1 }),
+  ]);
+  if (documents.some(Boolean) || children.objects.length > 0) throw new PathConflictError();
+}
+
+/**
+ * Writes a document, keeping the Account's usage counter exact. Throws
+ * PreconditionFailedError (412), PathConflictError (409), QuotaExceededError
+ * (507) or StorageAccountingError (503).
+ *
+ * The write is conditioned on the object just read, so the usage delta is
+ * always that of the object actually replaced; if another write got in
+ * between, the request is evaluated again. On S3 the backend checks that
+ * condition with a HEAD, not atomically (s3.ts), so two racing writes there
+ * can still both count.
+ */
+export async function putUserObject(options: PutObjectOptions): Promise<{ etag: string; created: boolean }> {
+  for (let attempt = 1; ; attempt++) {
+    const [existing] = await Promise.all([
+      options.storage.head(options.key),
+      assertNoPathConflict(options.storage, options.username, options.key),
+    ]);
+    if (!requestConditionHolds(existing, options.condition)) throw new PreconditionFailedError();
+
+    const delta = options.body.byteLength - (existing?.contentLength ?? 0);
+    await adjustUsage(options.db, options.username, delta, true, options.allowUnaccounted);
+    try {
+      const etag = await options.storage.put(options.key, options.body, options.contentType,
+        existing ? { ifMatch: existing.etag } : { ifNoneMatch: '*' });
+      return { etag, created: !existing };
+    } catch (error) {
+      await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
+      if (!(error instanceof PreconditionFailedError)) throw error;
+      if (attempt === MAX_ATTEMPTS) throw new StorageAccountingError('The document kept changing during the write; try again');
+    }
   }
 }
 
-export async function deleteUserObject(options: DeleteObjectOptions): Promise<void> {
-  const delta = -(options.existing.contentLength || 0);
-  await adjustUsage(options.db, options.username, delta, true, options.allowUnaccounted);
+/**
+ * Deletes a document, keeping the usage counter exact as putUserObject does.
+ * Returns the deleted object's ETag, or null when there was none. R2 and S3
+ * check the delete's condition with a HEAD, so two racing deletes there can
+ * still both subtract (the counter never goes below 0).
+ */
+export async function deleteUserObject(options: DeleteObjectOptions): Promise<string | null> {
+  for (let attempt = 1; ; attempt++) {
+    const existing = await options.storage.head(options.key);
+    if (options.ifMatch && !requestConditionHolds(existing, { ifMatch: options.ifMatch })) throw new PreconditionFailedError();
+    if (!existing) return null;
 
-  try {
-    await options.storage.delete(options.key);
-  } catch (error) {
-    await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
-    throw error;
+    const delta = -existing.contentLength;
+    await adjustUsage(options.db, options.username, delta, true, options.allowUnaccounted);
+    try {
+      await options.storage.delete(options.key, { ifMatch: existing.etag });
+      return existing.etag;
+    } catch (error) {
+      await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
+      if (!(error instanceof PreconditionFailedError)) throw error;
+      if (attempt === MAX_ATTEMPTS) throw new StorageAccountingError('The document kept changing during the delete; try again');
+    }
   }
 }

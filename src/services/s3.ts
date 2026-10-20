@@ -1,7 +1,8 @@
 import { AwsClient } from 'aws4fetch';
 import type { S3Config } from '../config';
-import type { StorageInterface } from '../types';
+import type { StorageInterface, WriteCondition } from '../types';
 import type { BlobMetadata } from './r2';
+import { conditionHolds, PreconditionFailedError } from './storage-errors';
 
 // StorageInterface over any S3-compatible API (ADR-0005): Backblaze B2, AWS S3,
 // MinIO, R2's own S3 endpoint, and so on. Requests are path-style
@@ -40,7 +41,12 @@ export class S3Storage implements StorageInterface {
     return { body: response.body ?? new ArrayBuffer(0), metadata };
   }
 
-  async put(key: string, body: ArrayBuffer, contentType: string): Promise<string> {
+  // A condition is checked with a HEAD before the write, not sent as If-Match
+  // / If-None-Match: Backblaze B2, the main target, documents neither on
+  // PutObject and answers If-None-Match with 501 Not Implemented. So on S3 a
+  // write that lands between the HEAD and the PUT (or DELETE) still wins.
+  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
+    if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
     const response = await this.send('PUT', this.objectUrl(key), {
       body,
       headers: { 'Content-Type': contentType },
@@ -52,7 +58,8 @@ export class S3Storage implements StorageInterface {
     return etag;
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
+    if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
     const response = await this.send('DELETE', this.objectUrl(key));
     if (response.status === 404) return;
     await this.ensureOk('DELETE', response);
@@ -66,14 +73,16 @@ export class S3Storage implements StorageInterface {
     return metadataFrom(response.headers);
   }
 
-  async list(prefix: string): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
+  async list(prefix: string, options: { limit?: number } = {}): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }> {
     const objects: { key: string; size: number; etag: string; lastModified?: string }[] = [];
     let token: string | undefined;
+    const { limit } = options;
 
     do {
       const url = new URL(this.bucketUrl);
       url.searchParams.set('list-type', '2');
       url.searchParams.set('prefix', prefix);
+      if (limit) url.searchParams.set('max-keys', String(Math.min(1000, limit - objects.length)));
       if (token) url.searchParams.set('continuation-token', token);
 
       const response = await this.send('GET', url.href);
@@ -90,7 +99,7 @@ export class S3Storage implements StorageInterface {
         });
       }
 
-      if (xmlField(xml, 'IsTruncated') !== 'true') break;
+      if (xmlField(xml, 'IsTruncated') !== 'true' || (limit && objects.length >= limit)) break;
       token = xmlField(xml, 'NextContinuationToken') ?? undefined;
       if (!token) throw new S3StorageError('LIST', response.status, 'TruncatedWithoutToken');
     } while (token);

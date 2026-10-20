@@ -1,5 +1,5 @@
 // An in-memory S3 endpoint for tests: path-style object GET/HEAD/PUT/DELETE and
-// ListObjectsV2 with pagination, answering the way S3 does (quoted ETags,
+// ListObjectsV2 with pagination and max-keys, answering the way S3 does (quoted ETags,
 // XML-escaped listing). It checks requests are SigV4-signed for the bucket's
 // access key but does not verify signatures; test/s3-live.test.ts covers that
 // against a real S3 server.
@@ -38,7 +38,7 @@ function s3Error(status: number, code: string): Response {
 export function createFakeS3(options: { bucket: string; accessKeyId: string; pageSize?: number }): FakeS3 {
   const objects = new Map<string, FakeS3Object>();
   const requests: Request[] = [];
-  const pageSize = options.pageSize ?? 1000;
+  const pageLimit = options.pageSize ?? 1000;
 
   async function handle(request: Request): Promise<Response> {
     requests.push(request.clone());
@@ -56,6 +56,7 @@ export function createFakeS3(options: { bucket: string; accessKeyId: string; pag
     if (!key && request.method === 'GET' && url.searchParams.get('list-type') === '2') {
       const prefix = url.searchParams.get('prefix') ?? '';
       const start = Number(url.searchParams.get('continuation-token') ?? 0);
+      const pageSize = Math.min(pageLimit, Number(url.searchParams.get('max-keys') ?? 1000));
       const keys = [...objects.keys()].filter((k) => k.startsWith(prefix)).sort();
       const page = keys.slice(start, start + pageSize);
       const truncated = start + pageSize < keys.length;

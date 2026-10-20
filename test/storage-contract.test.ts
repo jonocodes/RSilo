@@ -11,6 +11,7 @@ import type { StorageInterface } from '../src/types';
 import { LocalStorage } from '../src/services/local-storage';
 import { R2Storage } from '../src/services/r2';
 import { S3Storage } from '../src/services/s3';
+import { PreconditionFailedError } from '../src/services/storage-errors';
 import { createFakeR2 } from './helpers/fake-r2';
 import { createFakeS3 } from './helpers/fake-s3';
 import { MemoryStorage } from './helpers/memory-storage';
@@ -19,21 +20,23 @@ interface Backend {
   storage: StorageInterface;
   /** S3's ListObjectsV2 carries no content type (ADR-0005). */
   listsContentType: boolean;
+  /** S3Storage checks write conditions with a HEAD first, so racing writes can both pass (s3.ts). */
+  atomicPut: boolean;
   done(): void;
 }
 
 const S3_CONFIG = { endpoint: 'https://s3.example.test', bucket: 'rsilo-test', accessKeyId: 'AKIDTEST', secretAccessKey: 'secret' };
 
 const backends: [string, () => Backend][] = [
-  ['MemoryStorage', () => ({ storage: new MemoryStorage(), listsContentType: true, done() {} })],
-  ['R2Storage', () => ({ storage: new R2Storage(createFakeR2({ pageSize: 2 }).bucket), listsContentType: true, done() {} })],
+  ['MemoryStorage', () => ({ storage: new MemoryStorage(), listsContentType: true, atomicPut: true, done() {} })],
+  ['R2Storage', () => ({ storage: new R2Storage(createFakeR2({ pageSize: 2 }).bucket), listsContentType: true, atomicPut: true, done() {} })],
   ['S3Storage', () => {
     const s3 = createFakeS3({ bucket: S3_CONFIG.bucket, accessKeyId: S3_CONFIG.accessKeyId, pageSize: 2 });
-    return { storage: new S3Storage(S3_CONFIG, s3.fetch), listsContentType: false, done() {} };
+    return { storage: new S3Storage(S3_CONFIG, s3.fetch), listsContentType: false, atomicPut: false, done() {} };
   }],
   ['LocalStorage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'rsilo-contract-'));
-    return { storage: new LocalStorage(dir), listsContentType: true, done: () => rmSync(dir, { recursive: true, force: true }) };
+    return { storage: new LocalStorage(dir), listsContentType: true, atomicPut: true, done: () => rmSync(dir, { recursive: true, force: true }) };
   }],
 ];
 
@@ -54,7 +57,7 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
   });
   afterEach(() => backend.done());
 
-  const keys = async (prefix: string) => (await storage.list(prefix)).objects.map((o) => o.key);
+  const keys = async (prefix: string, limit?: number) => (await storage.list(prefix, { limit })).objects.map((o) => o.key);
 
   it('round-trips body, content type, size and the ETag put returned', async () => {
     const etag = await storage.put(P + 'documents/a.json', bytes('{"a":1}'), 'application/json');
@@ -139,5 +142,45 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
       expect(await storage.head(P + 'd/' + name)).toMatchObject({ contentType: 'text/plain' });
     }
     expect(await keys(P + 'd/')).toEqual(names.map((name) => P + 'd/' + name).sort());
+  });
+
+  it('honours If-None-Match: * and If-Match on put, storing nothing when they fail', async () => {
+    await expect(storage.put(P + 'a.txt', bytes('one'), 'text/plain', { ifMatch: '"nope"' })).rejects.toBeInstanceOf(PreconditionFailedError);
+    expect(await storage.head(P + 'a.txt')).toBeNull();
+
+    await storage.put(P + 'a.txt', bytes('one'), 'text/plain', { ifNoneMatch: '*' });
+    await expect(storage.put(P + 'a.txt', bytes('two'), 'text/plain', { ifNoneMatch: '*' })).rejects.toBeInstanceOf(PreconditionFailedError);
+
+    const current = (await storage.head(P + 'a.txt'))!.etag;
+    await expect(storage.put(P + 'a.txt', bytes('two'), 'text/plain', { ifMatch: '"stale"' })).rejects.toBeInstanceOf(PreconditionFailedError);
+    expect(await text((await storage.get(P + 'a.txt'))!.body)).toBe('one');
+
+    await storage.put(P + 'a.txt', bytes('two'), 'text/plain', { ifMatch: current });
+    expect(await text((await storage.get(P + 'a.txt'))!.body)).toBe('two');
+  });
+
+  it('honours If-Match on delete', async () => {
+    await expect(storage.delete(P + 'missing', { ifMatch: '"x"' })).rejects.toBeInstanceOf(PreconditionFailedError);
+    await storage.put(P + 'a.txt', bytes('one'), 'text/plain');
+    await expect(storage.delete(P + 'a.txt', { ifMatch: '"stale"' })).rejects.toBeInstanceOf(PreconditionFailedError);
+    expect(await storage.head(P + 'a.txt')).not.toBeNull();
+
+    await storage.delete(P + 'a.txt', { ifMatch: (await storage.head(P + 'a.txt'))!.etag });
+    expect(await storage.head(P + 'a.txt')).toBeNull();
+  });
+
+  it('lets only one of two racing If-None-Match: * puts win, where the backend checks atomically', async () => {
+    if (!backend.atomicPut) return;
+    const results = await Promise.allSettled(['one', 'two'].map((body) =>
+      storage.put(P + 'a.txt', bytes(body), 'text/plain', { ifNoneMatch: '*' })));
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+  });
+
+  it('lists only the first keys when given a limit', async () => {
+    for (const key of ['c', 'a', 'b/x', 'b/y']) await storage.put(P + key, bytes(key), 'text/plain');
+    expect(await keys(P, 1)).toEqual([P + 'a']);
+    expect(await keys(P, 3)).toEqual([P + 'a', P + 'b/x', P + 'b/y']);
+    expect(await keys(P + 'b/', 1)).toEqual([P + 'b/x']);
+    expect(await keys(P + 'none/', 1)).toEqual([]);
   });
 });

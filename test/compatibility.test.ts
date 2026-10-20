@@ -507,7 +507,7 @@ describe('Error handling compatibility', () => {
     expect(await res.text()).toBe(content);
   });
 
-  it('PUT exceeds quota returns 413', async () => {
+  it('PUT exceeds quota returns 507', async () => {
     const quotaEnv = {
       STORAGE: new MemoryStorage(),
       DB: createSqliteD1(),
@@ -528,7 +528,7 @@ describe('Error handling compatibility', () => {
       quotaEnv
     );
 
-    expect(res.status).toBe(413);
+    expect(res.status).toBe(507);
     const text = await res.text();
     expect(text).toContain('quota');
   });

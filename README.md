@@ -130,7 +130,7 @@ R2 needs a payment method on file, and once one is there any overage is charged 
 Things to know:
 
 - **This is CLI only.** The Deploy to Cloudflare button always provisions R2. With [Workers Builds](#automatic-deploys-cloudflare-workers-builds), also add the build variable `RSILO_STORAGE=s3` so the R2 binding is left out of the build.
-- **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Each folder listing an app fetches costs one Class C call. Each file download, and the check before each upload, costs one Class B call. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
+- **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Each folder listing an app fetches costs one Class C call. Each file download or unchanged-file check costs one Class B call. An upload costs one Class B call per segment of its path plus one (checking the file's current version, its write condition and that no folder above it is a file) and one Class C call (checking that it is not a folder); a delete costs two Class B calls. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
 - **Switching an existing Instance copies nothing.** If you move from R2 to S3 (or back), copy the bucket's contents first, for example with [rclone](https://rclone.org/), keeping the `users/` key layout. The storage usage figure on `/account` is not recomputed.
 - **Other providers work too**: AWS S3, Wasabi, Storj, iDrive e2, a MinIO server, or R2's own S3 endpoint. Set `S3_REGION` if your provider needs a region that is not part of its endpoint host.
 
@@ -231,7 +231,7 @@ If you update only the policy, you will see the *Not allowed* page, which shows 
 
 ## Change your storage quota
 
-Your `/account` dashboard shows how much you have stored against your quota (10 GiB by default). To change it, enter a new value in GB under the usage bar and press **Save**. The quota is a limit you set for yourself, for example to stay inside R2's free tier. Setting it below what is already stored keeps your files but blocks new writes until you free up space or raise it.
+Your `/account` dashboard shows how much you have stored against your quota (10 GiB by default). To change it, enter a new value in GB under the usage bar and press **Save**. The quota is a limit you set for yourself, for example to stay inside R2's free tier. Setting it below what is already stored keeps your files but blocks new writes (apps get `507 Insufficient Storage`) until you free up space or raise it.
 
 ## Upgrading an existing deployment
 
@@ -455,7 +455,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-**679 tests** across 34 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+**773 tests** across 36 files (plus the opt-in live S3 test): protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 
@@ -465,6 +465,7 @@ Every test that touches the database runs the real SQL that production runs: the
 
 - **Rate limiting is per Cloudflare location** — the native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7)
 - **Buffered uploads** — upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately; downloads stream
+- **Conditional writes are not atomic on S3** — on R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them with a `HEAD` just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete
 
 ## References
 
