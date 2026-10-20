@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { storageAuth } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
-import { FOLDER_MIME_TYPE, isValidPath, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { FOLDER_MIME_TYPE, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { decodeItemPath } from '../protocol/item-path';
+import { contentRange, parseRange, type ByteRange } from '../protocol/range';
 import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
@@ -15,12 +17,10 @@ export const storageRouter = new Hono();
 storageRouter.use('/*', async (c, next) => {
   const url = new URL(c.req.url);
 
-  if (url.pathname.includes('/../') || url.pathname.includes('/..')) {
-    return c.text('Invalid path', 400);
-  }
-
+  // Dot segments, raw or encoded. Names merely containing dots ("..a") are
+  // fine; protocol/item-path.ts checks each name.
   const segments = url.pathname.split('/').filter(Boolean);
-  if (segments.some(s => s === '..')) {
+  if (segments.some(s => s === '..' || s.toLowerCase() === '%2e%2e')) {
     return c.text('Invalid path', 400);
   }
 
@@ -88,9 +88,12 @@ storageRouter.delete('/:username/*', async (c) => {
   return handleStorageDelete(c, username, fullPath);
 });
 
-function extractStoragePath(fullPath: string, username: string): string {
-  const prefix = `/storage/${username}/`;
-  return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
+// The decoded path below the user's storage root, or null if it is not made of
+// valid item names. fullPath is the raw request path (see rawRequestPath).
+function storagePath(fullPath: string, username: string): string | null {
+  const prefix = `/storage/${encodeURIComponent(username)}/`;
+  const raw = fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath.slice('/storage/'.length);
+  return decodeItemPath(raw);
 }
 
 function httpDate(value?: string): string {
@@ -119,9 +122,9 @@ const DOCUMENT_HEADERS = {
 };
 
 async function handleStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 
@@ -134,11 +137,12 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
     return handleFolderGet(c, storage, username, path);
   }
 
-  // HEAD and a conditional GET are answered from metadata, without
-  // downloading the body. A conditional GET whose ETag no longer matches then
-  // takes a second call, the GET below.
+  // HEAD, a conditional GET and a range are answered from metadata first,
+  // without downloading the body. A conditional GET whose ETag no longer
+  // matches then takes a second call, the GET below; a range needs the size.
   const isHead = c.req.method === 'HEAD';
-  if (isHead || c.req.header('If-None-Match')) {
+  const rangeHeader = isHead ? undefined : c.req.header('Range');
+  if (isHead || c.req.header('If-None-Match') || rangeHeader) {
     const metadata = await storage.head(key);
     if (!metadata) return c.text('Not Found', 404);
     const etag = normalizeETag(metadata.etag) || '';
@@ -146,6 +150,13 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
       return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
     }
     if (isHead) return new Response(null, { status: 200, headers: documentHeaders(metadata) });
+    if (rangeHeader) {
+      const range = parseRange(rangeHeader, metadata.contentLength);
+      if (range === 'unsatisfiable') {
+        return c.text('Range Not Satisfiable', 416, { 'Content-Range': `bytes */${metadata.contentLength}` });
+      }
+      if (range) return serveRange(c, storage, key, range, metadata.contentLength);
+    }
   }
 
   const result = await storage.get(key);
@@ -153,6 +164,25 @@ async function handleStorageGet(c: any, username: string, fullPath: string): Pro
     return c.text('Not Found', 404);
   }
   return new Response(result.body, { status: 200, headers: documentHeaders(result.metadata) });
+}
+
+// A single byte range of a document of `size` bytes (protocol/range.ts).
+async function serveRange(c: Context, storage: StorageInterface, key: string, range: ByteRange, size: number): Promise<Response> {
+  const result = await storage.get(key, { range });
+  if (!result) return c.text('Not Found', 404);
+  let body = result.body;
+  if (body instanceof ArrayBuffer && body.byteLength !== range.length) {
+    // the storage backend returned the whole object
+    body = body.slice(range.offset, range.offset + range.length);
+  }
+  return new Response(body, {
+    status: 206,
+    headers: {
+      ...documentHeaders(result.metadata),
+      'Content-Length': range.length.toString(),
+      'Content-Range': contentRange(range, size),
+    },
+  });
 }
 
 function documentHeaders(metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string }): Record<string, string> {
@@ -163,6 +193,7 @@ function documentHeaders(metadata: { contentType: string; contentLength: number;
     'Cache-Control': 'no-cache',
     'Content-Encoding': 'identity',
     'Last-Modified': httpDate(metadata.lastModified),
+    'Accept-Ranges': 'bytes',
     ...DOCUMENT_HEADERS,
   };
 }
@@ -232,9 +263,9 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
 }
 
 async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 
@@ -275,9 +306,9 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
 }
 
 async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
-  const path = extractStoragePath(fullPath, username);
+  const path = storagePath(fullPath, username);
 
-  if (!isValidPath(path)) {
+  if (path === null) {
     return c.text('Invalid path', 400);
   }
 

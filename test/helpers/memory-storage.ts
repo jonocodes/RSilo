@@ -1,12 +1,13 @@
 // An in-memory StorageInterface (src/types.ts) for route tests: the shape every
 // backend presents to the routes, with content types kept, content-derived
-// quoted ETags (as S3 gives) and recursive, prefix-filtered, sorted listings.
+// quoted ETags (as S3 gives), byte ranges, and recursive, prefix-filtered,
+// sorted listings.
 // test/storage-contract.test.ts holds it to the same contract as the real
 // backends. Tests can inspect `objects`, seed it with seed(), and replace a
 // method on an instance to simulate a failing backend.
 
 import { createHash } from 'node:crypto';
-import type { StorageInterface, WriteCondition } from '../../src/types';
+import type { StorageGetOptions, StorageInterface, WriteCondition } from '../../src/types';
 import { conditionHolds, PreconditionFailedError } from '../../src/services/storage-errors';
 
 export interface MemoryObject {
@@ -31,9 +32,12 @@ function metadata(object: MemoryObject): Metadata {
 export class MemoryStorage implements StorageInterface {
   readonly objects = new Map<string, MemoryObject>();
 
-  async get(key: string): ReturnType<StorageInterface['get']> {
+  async get(key: string, options?: StorageGetOptions): ReturnType<StorageInterface['get']> {
     const object = this.objects.get(key);
-    return object ? { body: object.body.slice().buffer, metadata: metadata(object) } : null;
+    if (!object) return null;
+    const range = options?.range;
+    const body = range ? object.body.slice(range.offset, range.offset + range.length) : object.body.slice();
+    return { body: body.buffer, metadata: metadata(object) };
   }
 
   // Conditions are checked and the change made synchronously, so atomically.

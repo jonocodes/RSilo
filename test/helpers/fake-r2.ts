@@ -74,10 +74,12 @@ export function createFakeR2(options: { pageSize?: number } = {}): FakeR2 {
       const object = objects.get(key);
       return object ? r2Object(key, object) : null;
     },
-    async get(key: string) {
+    // Like R2, a range returns only those bytes; size stays the object's.
+    async get(key: string, getOptions?: { range?: { offset: number; length: number } }) {
       const object = objects.get(key);
       if (!object) return null;
-      const copy = object.body.slice();
+      const range = getOptions?.range;
+      const copy = range ? object.body.slice(range.offset, range.offset + range.length) : object.body.slice();
       return {
         ...r2Object(key, object),
         body: new Blob([copy]).stream(),

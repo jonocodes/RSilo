@@ -2,6 +2,7 @@ import type { Context, Next } from '../types';
 import { authorize, parseAuthHeader, hashToken } from '../services/auth';
 import type { TokenPayload } from '../services/auth';
 import { renewImplicitToken } from '../services/tokens';
+import { decodeItemPath } from '../protocol/item-path';
 
 // Access tokens are opaque bearer tokens: a token is valid exactly while its
 // unexpired row exists in oauth_tokens (ADR-0003). Rows hold only its hash.
@@ -28,6 +29,14 @@ async function resolveTokenPayload(db: D1Database, token: string): Promise<Token
  * token, if any, and lets authorize() decide. Reads are GET and HEAD; any
  * other method needs write access.
  */
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function storageAuth() {
   return async (c: Context, next: Next) => {
     // Tokens live in D1, so storage auth is configured once the DB is bound.
@@ -39,11 +48,14 @@ export function storageAuth() {
     const token = parseAuthHeader(c.req.header('Authorization') ?? null);
     const payload = token ? await resolveTokenPayload(db, token) : null;
 
-    // c.req.path is /storage/<username>/<path>.
+    // c.req.path is the raw /storage/<username>/<path> (protocol/item-path.ts);
+    // authorize by decoded names. An invalid path stays raw: the route
+    // answers it with 400.
     const rest = c.req.path.slice('/storage/'.length);
     const slash = rest.indexOf('/');
-    const username = slash === -1 ? rest : rest.slice(0, slash);
-    const path = slash === -1 ? '' : rest.slice(slash + 1);
+    const username = safeDecode(slash === -1 ? rest : rest.slice(0, slash));
+    const rawPath = slash === -1 ? '' : rest.slice(slash + 1);
+    const path = decodeItemPath(rawPath) ?? rawPath;
     const access = c.req.method === 'GET' || c.req.method === 'HEAD' ? 'r' : 'rw';
 
     const denied = authorize(payload, username, path, access);

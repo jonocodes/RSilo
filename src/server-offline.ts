@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { mountRoutes } from './routes/mount';
 import { corsMiddleware } from './middleware/cors';
 import { mountDocs } from './routes/docs';
+import { rawRequestPath } from './protocol/item-path';
 import { LocalStorage } from './services/local-storage';
 import { createSqliteD1 } from './services/db/sqlite';
 import { readFileSync } from 'fs';
@@ -43,7 +44,8 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${port}
 const localStorage = new LocalStorage(STORAGE_DIR);
 const db = createSqliteD1(DB_PATH);
 
-const app = new Hono();
+// Route on the raw path, as the Worker does (src/index.ts).
+const app = new Hono({ getPath: rawRequestPath });
 
 app.use('*', corsMiddleware());
 

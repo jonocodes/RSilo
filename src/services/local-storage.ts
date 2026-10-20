@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:f
 import type { Stats } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
-import type { StorageInterface, WriteCondition } from '../types';
+import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
 import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
 
 // The offline (dev-only) Storage backend: one file per object under baseDir.
@@ -89,12 +89,14 @@ export class LocalStorage implements StorageInterface {
     };
   }
 
-  async get(key: string): Promise<{ body: ArrayBuffer; metadata: Metadata } | null> {
+  async get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer; metadata: Metadata } | null> {
     const path = this.dataPath(key);
     const stats = await fileStats(path);
     if (!stats) return null;
     try {
-      const body = Uint8Array.from(await readFile(path)).buffer;
+      let bytes = await readFile(path);
+      if (options?.range) bytes = bytes.subarray(options.range.offset, options.range.offset + options.range.length);
+      const body = Uint8Array.from(bytes).buffer;
       return { body, metadata: await this.metadata(key, stats) };
     } catch (error) {
       if (isMissing(error)) return null;

@@ -512,6 +512,14 @@ curl http://localhost:8787/storage/alice/public/documents/shared.txt
 # → Cache-Control: no-cache
 ```
 
+### Item names
+
+Names follow protocol §4. A name may contain any character except `/` and NUL, and must not be empty, `.` or `..`. That includes spaces, `?`, `#`, `%`, newlines and leading dots. Clients send each name percent-encoded, and RSilo decodes each path segment on its own (`src/protocol/item-path.ts`). It stores the name itself and lists it unencoded, so `PUT /storage/alice/documents/a%20b%3F` is listed as `"a b?"`. An encoded `/` inside a name (`%2F`) is a `400`. Routing uses the raw request path for this reason (Hono `getPath`). The file manager under `/account` uses the same names.
+
+### Byte ranges
+
+`GET` on a document honours a single `Range: bytes=…` (RFC 9110 §14): `206` with `Content-Range`, or `416` when the range starts past the end. Responses carry `Accept-Ranges: bytes`, and WebFinger advertises `"http://tools.ietf.org/html/rfc7233": "GET"`. Multiple ranges and invalid values get the whole document (`200`). R2 and S3 fetch only the requested bytes.
+
 ## Project layout
 
 ```
@@ -532,7 +540,7 @@ src/
                       object-size, storage-errors, db/ (schema types, SQLite D1 shim)
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
   ui/                 account client script, setup and not-allowed pages
-  protocol/           constants (ETag normalisation, path validation)
+  protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
   scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
                       (bundle check + migrations, shared by both), wrangler-config,
                       dev-token, setup-local-db, render-api-docs

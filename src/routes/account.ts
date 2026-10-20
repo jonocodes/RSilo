@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { isLocalDevelopment } from '../config';
 import { buildKey, getStorage } from '../services/r2';
-import { isValidPath } from '../protocol/constants';
+import { decodeItemPath, isValidItemName } from '../protocol/item-path';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
 import { deleteUserObject, putUserObject } from '../services/quota-storage';
@@ -99,10 +99,18 @@ function encodePath(p: string): string {
   return p.split('/').map(encodeURIComponent).join('/');
 }
 
-// Files written here follow the storage API's path rules, so nothing is created
-// that apps could not read back and no `..` segment reaches a backend key.
+// The decoded item path after /account/<route>/, by the storage API's rules
+// (protocol/item-path.ts), or null when it is not a valid path (a 400). Files
+// written here are then names apps can read back, and no `..` reaches a key.
+function accountItemPath(c: { req: { path: string } }, route: string): string | null {
+  const raw = c.req.path.slice(`/account/${route}`.length).replace(/^\//, '');
+  return decodeItemPath(raw);
+}
+
+// Upload names are joined onto an already decoded folder path, so each name is
+// checked here too.
 function isValidDocumentPath(path: string): boolean {
-  return path !== '' && !path.endsWith('/') && isValidPath(path);
+  return path !== '' && !path.endsWith('/') && path.split('/').every(isValidItemName);
 }
 
 const COMMON_CSS = `
@@ -425,7 +433,8 @@ accountRouter.get('/browse', async (c) => {
 accountRouter.get('/browse/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const browsePath = c.req.path.replace(/^\/account\/browse\/?/, '') || '';
+  const browsePath = accountItemPath(c, 'browse');
+  if (browsePath === null) return c.text('Invalid path', 400);
   const storage = getStorage(c);
   const items = await listFolder(storage, username, browsePath);
 
@@ -488,7 +497,8 @@ accountRouter.get('/browse/*', async (c) => {
 accountRouter.get('/download/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/download\/?/, '');
+  const filePath = accountItemPath(c, 'download');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -519,7 +529,8 @@ const TEXT_EXTENSIONS = new Set([
 accountRouter.get('/view/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/view\/?/, '');
+  const filePath = accountItemPath(c, 'view');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.text('Not found', 404);
 
   const storage = getStorage(c);
@@ -577,7 +588,8 @@ accountRouter.get('/view/*', async (c) => {
 accountRouter.post('/save/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/save\/?/, '');
+  const filePath = accountItemPath(c, 'save');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.redirect('/account/browse', 302);
   if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
@@ -620,7 +632,8 @@ accountRouter.post('/upload/*', async (c) => {
     if (error instanceof ObjectTooLargeError) return c.text(error.message, 413);
     throw error;
   }
-  const folderPath = c.req.path.replace(/^\/account\/upload\/?/, '');
+  const folderPath = accountItemPath(c, 'upload');
+  if (folderPath === null) return c.text('Invalid path', 400);
 
   const body = await c.req.parseBody({ all: true }) as any;
   const rawFiles = body['files'];
@@ -668,7 +681,8 @@ accountRouter.post('/upload/*', async (c) => {
 accountRouter.post('/delete/*', async (c) => {
   const username = c.get('instance').accountUsername;
 
-  const filePath = c.req.path.replace(/^\/account\/delete\/?/, '');
+  const filePath = accountItemPath(c, 'delete');
+  if (filePath === null) return c.text('Invalid path', 400);
   if (!filePath) return c.redirect('/account/browse', 302);
   if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 

@@ -85,3 +85,27 @@ describe('LocalStorage', () => {
     await expect(storage.put('users//a', bytes('a'), 'text/plain')).rejects.toThrow('empty segments');
   });
 });
+
+describe('LocalStorage ranges and item names', () => {
+  let root: string;
+  let storage: LocalStorage;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'rsilo-local-'));
+    storage = new LocalStorage(join(root, 'storage'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('returns a byte range with the full size in metadata', async () => {
+    await storage.put(P + 'digits', bytes('0123456789'), 'text/plain');
+    const result = await storage.get(P + 'digits', { range: { offset: 2, length: 3 } });
+    expect(new TextDecoder().decode(result!.body)).toBe('234');
+    expect(result!.metadata.contentLength).toBe(10);
+  });
+
+  it('stores and lists names the storage API now allows', async () => {
+    const names = ['back\\slash', '.hidden', '..double..dots..', 'a?b#c%d', '\nleading LF'];
+    for (const name of names) await storage.put(P + name, bytes(name), 'text/plain');
+    expect((await storage.list(P)).objects.map(o => o.key).sort()).toEqual(names.map(n => P + n).sort());
+    for (const name of names) expect(new TextDecoder().decode((await storage.get(P + name))!.body)).toBe(name);
+  });
+});

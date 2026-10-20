@@ -525,8 +525,7 @@ describe('Files — path validation', () => {
     for (const [folder, filename] of [
       ['documents', '../../escape.txt'],
       ['documents', 'sub/file.txt'],
-      ['documents', '.env'],
-      ['.config', 'file.txt'],
+      ['documents', '..'],
     ]) {
       const res = await upload(folder, filename);
       expect(res.status).toBe(400);
@@ -534,15 +533,24 @@ describe('Files — path validation', () => {
     expect([...storage.objects.keys()]).toEqual(['users/alice/storage/documents/.hidden']);
   });
 
+  it('accepts dot-leading names, which the storage API allows (protocol §4)', async () => {
+    expect((await upload('documents', '.env')).status).toBe(302);
+    expect((await upload('.config', 'file.txt')).status).toBe(302);
+    expect(storage.objects.has('users/alice/storage/documents/.env')).toBe(true);
+    expect(storage.objects.has('users/alice/storage/.config/file.txt')).toBe(true);
+  });
+
   it('rejects saving or deleting a path the storage API would refuse', async () => {
     const env = { STORAGE: storage, DB: makeDb() };
     const form = new FormData();
     form.append('content', 'overwritten');
-    const save = await app.request('http://localhost/account/save/documents/.hidden', { method: 'POST', body: form, headers: SAME_ORIGIN }, env);
-    expect(save.status).toBe(400);
-
-    const del = await app.request('http://localhost/account/delete/documents/.hidden', { method: 'POST', headers: SAME_ORIGIN }, env);
-    expect(del.status).toBe(400);
+    // An encoded "/" or a NUL can't be part of a name (protocol §4)
+    for (const bad of ['documents/a%2Fb', 'documents/a%00b']) {
+      const save = await app.request(`http://localhost/account/save/${bad}`, { method: 'POST', body: form, headers: SAME_ORIGIN }, env);
+      expect(save.status).toBe(400);
+      const del = await app.request(`http://localhost/account/delete/${bad}`, { method: 'POST', headers: SAME_ORIGIN }, env);
+      expect(del.status).toBe(400);
+    }
 
     expect(storage.text('users/alice/storage/documents/.hidden')).toBe('legacy');
   });

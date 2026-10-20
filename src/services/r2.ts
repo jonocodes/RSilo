@@ -1,5 +1,5 @@
 import type { R2Bucket, R2ListOptions } from '@cloudflare/workers-types';
-import type { StorageInterface, WriteCondition } from '../types';
+import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
 import { configurationMessage, getStorageConfig } from '../config';
 import { stripQuotes } from '../protocol/constants';
 import { S3Storage } from './s3';
@@ -32,8 +32,8 @@ export interface BlobMetadata {
 export class R2Storage {
   constructor(private bucket: R2Bucket) {}
 
-  async get(key: string): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: BlobMetadata } | null> {
-    const object = await this.bucket.get(key);
+  async get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: BlobMetadata } | null> {
+    const object = await this.bucket.get(key, options?.range ? { range: options.range } : undefined);
     if (!object) return null;
 
     const body = object.body || await object.arrayBuffer();

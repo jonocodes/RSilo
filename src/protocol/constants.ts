@@ -41,12 +41,3 @@ export function normalizeETag(etag: string | null | undefined): string | null {
 export function stripQuotes(etag: string): string {
   return etag.replace(/^W\//, '').replace(/^"|"$/g, '');
 }
-
-// Validate path - no empty segments, no dots, no null bytes
-export function isValidPath(path: string): boolean {
-  if (!path || path === '/') return true;
-  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path;
-  if (trimmed.length === 0) return false;
-  const segments = trimmed.split('/');
-  return segments.every(s => s.length > 0 && !s.startsWith('.') && !s.includes('\0'));
-}
