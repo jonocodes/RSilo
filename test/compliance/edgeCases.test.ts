@@ -2,18 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { createServer } from '../../src/index';
 import { seedToken } from '../helpers/tokens';
 import { createSqliteD1 } from '../../src/services/db/sqlite';
+import { MemoryStorage } from '../helpers/memory-storage';
 
-function createTestEnv() {
-  return {
-    STORAGE: {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    } as any,
-    DB: createSqliteD1(),
-  };
+function createTestEnv(storage = new MemoryStorage()) {
+  return { STORAGE: storage, DB: createSqliteD1() };
 }
 
 describe('Authentication Edge Cases', () => {
@@ -103,14 +95,9 @@ describe('Authentication Edge Cases', () => {
     });
 
     it('accepts valid token with extra whitespace', async () => {
-      const storage = {
-        async get() { return { body: new TextEncoder().encode('test'), metadata: { contentType: 'text/plain', contentLength: 4, etag: '"test"' } }; },
-        async put() { return '"test"'; },
-        async delete() {},
-        async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 4 }; },
-        async list() { return { objects: [] }; },
-      };
-      const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+      const storage = new MemoryStorage();
+      storage.seed('users/alice/storage/documents/test.txt', 'test');
+      const env = createTestEnv(storage);
       const app = createServer(env);
       const token = seedToken(env, 'alice');
 
@@ -292,14 +279,8 @@ describe('Path Validation Edge Cases', () => {
   });
 
   it('accepts valid path with hyphen and underscore', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -310,19 +291,14 @@ describe('Path Validation Edge Cases', () => {
     );
 
     expect(res.status).toBeOneOf([200, 201]);
+    expect(storage.text('users/alice/storage/documents/my-file_v2.txt')).toBe('content');
   });
 });
 
 describe('Content Negotiation', () => {
   it('returns JSON for folder listing request', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -336,16 +312,9 @@ describe('Content Negotiation', () => {
   });
 
   it('returns proper charset in Content-Type', async () => {
-    const storage = {
-      async get() {
-        return { body: new TextEncoder().encode('hello'), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"test"' } };
-      },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/test.txt', 'hello');
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -360,16 +329,9 @@ describe('Content Negotiation', () => {
   });
 
   it('preserves binary Content-Type', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(10), metadata: { contentType: 'application/octet-stream', contentLength: 10, etag: '"binary"' } };
-      },
-      async put() { return '"binary"'; },
-      async delete() {},
-      async head() { return { etag: '"binary"', contentType: 'application/octet-stream', contentLength: 10 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/data.bin', new Uint8Array(10), 'application/octet-stream');
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -385,16 +347,9 @@ describe('Content Negotiation', () => {
 
 describe('Response Headers', () => {
   it('Cache-Control: no-cache on storage responses', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"test"' } };
-      },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/test.txt', 'hello');
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -408,14 +363,8 @@ describe('Response Headers', () => {
   });
 
   it('Cache-Control: no-cache on folder listing', async () => {
-    const storage = {
-      async get() { return null; },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 
@@ -429,16 +378,9 @@ describe('Response Headers', () => {
   });
 
   it('exposes ETag in Access-Control-Expose-Headers', async () => {
-    const storage = {
-      async get() {
-        return { body: new ArrayBuffer(5), metadata: { contentType: 'text/plain', contentLength: 5, etag: '"test"' } };
-      },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return { etag: '"test"', contentType: 'text/plain', contentLength: 5 }; },
-      async list() { return { objects: [] }; },
-    };
-    const env = { STORAGE: storage, DB: createSqliteD1() } as any;
+    const storage = new MemoryStorage();
+    storage.seed('users/alice/storage/documents/test.txt', 'hello');
+    const env = createTestEnv(storage);
     const app = createServer(env);
     const token = seedToken(env, 'alice');
 

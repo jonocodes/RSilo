@@ -2,40 +2,12 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
+import { MemoryStorage } from './helpers/memory-storage';
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
+const storage = new MemoryStorage();
 
 const TEST_ENV = {
-  STORAGE: {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) {
-      storage.delete(key);
-    },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(prefix: string) {
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return {
-        objects: keys.map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any,
+  STORAGE: storage,
   DB: createSqliteD1(),
 };
 
@@ -47,7 +19,7 @@ describe('PUT + GET storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('PUT a document and GET it back', async () => {
@@ -80,6 +52,7 @@ describe('PUT + GET storage', () => {
     );
 
     expect(getRes.status).toBe(200);
+    expect(getRes.headers.get('Content-Type')).toContain('text/plain');
     expect(await getRes.text()).toBe(body);
   });
 
@@ -170,10 +143,10 @@ describe('Object size limits', () => {
         'Content-Length': '5',
       },
       body: '12345',
-    }, env as any);
+    }, env);
 
     expect(res.status).toBe(413);
-    expect(storage.has('users/alice/storage/documents/large.txt')).toBe(false);
+    expect(storage.objects.has('users/alice/storage/documents/large.txt')).toBe(false);
   });
 });
 
@@ -185,7 +158,7 @@ describe('DELETE storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('DELETE removes file', async () => {
@@ -275,7 +248,7 @@ describe('HEAD storage', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('HEAD returns headers without body', async () => {
@@ -330,7 +303,7 @@ describe('Folder listing', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('GET folder listing returns JSON with items', async () => {
@@ -548,7 +521,7 @@ describe('If-Match / If-None-Match', () => {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'text/plain',
-          'If-Match': etag,
+          'If-Match': etag!,
         },
         body: 'updated',
       },
@@ -646,7 +619,7 @@ describe('If-Match / If-None-Match', () => {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'If-None-Match': etag,
+          'If-None-Match': etag!,
         },
       },
       TEST_ENV
@@ -732,6 +705,8 @@ describe('Public storage', () => {
       const res = await app.request(`http://localhost/storage/alice/${path}`, { method: 'GET', headers }, TEST_ENV);
 
       expect(res.status).toBe(200);
+      // The stored type is served as is: the headers below are what keep it inert.
+      expect(res.headers.get('Content-Type')).toBe('text/html');
       expect(res.headers.get('Content-Security-Policy')).toBe('sandbox');
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
       expect(res.headers.get('Cross-Origin-Resource-Policy')).toBeNull();
@@ -746,7 +721,7 @@ describe('Public folder listings', () => {
 
   beforeAll(async () => {
     app = createServer(TEST_ENV);
-    storage.clear();
+    storage.objects.clear();
     const token = seedToken(TEST_ENV, 'alice', 'documents:rw');
     await app.request(
       'http://localhost/storage/alice/public/documents/shared.txt',
@@ -799,7 +774,7 @@ describe('DB-backed OAuth token auth', () => {
   });
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   it('accepts a valid DB-backed OAuth token for storage access', async () => {
@@ -844,7 +819,7 @@ describe('Storage quota — tracking', () => {
   let app: ReturnType<typeof createServer>;
 
   beforeEach(() => {
-    storage.clear();
+    storage.objects.clear();
   });
 
   beforeAll(() => {
@@ -872,11 +847,7 @@ describe('Storage quota — tracking', () => {
 
   it('DELETE decrements used_storage_bytes in DB', async () => {
     const fileBody = new TextEncoder().encode('to be deleted');
-    storage.set('users/alice/storage/documents/todelete.txt', {
-      body: fileBody.buffer as ArrayBuffer,
-      etag: '"xyz"',
-      contentType: 'text/plain',
-    });
+    storage.seed('users/alice/storage/documents/todelete.txt', fileBody);
 
     const dbEnv = {
       STORAGE: TEST_ENV.STORAGE,
@@ -892,5 +863,28 @@ describe('Storage quota — tracking', () => {
 
     const row = dbEnv.DB.sqlite.prepare('SELECT used_storage_bytes AS used FROM users WHERE username = ?').get('alice') as any;
     expect(row.used).toBe(0);
+  });
+
+  it('answers 503 and leaves storage alone when usage cannot be recorded', async () => {
+    const db = createSqliteD1();
+    const dbEnv = {
+      STORAGE: TEST_ENV.STORAGE,
+      // Token checks work; the accounting UPDATE fails, as on a D1 outage mid-request.
+      DB: { ...db, prepare: (sql: string) => {
+        if (sql.startsWith('UPDATE users SET used_storage_bytes')) throw new Error('D1 unavailable');
+        return db.prepare(sql);
+      } },
+    };
+    const token = seedToken(dbEnv, 'alice');
+    const url = 'http://localhost/storage/alice/documents/unaccounted.txt';
+
+    const put = await app.request(url, { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` }, body: 'x' }, dbEnv);
+    expect(put.status).toBe(503);
+    expect(storage.objects.size).toBe(0);
+
+    storage.seed('users/alice/storage/documents/unaccounted.txt', 'x');
+    const del = await app.request(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }, dbEnv);
+    expect(del.status).toBe(503);
+    expect(storage.objects.has('users/alice/storage/documents/unaccounted.txt')).toBe(true);
   });
 });

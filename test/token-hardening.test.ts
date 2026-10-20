@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
-import { createSqliteD1 } from '../src/services/db/sqlite';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { PKCE, tokenHash as sha256 } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 import { generateToken, hashToken } from '../src/services/auth';
 import { REFRESH_TOKEN_TTL_SECONDS } from '../src/services/tokens';
 
@@ -27,32 +28,15 @@ const REQUEST = {
   code_challenge_method: 'S256',
 };
 
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
-
 function devEnv() {
-  return { STORAGE: new MemoryStorage() as any, DB: createSqliteD1() } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
 }
 
-function rows(env: any, sql: string): any[] {
+function rows(env: { DB: SqliteD1 }, sql: string): any[] {
   return env.DB.sqlite.prepare(sql).all() as any[];
 }
 
-async function approve(env: any, params: Record<string, string> = {}) {
+async function approve(env: unknown, params: Record<string, string> = {}) {
   return app.request(CONSENT_URL, {
     method: 'POST',
     headers: SAME_ORIGIN,
@@ -60,25 +44,25 @@ async function approve(env: any, params: Record<string, string> = {}) {
   }, env);
 }
 
-async function authorizationCode(env: any): Promise<string> {
+async function authorizationCode(env: unknown): Promise<string> {
   const res = await approve(env);
   expect(res.status).toBe(302);
   return new URL(res.headers.get('Location')!).searchParams.get('code')!;
 }
 
-function exchange(env: any, params: Record<string, string>) {
+function exchange(env: unknown, params: Record<string, string>) {
   return app.request(TOKEN_URL, { method: 'POST', headers: FORM, body: new URLSearchParams(params).toString() }, env);
 }
 
-function redeem(env: any, code: string) {
+function redeem(env: unknown, code: string) {
   return exchange(env, { grant_type: 'authorization_code', code, redirect_uri: REQUEST.redirect_uri, code_verifier: PKCE.verifier });
 }
 
-function refresh(env: any, refreshToken: string) {
+function refresh(env: unknown, refreshToken: string) {
   return exchange(env, { grant_type: 'refresh_token', refresh_token: refreshToken });
 }
 
-function putFile(env: any, token: string) {
+function putFile(env: unknown, token: string) {
   return app.request('http://localhost/storage/alice/documents/a.txt', {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
@@ -141,7 +125,7 @@ describe('secrets at rest', () => {
 });
 
 describe('refresh token rotation', () => {
-  async function tokens(env: any) {
+  async function tokens(env: { DB: SqliteD1 }) {
     return await (await redeem(env, await authorizationCode(env))).json() as any;
   }
 

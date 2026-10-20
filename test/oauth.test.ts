@@ -3,6 +3,7 @@ import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
 import type { SqliteD1, SqliteStatement } from '../src/services/db/sqlite';
 import { PKCE, seedToken, tokenHash } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // OAuth discovery and the token endpoint. The whole consent -> code -> token
 // flow lives in consent.test.ts, PKCE enforcement in pkce.test.ts, and refresh
@@ -10,46 +11,13 @@ import { PKCE, seedToken, tokenHash } from './helpers/tokens';
 // discovery, the error grants and the few endpoint behaviours not covered
 // there, all against the real SQLite database.
 
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
-
-function makeStorage() {
-  return {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) { storage.delete(key); },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string }) {
-      const prefix = options.prefix || '';
-      return {
-        objects: Array.from(storage.keys()).filter(k => k.startsWith(prefix)).map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any;
-}
-
 function makeEnv(extra: Record<string, unknown> = {}) {
-  return { STORAGE: makeStorage(), DB: createSqliteD1(), ...extra } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...extra };
 }
 
 const REDIRECT_URI = 'https://example.com/callback';
 
-function insertCode(env: any, code: string, overrides: { redirect_uri?: string; expires_at?: number } = {}) {
+function insertCode(env: { DB: SqliteD1 }, code: string, overrides: { redirect_uri?: string; expires_at?: number } = {}) {
   env.DB.sqlite.prepare(
     'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
@@ -76,7 +44,7 @@ function withLatency(db: SqliteD1): SqliteD1 {
   return { ...db, prepare: (sql: string) => statement(db.prepare(sql)) };
 }
 
-function exchange(env: any, body: Record<string, string>) {
+function exchange(env: unknown, body: Record<string, string>) {
   return createServer(env).request('http://localhost/oauth/alice/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -260,7 +228,7 @@ describe('malformed token requests', () => {
   });
 
   it('is a 503 without a database (dev mode), not tokens that were never stored', async () => {
-    const env = { STORAGE: makeStorage() };
+    const env = { STORAGE: new MemoryStorage() };
     const res = await exchange(env, { grant_type: 'refresh_token', refresh_token: 'x' });
     expect(res.status).toBe(503);
   });
@@ -269,7 +237,7 @@ describe('malformed token requests', () => {
 describe('database and storage failures surface as 500', () => {
   it('a database that throws during token lookup is a logged 500 that reveals nothing, not a silent 401', async () => {
     const env = {
-      STORAGE: makeStorage(),
+      STORAGE: new MemoryStorage(),
       DB: { prepare: () => { throw new Error('Database connection failed'); } } as any,
     };
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -288,13 +256,7 @@ describe('database and storage failures surface as 500', () => {
 
   it('a storage get failure after auth is a 500', async () => {
     const env = makeEnv();
-    env.STORAGE = {
-      async get() { throw new Error('Storage get failed'); },
-      async put() { return '"test"'; },
-      async delete() {},
-      async head() { return null; },
-      async list() { return { objects: [] }; },
-    };
+    env.STORAGE.get = async () => { throw new Error('Storage get failed'); };
     const token = seedToken(env, 'alice', '*:rw');
     const res = await createServer(env).request('http://localhost/storage/alice/documents/test.txt', {
       method: 'GET',

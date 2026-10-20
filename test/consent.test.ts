@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createServer } from '../src/index';
 import { PRODUCTION_INSTANCE } from './helpers/instance';
-import { createSqliteD1 } from '../src/services/db/sqlite';
+import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 import { PKCE } from './helpers/tokens';
+import { MemoryStorage } from './helpers/memory-storage';
 
 // OAuth consent lives under the Owner-gated /account prefix (ADR-0004, #18):
 // GET renders it from the query string alone, POST approves or denies. The
@@ -16,28 +17,11 @@ const CONSENT_URL = 'http://localhost/account/oauth/authorize';
 const FORM = { 'Content-Type': 'application/x-www-form-urlencoded' };
 const SAME_ORIGIN = { ...FORM, 'Sec-Fetch-Site': 'same-origin' };
 
-class MemoryStorage {
-  objects = new Map<string, { body: ArrayBuffer; contentType: string }>();
-  async get(key: string) {
-    const o = this.objects.get(key);
-    return o ? { body: o.body, metadata: { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } } : null;
-  }
-  async put(key: string, body: ArrayBuffer, contentType: string) { this.objects.set(key, { body, contentType }); return '"e"'; }
-  async delete(key: string) { this.objects.delete(key); }
-  async head(key: string) {
-    const o = this.objects.get(key);
-    return o ? { contentType: o.contentType, contentLength: o.body.byteLength, etag: '"e"' } : null;
-  }
-  async list(prefix: string) {
-    return { objects: [...this.objects.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.byteLength, etag: '"e"' })) };
-  }
-}
-
 function devEnv(extra: Record<string, unknown> = {}) {
-  return { STORAGE: new MemoryStorage() as any, DB: createSqliteD1(), ...extra } as any;
+  return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...extra };
 }
 
-function count(env: any, table: string): number {
+function count(env: { DB: SqliteD1 }, table: string): number {
   return Number((env.DB.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as any).n);
 }
 
@@ -59,7 +43,7 @@ function form(params: Record<string, string> = {}): string {
   return new URLSearchParams({ ...REQUEST, action: 'approve', ...params }).toString();
 }
 
-function post(env: any, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
+function post(env: unknown, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
   return app.request(url, { method: 'POST', headers, body }, env, ctx);
 }
 

@@ -2,41 +2,10 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createServer } from '../src/index';
 import { seedToken } from './helpers/tokens';
 import { createSqliteD1 } from '../src/services/db/sqlite';
-
-const storage = new Map<string, { body: ArrayBuffer; etag: string; contentType: string }>();
+import { MemoryStorage } from './helpers/memory-storage';
 
 const TEST_ENV = {
-  STORAGE: {
-    async get(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { body: item.body, metadata: { contentType: item.contentType, contentLength: item.body.byteLength, etag: item.etag } };
-    },
-    async put(key: string, body: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-      const etag = `"etag-${Math.random().toString(36).slice(2)}"`;
-      storage.set(key, { body, etag, contentType: options?.httpMetadata?.contentType || 'application/octet-stream' });
-      return etag;
-    },
-    async delete(key: string) {
-      storage.delete(key);
-    },
-    async head(key: string) {
-      const item = storage.get(key);
-      if (!item) return null;
-      return { etag: item.etag, contentType: item.contentType, contentLength: item.body.byteLength };
-    },
-    async list(options: { prefix?: string; delimiter?: string }) {
-      const prefix = options.prefix || '';
-      const keys = Array.from(storage.keys()).filter(k => k.startsWith(prefix));
-      return {
-        objects: keys.map(k => ({
-          key: k,
-          size: storage.get(k)!.body.byteLength,
-          etag: storage.get(k)!.etag,
-        })),
-      };
-    },
-  } as any,
+  STORAGE: new MemoryStorage(),
   DB: createSqliteD1(),
 };
 
