@@ -8,6 +8,7 @@ import { contentRange, parseRange, type ByteRange } from '../protocol/range';
 import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
+import { readFolderEtag, storeFolderEtag, type FolderEtagDatabase } from '../services/folder-etags';
 import { isLocalDevelopment } from '../config';
 import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
@@ -204,9 +205,33 @@ function ifNoneMatchIncludes(c: Context, etag: string): boolean {
   return ifNoneMatch.split(',').map((e) => stripQuotes(e.trim())).includes(stripQuotes(etag));
 }
 
+// The folder ETag cache (services/folder-etags.ts, a D1 table). Computing a
+// folder's ETag lists its whole subtree, and clients re-check each folder they
+// sync every few seconds, so the ETag is memoized per folder:
+// - Every write and delete (quota-storage.ts) bumps the version of each folder
+//   above the document, which invalidates their cached ETags.
+// - A GET or HEAD with a valid cached ETag answers 304, or a HEAD's headers,
+//   from that one row, without listing. A 200 still lists, for the body.
+// - Otherwise the folder is listed as before and its ETag cached against the
+//   version read before listing (compare-and-set), so a write that lands
+//   mid-listing leaves nothing cached.
+// The cached value is the same content-derived folderVersion(), so it keeps
+// agreeing with the parent's listing entry. Subfolder ETags in a listing are
+// not cached: a client only GETs a subfolder whose ETag changed, which needs
+// the body, so a listing for it is made either way. Changes made to the bucket
+// directly show after FOLDER_ETAG_MAX_AGE_SECONDS at most.
 async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
   const folderPath = path === '' || path.endsWith('/') ? path : path + '/';
   const folderKey = buildKey(username, folderPath);
+
+  // Storage auth already requires the DB; a cache failure only costs a listing.
+  const db: FolderEtagDatabase | undefined = c.env?.DB;
+  const cached = db ? await readFolderEtag(db, username, folderPath).catch(logCacheFailure) : undefined;
+  if (cached?.etag) {
+    const etag = `"${cached.etag}"`;
+    if (ifNoneMatchIncludes(c, etag)) return notModified(etag);
+    if (c.req.method === 'HEAD') return new Response(null, { status: 200, headers: folderHeaders(etag) });
+  }
 
   const { objects } = await storage.list(folderKey);
 
@@ -245,21 +270,30 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
   folder.items = items;
 
   const folderJson = JSON.stringify(folder);
-  const etag = `"${await folderVersion(documents)}"`;
+  const version = await folderVersion(documents);
+  const etag = `"${version}"`;
+  if (db && cached) await storeFolderEtag(db, username, folderPath, cached.version, version).catch(logCacheFailure);
 
-  if (ifNoneMatchIncludes(c, etag)) {
-    return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
-  }
+  if (ifNoneMatchIncludes(c, etag)) return notModified(etag);
+  return new Response(folderJson, { status: 200, headers: folderHeaders(etag) });
+}
 
-  return new Response(folderJson, {
-    status: 200,
-    headers: {
-      'Content-Type': FOLDER_MIME_TYPE,
-      'ETag': etag,
-      'Cache-Control': 'no-cache',
-      'Content-Encoding': 'identity',
-    },
-  });
+function notModified(etag: string): Response {
+  return new Response(null, { status: 304, headers: { 'ETag': etag, 'Cache-Control': 'no-cache' } });
+}
+
+function folderHeaders(etag: string): Record<string, string> {
+  return {
+    'Content-Type': FOLDER_MIME_TYPE,
+    'ETag': etag,
+    'Cache-Control': 'no-cache',
+    'Content-Encoding': 'identity',
+  };
+}
+
+function logCacheFailure(error: unknown): undefined {
+  console.error('Folder ETag cache unavailable', error);
+  return undefined;
 }
 
 async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {

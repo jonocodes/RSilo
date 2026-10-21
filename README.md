@@ -126,7 +126,7 @@ R2 needs a payment method on file, and once one is there any overage is charged 
 Things to know:
 
 - **This is CLI only.** The Deploy to Cloudflare button always provisions R2. With [Workers Builds](#automatic-deploys-cloudflare-workers-builds), also add the build variable `RSILO_STORAGE=s3` so the R2 binding is left out of the build.
-- **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Each folder listing an app fetches costs one Class C call. Each file download or unchanged-file check costs one Class B call. An upload costs one Class B call per segment of its path (checking the file's current version and write condition, and that no folder above it is a file) and one Class C call (checking that it is not a folder); a delete costs one Class B call. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
+- **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Apps re-check the folders they sync every few seconds; while a folder is unchanged, RSilo answers that from D1 and makes no B2 call. Fetching a folder that changed costs one Class C call (per 1,000 files below it). Each file download or unchanged-file check costs one Class B call. An upload costs one Class B call per segment of its path (checking the file's current version and write condition, and that no folder above it is a file) and one Class C call (checking that it is not a folder); a delete costs one Class B call. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
 - **Switching an existing Instance copies nothing.** If you move from R2 to S3 (or back), copy the bucket's contents first, for example with [rclone](https://rclone.org/), keeping the `users/` key layout. The storage usage figure on `/account` is not recomputed.
 - **Other providers work too**: AWS S3, Wasabi, Storj, iDrive e2, a MinIO server, or R2's own S3 endpoint. Set `S3_REGION` if your provider needs a region that is not part of its endpoint host.
 
@@ -287,11 +287,11 @@ Then copy the bucket on a schedule (cron, launchd or Task Scheduler):
 rclone sync r2:remotestorage ./rsilo-backup --backup-dir "./rsilo-deleted/$(date +%F)"
 ```
 
-`sync` makes `./rsilo-backup` match the bucket; `--backup-dir` moves files that were deleted or changed since the last run into a dated folder instead of losing them. To restore, copy files back with `rclone copy` (the usage figure on `/account` is not recomputed).
+`sync` makes `./rsilo-backup` match the bucket; `--backup-dir` moves files that were deleted or changed since the last run into a dated folder instead of losing them. To restore, copy files back with `rclone copy` (the usage figure on `/account` is not recomputed, and apps may take up to an hour to notice the restored files; see [Known limitations](#known-limitations)).
 
 **Files in an S3 bucket.** The same works with an rclone remote for your provider. Backblaze B2 also keeps every version of a file by default (the bucket's lifecycle setting *Keep all versions*), so a deleted or overwritten file can be brought back from the B2 web UI. Old versions count toward the 10 GB free tier.
 
-**The database.** D1 holds your app tokens, your quota and the usage counter, never files. Cloudflare's D1 Time Travel keeps restorable history automatically: 7 days on the Workers Free plan, 30 on Paid (see [Rolling back a bad release](#rolling-back-a-bad-release)). Were it lost, apps would connect again and your files would be untouched.
+**The database.** D1 holds your app tokens, your quota, the usage counter and a cache of folder ETags, never files. Cloudflare's D1 Time Travel keeps restorable history automatically: 7 days on the Workers Free plan, 30 on Paid (see [Rolling back a bad release](#rolling-back-a-bad-release)). Were it lost, apps would connect again and your files would be untouched.
 
 **The offline server.** Copy `data/storage/`, and back up the database with SQLite's `.backup` rather than `cp`, which can catch it mid-write:
 
@@ -344,7 +344,7 @@ RSilo is built for a *small personal backup*, not a business service — and it 
 
 As of **October 2026**, R2's free tier covers roughly **10 GB of storage**, **1 million writes/listings**, and **10 million reads** per month, with free egress. Cloudflare changes these numbers and prices over time, so treat them as a rough guide and check the current values on the [R2 pricing page](https://developers.cloudflare.com/r2/pricing/). For a personal notes/todos/photos backup this allowance is far more than you will use.
 
-Roughly, uploads and folder listings count as "writes" (Class A), downloads and metadata as "reads" (Class B), and deletes are free.
+Roughly, uploads and folder listings count as "writes" (Class A), downloads and metadata as "reads" (Class B), and deletes are free. Only a folder that changed is listed: an app re-checking an unchanged folder is answered from D1, with no R2 operation.
 
 ### Staying free
 
@@ -570,6 +570,7 @@ Every test that touches the database runs the real SQL that production runs: the
 - **Rate limiting is per Cloudflare location.** The native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7).
 - **Buffered uploads.** Upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately. Downloads stream, except from the offline server.
 - **Conditional writes are not atomic on S3.** On R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them against the `HEAD` it makes just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete.
+- **Edits made directly to the bucket can take up to an hour to show in folder ETags.** RSilo caches each folder's ETag in D1 and clears it on every write it makes. A change made around RSilo, such as restoring files with `rclone copy`, is seen once the cached ETag expires, after an hour; until then apps see those folders as unchanged.
 - **S3 folder listings have no content types.** S3 listings do not carry them, so on S3 storage a folder listing reports `application/octet-stream` for every document. A `GET` of the document returns its real type.
 - **The account area shares the storage origin.** The remoteStorage spec (§14) suggests a separate origin for consent and revocation ([ADR-0004](docs/adr/0004-merged-account-control-plane.md)). RSilo serves stored files with `Content-Security-Policy: sandbox`, so they cannot run scripts on that origin.
 
