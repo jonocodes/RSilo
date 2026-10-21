@@ -1,6 +1,7 @@
 import type { StorageInterface } from '../types';
 import { buildKey } from './r2';
 import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
+import { bumpFolderVersions } from './folder-etags';
 
 export class QuotaExceededError extends Error {}
 export class StorageAccountingError extends Error {}
@@ -68,6 +69,22 @@ async function adjustUsage(db: UsageDatabase | undefined, username: string, delt
   if (changes === 0) throw new QuotaExceededError('Storage quota exceeded');
 }
 
+// Invalidates the cached ETags of the folders above a document just written or
+// deleted (folder-etags.ts). The write has already happened, so a failure is
+// logged, not answered with 503: the client would retry a write that
+// succeeded, and the retry (conditioned on the old ETag) would get 412 and
+// invalidate nothing either. Those folder ETags then stay stale for at most
+// FOLDER_ETAG_MAX_AGE_SECONDS, as after an edit made to the bucket directly.
+// D1 being down is caught before the write: the usage update answers 503.
+async function invalidateFolderEtags(db: UsageDatabase | undefined, username: string, key: string): Promise<void> {
+  if (!db || typeof db.prepare !== 'function') return;
+  try {
+    await bumpFolderVersions(db, username, key);
+  } catch (error) {
+    console.error('Folder ETag invalidation failed', error);
+  }
+}
+
 function requestConditionHolds(existing: ExistingObject, condition: RequestCondition | undefined): boolean {
   if (condition?.ifNoneMatch === '*' && existing) return false;
   if (condition?.ifMatch === '*') return existing !== null;
@@ -114,6 +131,7 @@ export async function putUserObject(options: PutObjectOptions): Promise<{ etag: 
     try {
       const etag = await options.storage.put(options.key, options.body, options.contentType,
         existing ? { ifMatch: existing.etag } : { ifNoneMatch: '*' });
+      await invalidateFolderEtags(options.db, options.username, options.key);
       return { etag, created: !existing };
     } catch (error) {
       await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
@@ -139,6 +157,7 @@ export async function deleteUserObject(options: DeleteObjectOptions): Promise<st
     await adjustUsage(options.db, options.username, delta, true, options.allowUnaccounted);
     try {
       await options.storage.delete(options.key, { ifMatch: existing.etag });
+      await invalidateFolderEtags(options.db, options.username, options.key);
       return existing.etag;
     } catch (error) {
       await adjustUsage(options.db, options.username, -delta, false, options.allowUnaccounted);
