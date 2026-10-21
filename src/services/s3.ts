@@ -2,7 +2,6 @@ import { AwsClient } from 'aws4fetch';
 import type { S3Config } from '../config';
 import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
 import type { BlobMetadata } from './r2';
-import { conditionHolds, PreconditionFailedError } from './storage-errors';
 
 // StorageInterface over any S3-compatible API (ADR-0005): Backblaze B2, AWS S3,
 // MinIO, R2's own S3 endpoint, and so on. Requests are path-style
@@ -47,12 +46,12 @@ export class S3Storage implements StorageInterface {
     return { body: response.body ?? new ArrayBuffer(0), metadata };
   }
 
-  // A condition is checked with a HEAD before the write, not sent as If-Match
-  // / If-None-Match: Backblaze B2, the main target, documents neither on
-  // PutObject and answers If-None-Match with 501 Not Implemented. So on S3 a
-  // write that lands between the HEAD and the PUT (or DELETE) still wins.
-  async put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string> {
-    if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+  // Write conditions are ignored, not sent as If-Match / If-None-Match:
+  // Backblaze B2, the main target, documents neither on PutObject and answers
+  // If-None-Match with 501 Not Implemented. A HEAD here could not make the
+  // write atomic either, and the caller (quota-storage.ts) has just made the
+  // same check, so a second one would only cost B2 another Class B call.
+  async put(key: string, body: ArrayBuffer, contentType: string, _condition?: WriteCondition): Promise<string> {
     const response = await this.send('PUT', this.objectUrl(key), {
       body,
       headers: { 'Content-Type': contentType },
@@ -64,8 +63,7 @@ export class S3Storage implements StorageInterface {
     return etag;
   }
 
-  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
-    if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+  async delete(key: string, _condition?: { ifMatch: string }): Promise<void> {
     const response = await this.send('DELETE', this.objectUrl(key));
     if (response.status === 404) return;
     await this.ensureOk('DELETE', response);

@@ -97,8 +97,8 @@ async function assertNoPathConflict(storage: StorageInterface, username: string,
  *
  * The write is conditioned on the object just read, so the usage delta is
  * always that of the object actually replaced; if another write got in
- * between, the request is evaluated again. On S3 the backend checks that
- * condition with a HEAD, not atomically (s3.ts), so two racing writes there
+ * between, the request is evaluated again. S3 cannot enforce that condition
+ * (s3.ts), so there only this HEAD guards it and two racing writes
  * can still both count.
  */
 export async function putUserObject(options: PutObjectOptions): Promise<{ etag: string; created: boolean }> {
@@ -126,7 +126,7 @@ export async function putUserObject(options: PutObjectOptions): Promise<{ etag: 
 /**
  * Deletes a document, keeping the usage counter exact as putUserObject does.
  * Returns the deleted object's ETag, or null when there was none. R2 and S3
- * check the delete's condition with a HEAD, so two racing deletes there can
+ * cannot enforce the delete's condition, so two racing deletes there can
  * still both subtract (the counter never goes below 0).
  */
 export async function deleteUserObject(options: DeleteObjectOptions): Promise<string | null> {

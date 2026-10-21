@@ -42,13 +42,15 @@ export interface StorageInterface {
   /** With `options.range` only those bytes are returned; metadata.contentLength stays the full size. */
   get(key: string, options?: StorageGetOptions): Promise<{ body: ArrayBuffer | ReadableStream<Uint8Array>; metadata: { contentType: string; contentLength: number; etag: string; lastModified?: string } } | null>;
   /**
-   * Stores the object and returns its ETag. With a condition that does not
-   * hold, stores nothing and throws PreconditionFailedError
-   * (services/storage-errors.ts). R2Storage and LocalStorage check it
-   * atomically; S3Storage checks it with a HEAD first (see s3.ts).
+   * Stores the object and returns its ETag. A condition is enforced only
+   * where the backend can check it in the same operation as the write: then,
+   * if it does not hold, nothing is stored and PreconditionFailedError
+   * (services/storage-errors.ts) is thrown. R2Storage and LocalStorage
+   * enforce it; S3Storage ignores it (see s3.ts), so callers check first, as
+   * quota-storage.ts does.
    */
   put(key: string, body: ArrayBuffer, contentType: string, condition?: WriteCondition): Promise<string>;
-  /** Deletes the object (a no-op when absent); with a condition, as put(). Never atomic on R2 or S3. */
+  /** Deletes the object (a no-op when absent); a condition as put(), enforced by LocalStorage only. */
   delete(key: string, condition?: { ifMatch: string }): Promise<void>;
   head(key: string): Promise<{ contentType: string; contentLength: number; etag: string; lastModified?: string } | null>;
   /** Every object whose key starts with `prefix`, in key order; with `limit`, only the first that many. */

@@ -20,23 +20,24 @@ interface Backend {
   storage: StorageInterface;
   /** S3's ListObjectsV2 carries no content type (ADR-0005). */
   listsContentType: boolean;
-  /** S3Storage checks write conditions with a HEAD first, so racing writes can both pass (s3.ts). */
-  atomicPut: boolean;
+  /** Whether put() and delete() enforce their condition (S3 ignores both, R2 the delete one; see types.ts). */
+  conditionalPut: boolean;
+  conditionalDelete: boolean;
   done(): void;
 }
 
 const S3_CONFIG = { endpoint: 'https://s3.example.test', bucket: 'rsilo-test', accessKeyId: 'AKIDTEST', secretAccessKey: 'secret' };
 
 const backends: [string, () => Backend][] = [
-  ['MemoryStorage', () => ({ storage: new MemoryStorage(), listsContentType: true, atomicPut: true, done() {} })],
-  ['R2Storage', () => ({ storage: new R2Storage(createFakeR2({ pageSize: 2 }).bucket), listsContentType: true, atomicPut: true, done() {} })],
+  ['MemoryStorage', () => ({ storage: new MemoryStorage(), listsContentType: true, conditionalPut: true, conditionalDelete: true, done() {} })],
+  ['R2Storage', () => ({ storage: new R2Storage(createFakeR2({ pageSize: 2 }).bucket), listsContentType: true, conditionalPut: true, conditionalDelete: false, done() {} })],
   ['S3Storage', () => {
     const s3 = createFakeS3({ bucket: S3_CONFIG.bucket, accessKeyId: S3_CONFIG.accessKeyId, pageSize: 2 });
-    return { storage: new S3Storage(S3_CONFIG, s3.fetch), listsContentType: false, atomicPut: false, done() {} };
+    return { storage: new S3Storage(S3_CONFIG, s3.fetch), listsContentType: false, conditionalPut: false, conditionalDelete: false, done() {} };
   }],
   ['LocalStorage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'rsilo-contract-'));
-    return { storage: new LocalStorage(dir), listsContentType: true, atomicPut: true, done: () => rmSync(dir, { recursive: true, force: true }) };
+    return { storage: new LocalStorage(dir), listsContentType: true, conditionalPut: true, conditionalDelete: true, done: () => rmSync(dir, { recursive: true, force: true }) };
   }],
 ];
 
@@ -144,7 +145,8 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
     expect(await keys(P + 'd/')).toEqual(names.map((name) => P + 'd/' + name).sort());
   });
 
-  it('honours If-None-Match: * and If-Match on put, storing nothing when they fail', async () => {
+  it('honours If-None-Match: * and If-Match on put, storing nothing when they fail, where the backend enforces them', async () => {
+    if (!backend.conditionalPut) return;
     await expect(storage.put(P + 'a.txt', bytes('one'), 'text/plain', { ifMatch: '"nope"' })).rejects.toBeInstanceOf(PreconditionFailedError);
     expect(await storage.head(P + 'a.txt')).toBeNull();
 
@@ -159,7 +161,8 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
     expect(await text((await storage.get(P + 'a.txt'))!.body)).toBe('two');
   });
 
-  it('honours If-Match on delete', async () => {
+  it('honours If-Match on delete, where the backend enforces it', async () => {
+    if (!backend.conditionalDelete) return;
     await expect(storage.delete(P + 'missing', { ifMatch: '"x"' })).rejects.toBeInstanceOf(PreconditionFailedError);
     await storage.put(P + 'a.txt', bytes('one'), 'text/plain');
     await expect(storage.delete(P + 'a.txt', { ifMatch: '"stale"' })).rejects.toBeInstanceOf(PreconditionFailedError);
@@ -170,7 +173,7 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
   });
 
   it('lets only one of two racing If-None-Match: * puts win, where the backend checks atomically', async () => {
-    if (!backend.atomicPut) return;
+    if (!backend.conditionalPut) return;
     const results = await Promise.allSettled(['one', 'two'].map((body) =>
       storage.put(P + 'a.txt', bytes(body), 'text/plain', { ifNoneMatch: '*' })));
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);

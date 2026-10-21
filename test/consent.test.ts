@@ -183,7 +183,16 @@ describe('redirect_uri origin check (protocol §10)', () => {
 });
 
 describe('scope validation', () => {
-  const INVALID = ['*', 'documents', 'documents:read', 'documents:rwx', 'Documents:rw', 'public:rw', 'documents:rw pictures', '   '];
+  const INVALID = ['*', 'documents', 'documents:read', 'documents:rwx', ':rw', '.:rw', '..:rw', 'public:rw', 'documents:rw pictures', '   '];
+  // Any valid item name is a module, as remoteStorage.js allows.
+  const VALID = ['myFavoriteDrinks:rw', 'my.app:r', 'my-app_2:rw', 'a:b:rw', '*:r'];
+
+  for (const scope of VALID) {
+    it(`GET with scope "${scope}" renders the consent page`, async () => {
+      const res = await app.request(`${CONSENT_URL}?${query({ scope })}`, {}, devEnv());
+      expect(res.status).toBe(200);
+    });
+  }
 
   for (const scope of INVALID) {
     it(`GET with scope "${scope}" sends the app invalid_scope and renders nothing`, async () => {

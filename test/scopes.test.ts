@@ -97,6 +97,17 @@ describe('Scope-based access control', () => {
     expect(res.status).toBe(403);
   });
 
+  it('module names are case-sensitive item names, like the folders they grant', async () => {
+    const token = seedToken(TEST_ENV, 'alice', 'myFavoriteDrinks:rw');
+    const put = (module: string) => app.request(
+      `http://localhost/storage/alice/${module}/list`,
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' }, body: 'x' },
+      TEST_ENV
+    );
+    expect((await put('myFavoriteDrinks')).status).toBeOneOf([200, 201]);
+    expect((await put('myfavoritedrinks')).status).toBe(403);
+  });
+
   it('a module scope cannot write root-level documents or public/ itself; *:rw can', async () => {
     const fooToken = seedToken(TEST_ENV, 'alice', 'foo:rw');
     const rootToken = seedToken(TEST_ENV, 'alice', '*:rw');

@@ -3,7 +3,7 @@ import type { StorageGetOptions, StorageInterface, WriteCondition } from '../typ
 import { configurationMessage, getStorageConfig } from '../config';
 import { stripQuotes } from '../protocol/constants';
 import { S3Storage } from './s3';
-import { conditionHolds, PreconditionFailedError } from './storage-errors';
+import { PreconditionFailedError } from './storage-errors';
 
 // Normalises the storage backend to the StorageInterface the routes expect.
 // S3_* vars select an S3-compatible bucket (ADR-0005). Otherwise, in the Worker
@@ -57,10 +57,10 @@ export class R2Storage {
     return object.etag;
   }
 
-  async delete(key: string, condition?: { ifMatch: string }): Promise<void> {
-    // R2's delete takes no onlyIf, so a condition is checked with a HEAD
-    // first: a write that lands between the two is deleted anyway.
-    if (condition && !conditionHolds(await this.bucket.head(key), condition)) throw new PreconditionFailedError();
+  async delete(key: string, _condition?: { ifMatch: string }): Promise<void> {
+    // R2's delete takes no onlyIf, so a condition is ignored: a HEAD here
+    // could not make the delete atomic, and the caller (quota-storage.ts)
+    // has just made the same check.
     await this.bucket.delete(key);
   }
 

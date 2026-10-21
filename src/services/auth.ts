@@ -1,3 +1,5 @@
+import { isValidItemName } from '../protocol/item-path';
+
 // The resolved form of an opaque bearer token row in oauth_tokens.
 export interface TokenPayload {
   sub: string; // username
@@ -36,14 +38,19 @@ export interface Scope {
   access: Access;
 }
 
-// `<module>:<r|rw>`. Module names are lower-case alphanumeric, as the protocol
-// asks (§9), with `-` and `_` also allowed; `public` is reserved.
-const SCOPE = /^(\*|[a-z0-9_-]+):(r|rw)$/;
-
+// `<module>:<r|rw>`. The protocol (§9) only says module names SHOULD be
+// lower-case alphanumeric, and remoteStorage.js accepts any name without a
+// `/`, so a module is any valid item name (the top-level folder it grants)
+// other than the reserved `public`; `*` is the whole storage root. Names are
+// case-sensitive, like paths.
 export function parseScope(item: string): Scope | null {
-  const match = SCOPE.exec(item);
-  if (!match || match[1] === 'public') return null;
-  return { module: match[1], access: match[2] as Access };
+  const colon = item.lastIndexOf(':');
+  if (colon === -1) return null;
+  const module = item.slice(0, colon);
+  const access = item.slice(colon + 1);
+  if (access !== 'r' && access !== 'rw') return null;
+  if (module !== '*' && (module === 'public' || !isValidItemName(module))) return null;
+  return { module, access };
 }
 
 /** A scope parameter: space-separated scopes. Null if it is empty or any item is malformed. */
