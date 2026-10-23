@@ -8,8 +8,10 @@ Status: accepted
 
 - **Rust Worker on OpenDAL.** Rejected, on the prototype's results (2026-10-22, opendal 0.59.5, worker 0.8.7):
   - The bundle fits: 1.34 MB gzipped with S3, WebDAV and Azure, against the Free plan's 3 MB, and the edge accepted it.
-  - CPU doesn't fit. Small requests took 1–21 ms of CPU on R2 (Free allows 10 ms), and body bytes cross the wasm boundary, so a 12 MB GET took 364 ms. The TS Worker hands R2's stream straight to the response.
+  - CPU doesn't fit. Small requests took 1–21 ms of CPU on R2 (Free allows 10 ms), and a 12 MB GET took 364 ms, roughly 30 ms per MB. CPU time counts only work inside the isolate, not waiting on the network. The TS Worker hands R2's `ReadableStream` straight to the `Response`, and the runtime pipes it natively, so its cost doesn't depend on size. In the Rust Worker every chunk is copied from JS into wasm linear memory and back out, with a future woken per chunk. Wasm causes the copy, because a module can't read JS buffers in place. OpenDAL makes it unavoidable, because its API yields Rust `Bytes` and never exposes the underlying `fetch` stream. Rust itself isn't the cause: a `workers-rs` Worker that calls `fetch` and returns the response untouched copies nothing. The prototype's extra `.to_vec()` adds one avoidable copy, but removing it leaves the cost proportional to size.
   - The backends gained are WebDAV and Azure Blob. GCS can't sign on wasm. Each backend brings its own capability gaps: WebDAV has no conditional requests and no multipart, and R2 ignores `If-Match` on DELETE while OpenDAL reports it as supported. RSilo would still need its own stat-then-act fallback per provider, as it has for B2 today.
+- **OpenDAL for control, presigned URLs for bodies.** Rejected. OpenDAL presigns for S3 and Azure (not WebDAV), and the Worker could `fetch` the presigned URL and pass the JS stream through without copying. But that leaves bodies working only on backends RSilo mostly reaches already, which still doesn't justify a rewrite.
+- **Workers Paid.** Not pursued. Its 30 s CPU limit would absorb the copying, but $5 a month per Owner goes against the mission.
 - **Add backends to the TS `StorageInterface` one at a time.** Deferred until an Owner asks for one. WebDAV or Azure would be one more adapter beside `S3Storage`, with no rewrite and no wasm cost.
 
 ## Consequences

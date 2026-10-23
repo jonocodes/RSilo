@@ -63,6 +63,6 @@ Most of the cost is shared, and S3 is the heavy one (AWS signing, XML, ini confi
   | 12 MB PUT (multipart) | 151 ms | 1.6 s |
   | 12 MB GET | 364 ms | 1.4 s |
 
-  Six of the 21 requests went over 10 ms; none were refused. Across the same run Workers analytics gives p50 13.5 ms, p90 54 ms. For a rough comparison, the TS `rsilo` Worker's previous week (16 requests, a different mix) gives p50 8.5 ms, p90 19 ms, p99 22 ms. Every body byte crosses the wasm boundary, so CPU grows with size (roughly 12–30 ms per MB), where the TS Worker passes R2's stream straight through. Extrapolating from that one size, anything much over a few hundred KB goes past the Free limit.
+  Six of the 21 requests went over 10 ms; none were refused. Cloudflare tolerates occasional overruns, but sustained ones fail with error 1102 ("Worker exceeded resource limits"), so this is not something to build on. Why the cost scales with size, and which layer causes it, is in ADR-0007. Across the same run Workers analytics gives p50 13.5 ms, p90 54 ms. For a rough comparison, the TS `rsilo` Worker's previous week (16 requests, a different mix) gives p50 8.5 ms, p90 19 ms, p99 22 ms. Every body byte crosses the wasm boundary, so CPU grows with size (roughly 12–30 ms per MB), where the TS Worker passes R2's stream straight through. Extrapolating from that one size, anything much over a few hundred KB goes past the Free limit.
 
 **Not tested:** B2 and Azure against live servers, cold starts (none were visible in the run), and the cost of the extra `stat` on each GET.
