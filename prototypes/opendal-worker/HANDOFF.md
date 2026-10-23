@@ -12,7 +12,7 @@ We asked whether RSilo should replace its S3-only storage with Apache OpenDAL. O
 - `smoke.sh`: 18 checks. All pass on SeaweedFS S3. On SeaweedFS WebDAV, the 9 basic checks pass and the 9 conditional ones return 501 (expected).
 - Bundle: 1.21 MB gzipped with S3 only, 1.36 MB with S3 + WebDAV + Azure. The free plan allows 3 MB.
 - GCS can't work on wasm (`reqsign-core` compiles out `jwt` on wasm32).
-- Deployed to Cloudflare; see Edge results below.
+- Was deployed to Cloudflare and torn down; see Edge results below.
 
 ## Setting up a new machine
 
@@ -29,7 +29,7 @@ Deployed as `opendal-worker-proto-r2` against the throwaway R2 bucket `opendal-p
 ## Next steps
 
 1. Nothing; ADR-0007 (`docs/adr/0007-no-rust-opendal-rewrite.md`) accepted not doing the rewrite. This prototype is kept for reference.
-2. Tear down with `flox activate -d . -- ./r2.sh teardown` once the edge numbers are no longer needed.
+2. Torn down on 2026-10-22 (`./r2.sh teardown`); `./r2.sh setup` recreates it.
 3. Optional: Azure Blob against Azurite, and B2 at the edge, only if the ADR is reopened.
 
 ## Gotchas already hit
