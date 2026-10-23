@@ -14,6 +14,13 @@ STORAGE_REGION = "us-east-1"
 STORAGE_ACCESS_KEY_ID = "rsiloadmin"
 STORAGE_SECRET_ACCESS_KEY = "rsilo-secret-123"
 
+# `wrangler deploy --env r2`: R2 through its S3 API, deployed as `opendal-worker-proto-r2`.
+# STORAGE_ENDPOINT, STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY are secrets (see README).
+[env.r2.vars]
+STORAGE_SCHEME = "s3"
+STORAGE_BUCKET = "opendal-proto"
+STORAGE_REGION = "auto"
+
 # `wrangler dev --env webdav`: SeaweedFS's WebDAV server.
 [env.webdav.vars]
 STORAGE_SCHEME = "webdav"

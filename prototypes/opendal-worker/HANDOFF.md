@@ -12,29 +12,30 @@ We asked whether RSilo should replace its S3-only storage with Apache OpenDAL. O
 - `smoke.sh`: 18 checks. All pass on SeaweedFS S3. On SeaweedFS WebDAV, the 9 basic checks pass and the 9 conditional ones return 501 (expected).
 - Bundle: 1.21 MB gzipped with S3 only, 1.36 MB with S3 + WebDAV + Azure. The free plan allows 3 MB.
 - GCS can't work on wasm (`reqsign-core` compiles out `jwt` on wasm32).
-- Everything is committed. Nothing has been deployed to Cloudflare.
+- Deployed to Cloudflare; see Edge results below.
 
 ## Setting up a new machine
 
-1. Rust via rustup with the `wasm32-unknown-unknown` target. `rust-toolchain.toml` pins it, and rustup installs it on first `cargo` use. On the previous machine Homebrew's rust had no wasm target, so rustup came from a flox env (`flox install rustup seaweedfs nodejs_22`). `.flox` is gitignored by the repo, so recreate it if you want it.
+1. Tools come from a flox env in this directory, not Homebrew: `flox init -d .`, then `flox install -d . rustup seaweedfs nodejs_22 gcc pkg-config openssl`, with `openssl.outputs = ["out", "dev"]` and `~/.cargo/bin` on PATH in the manifest (see `README.md`). `.flox` is gitignored. `rust-toolchain.toml` pins stable with the `wasm32-unknown-unknown` target, and rustup installs it on first `cargo` use.
 2. `cargo install worker-build` (0.8.7 was used). It downloads a matching `wasm-bindgen` itself.
 3. Node 22 for `npx wrangler@4`.
 4. SeaweedFS (`weed`) for local S3 and WebDAV. Start it with `-ip=127.0.0.1 -ip.bind=127.0.0.1`, otherwise WebDAV binds only to the LAN IP.
 5. Follow the Run section in `README.md`, then `./smoke.sh`. Expect 0 failures on S3.
 
+## Edge results (2026-10-22)
+
+Deployed as `opendal-worker-proto-r2` against the throwaway R2 bucket `opendal-proto` with `./r2.sh setup`. 17/18 smoke checks passed; R2 ignores `If-Match` on DELETE. CPU time is over the Free plan's 10 ms for many small requests and grows with body size (364 ms for a 12 MB GET). Details are in `README.md` under **Edge**. On this NixOS machine the tools come from a gitignored flox env in this directory (see `README.md`). The auto-mode guard blocks `wrangler secret put`, so the user runs `./r2.sh setup`.
+
 ## Next steps
 
-1. **Edge deploy, the main open question.** The user has created a Cloudflare API key in "my secrets dir" (path not yet confirmed; ask). The Worker needs a bucket the internet can reach. Options:
-   - **R2 through its S3 API.** Access key ID = the API token's ID; secret = SHA-256 of the token value. Requires the token to have R2 read/write.
-   - **Backblaze B2**, which is closer to the free-tier use case. B2 doesn't support conditional PUT (ADR-0005), so expect 501 or 412 differences on those checks.
-
-   Deploy with `npx wrangler@4 deploy`, setting `STORAGE_SECRET_ACCESS_KEY` with `wrangler secret put`, never in `[vars]`. Replace the SeaweedFS `[vars]` in `wrangler.toml`. Run `./smoke.sh https://<worker>.workers.dev`. Record CPU time per request (`wrangler tail`, or the dashboard), cold start, and whether the edge accepts the bundle. Confirm with the user before deploying, because it publishes to their account.
-2. Try Azure Blob against a live server (Azurite) if a multi-backend story matters.
-3. Write up the decision. If the edge test passes, draft an ADR in `docs/adr/` (next number 0007) on whether a Rust rewrite is worth it. My recommendation so far: the prototype works, but it only gains backends RSilo can mostly reach through S3 already, and it costs a full rewrite plus per-backend capability gaps. Lean towards no unless Owners ask for WebDAV or Azure.
+1. Nothing; ADR-0007 (`docs/adr/0007-no-rust-opendal-rewrite.md`) accepted not doing the rewrite. This prototype is kept for reference.
+2. Tear down with `flox activate -d . -- ./r2.sh teardown` once the edge numbers are no longer needed.
+3. Optional: Azure Blob against Azurite, and B2 at the edge, only if the ADR is reopened.
 
 ## Gotchas already hit
 
 - Call `opendal::install_default()` before building an `Operator`, because `#[ctor]` doesn't run on wasm.
 - Don't set `strip = true` in the release profile; it breaks wasm-bindgen.
 - `wrangler dev` reruns `worker-build` on file changes and needs `~/.cargo/bin` on PATH.
+- On NixOS, `cargo install worker-build` needs openssl's `dev` output in the flox env.
 - On the user's shell setup, inline `python3` heredocs are blocked; write scripts to files instead.
