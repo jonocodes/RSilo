@@ -29,7 +29,7 @@ On NixOS, a gitignored flox env in this directory provides the tools: `flox inst
 - You have to call `opendal::install_default()` yourself, because OpenDAL's `#[ctor]` hook doesn't run on wasm. Without it every call fails with "default HTTP transport is not installed".
 - `strip = true` breaks `wasm-bindgen` ("externref table required for catch wrappers").
 
-**Bundle size** (`index_bg.wasm`; the free plan allows 3 MB gzipped for the whole Worker)
+**Bundle size** (`index_bg.wasm`; Cloudflare limits a Worker to 64 MiB uncompressed on both plans, with no compressed limit; the 3 MB gzipped Free limit assumed at first is gone)
 
 | backends            | raw     | gzip    |
 | ------------------- | ------- | ------- |
@@ -38,7 +38,7 @@ On NixOS, a gitignored flox env in this directory provides the tools: `flox inst
 | azblob              | 1.70 MB | 0.54 MB |
 | s3 + webdav + azblob | 3.14 MB | 1.36 MB |
 
-Most of the cost is shared, and S3 is the heavy one (AWS signing, XML, ini config). That leaves about 1.6 MB gzipped for RSilo itself.
+Most of the cost is shared, and S3 is the heavy one (AWS signing, XML, ini config).
 
 **Backends**
 - **S3** (SeaweedFS): 18/18 smoke checks. Conditional GET/PUT/DELETE are enforced by the server and give 304 and 412 correctly. A 12 MB PUT streams as multipart in 5 MiB parts.

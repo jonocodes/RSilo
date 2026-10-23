@@ -16,6 +16,11 @@ The script starts `rclone serve s3 --etag-hash auto` on the remote, runs `test/s
 | remote | spec-check | live S3Storage test |
 | ------ | ---------- | ------------------- |
 | local directory | 70 passing, 0 failing (6 pending are `describe.skip` upstream, as in CI) | 1 failure: listing ETags unquoted |
+| Dropbox, as is | 56 passing, 14 failing (`MOCHA_TIMEOUT=30000`); 47 timeouts at the default 2 s | fails: 5 s test timeout |
+| Dropbox, `HEAD` after `PUT` | 70 passing, 0 failing (`MOCHA_TIMEOUT=30000`) | fails: 5 s test timeout |
 
 - `ListObjectsV2` returns ETags without quotes, while `PUT` and `HEAD` quote them (AWS quotes both). RSilo strips quotes wherever it compares or emits ETags (`stripQuotes`), so remoteStorage clients see no difference; only the live test's exact match fails.
-- Not yet run against a consumer drive: no Drive, Dropbox or OneDrive remote is configured on this machine.
+- **rclone bug: the `PUT` ETag is always the body's MD5**, whatever `--etag-hash` says, while `HEAD`, `GET` and listings use the configured hash (`DropboxHash` on Dropbox, under both `auto` and `DropboxHash`). On a local directory the two agree because both are MD5. On Dropbox every ETag a client gets from a `PUT` is one the server never returns again, so all 14 failures were `If-Match` / `If-None-Match` and changed-ETag checks. Having `S3Storage.put` `HEAD` the object afterwards (one extra request; tried as an uncommitted patch) fixed all 14. The proper fix is in rclone.
+- **Slow.** With the 2 s timeout CI uses, 47 tests timed out. The median spec-check test took 3.5 s and the slowest 7.6 s, because each remoteStorage request becomes several Dropbox API calls.
+- **Rate limited.** Dropbox answered `too_many_requests` 18 times in one run, and rclone waited 10 s each time. The error text is "Too many requests or write operations", so a sync client that writes in bursts will stall.
+- Correctness through rclone holds once the ETag bug is worked around. Speed and rate limits are the real costs, and rclone still needs an always-on process (see `docs/research/consumer-drives-on-workers-free.md`).

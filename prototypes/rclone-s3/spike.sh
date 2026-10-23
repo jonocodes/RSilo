@@ -7,6 +7,7 @@
 #   ./spike.sh dropbox:rsilo-spike  # any rclone remote:path; bucket = a folder inside it
 #
 # Run in the main checkout's flox env (bun, node): flox activate -d ~/src/RSilo -- ./spike.sh
+# MOCHA_TIMEOUT (ms, default 2000 as in CI) loosens spec-check for slow remotes.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -58,4 +59,4 @@ TOKEN_READ_WRITE="$RW"
 TOKEN_READ_ONLY="$RO"
 TOKEN_GLOBAL="$GL"
 EOF
-(cd "$SPEC" && npm test 2>&1) | tee "$WORK/spec-check.log" | tail -40
+(cd "$SPEC" && npm test -- --timeout "${MOCHA_TIMEOUT:-2000}" 2>&1) | tee "$WORK/spec-check.log" | tail -40

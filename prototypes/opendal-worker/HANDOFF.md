@@ -10,7 +10,7 @@ We asked whether RSilo should replace its S3-only storage with Apache OpenDAL. O
 
 - `src/lib.rs`: a minimal Worker. The backend comes from `STORAGE_SCHEME` plus `STORAGE_*` vars, GET and PUT bodies stream, and conditional requests pass through.
 - `smoke.sh`: 18 checks. All pass on SeaweedFS S3. On SeaweedFS WebDAV, the 9 basic checks pass and the 9 conditional ones return 501 (expected).
-- Bundle: 1.21 MB gzipped with S3 only, 1.36 MB with S3 + WebDAV + Azure. The free plan allows 3 MB.
+- Bundle: 1.21 MB gzipped with S3 only, 1.36 MB with S3 + WebDAV + Azure. Cloudflare now limits only uncompressed size, 64 MiB on both plans.
 - GCS can't work on wasm (`reqsign-core` compiles out `jwt` on wasm32).
 - Was deployed to Cloudflare and torn down; see Edge results below.
 
