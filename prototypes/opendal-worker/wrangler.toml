@@ -3,12 +3,19 @@ main = "build/index.js"
 compatibility_date = "2026-10-01"
 
 [build]
-command = "worker-build --release"
+command = "worker-build --release . --features services-webdav,services-azblob"
 
+# Local SeaweedFS only. A real deploy sets STORAGE_SECRET_ACCESS_KEY with `wrangler secret put`.
 [vars]
-S3_ENDPOINT = "http://127.0.0.1:8333"
-S3_BUCKET = "rsilo-proto"
-S3_REGION = "us-east-1"
-S3_ACCESS_KEY_ID = "rsiloadmin"
-# Local SeaweedFS fixture only; a real deploy uses `wrangler secret put`.
-S3_SECRET_ACCESS_KEY = "rsilo-secret-123"
+STORAGE_SCHEME = "s3"
+STORAGE_ENDPOINT = "http://127.0.0.1:8333"
+STORAGE_BUCKET = "rsilo-proto"
+STORAGE_REGION = "us-east-1"
+STORAGE_ACCESS_KEY_ID = "rsiloadmin"
+STORAGE_SECRET_ACCESS_KEY = "rsilo-secret-123"
+
+# `wrangler dev --env webdav`: SeaweedFS's WebDAV server.
+[env.webdav.vars]
+STORAGE_SCHEME = "webdav"
+STORAGE_ENDPOINT = "http://127.0.0.1:7333"
+STORAGE_ROOT = "/rsilo-proto/"

@@ -7,11 +7,21 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = ["services-s3"]
+services-s3 = ["opendal/services-s3"]
+services-webdav = ["opendal/services-webdav"]
+services-azblob = ["opendal/services-azblob"]
+
 [dependencies]
 worker = "0.8"
-opendal = { version = "0.59", default-features = false, features = ["services-s3", "http-transport-reqwest"] }
+opendal = { version = "0.59", default-features = false, features = ["http-transport-reqwest"] }
+futures-util = "0.3"
+percent-encoding = "2"
+js-sys = "0.3"
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
+# `strip = true` breaks wasm-bindgen ("externref table required for catch wrappers").
