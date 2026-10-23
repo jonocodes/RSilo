@@ -1,0 +1,17 @@
+[package]
+name = "opendal-worker"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.8"
+opendal = { version = "0.59", default-features = false, features = ["services-s3", "http-transport-reqwest"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
