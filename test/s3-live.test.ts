@@ -4,7 +4,7 @@
 // a fresh prefix and deleted again. Example with a local SeaweedFS (as CI uses;
 // the fixture holds the credentials below):
 //
-//   weed server -dir=/tmp/seaweedfs -s3 -s3.config=test/fixtures/seaweedfs-s3.json
+//   weed server -dir=/tmp/seaweedfs -s3 -s3.config=test/fixtures/seaweedfs-s3.json -s3.allowBackslashInKey
 //   RSILO_S3_LIVE_ENDPOINT=http://127.0.0.1:8333 RSILO_S3_LIVE_BUCKET=rsilo-live \
 //   RSILO_S3_LIVE_ACCESS_KEY_ID=rsiloadmin RSILO_S3_LIVE_SECRET_ACCESS_KEY=rsilo-secret-123 \
 //   bun run test test/s3-live.test.ts

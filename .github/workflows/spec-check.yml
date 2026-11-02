@@ -35,15 +35,30 @@ jobs:
         if: matrix.storage == 's3'
         run: |
           set -euo pipefail
+          # -s3.allowBackslashInKey (4.49+) keeps "\" a literal key character, as on
+          # AWS S3 and R2; by default SeaweedFS turns it into "/", so item names
+          # containing "\" would alias other paths (seaweedfs/seaweedfs#11908).
           docker run -d --name seaweedfs -p 8333:8333 \
             -v "$PWD/test/fixtures:/cfg:ro" \
-            chrislusf/seaweedfs:4.48 server -s3 -s3.config=/cfg/seaweedfs-s3.json
+            chrislusf/seaweedfs:4.51 server -s3 -s3.config=/cfg/seaweedfs-s3.json -s3.allowBackslashInKey
           # Any HTTP answer (unauthenticated requests get 403) means it is up.
           for i in $(seq 1 60); do
             if [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8333/)" != "000" ]; then break; fi
             sleep 1
           done
           curl -s -o /dev/null -w 'SeaweedFS S3: HTTP %{http_code}\n' http://localhost:8333/
+          # Answering HTTP is not accepting writes: on a fresh server the first
+          # write to a bucket waits while its volumes are allocated (over 10s
+          # since 4.50, longer than a test's timeout). Volumes are per bucket,
+          # so warm up the test bucket itself.
+          S3="curl -s -o /dev/null -w %{http_code} --aws-sigv4 aws:amz:us-east-1:s3 --user rsiloadmin:rsilo-secret-123"
+          $S3 -X PUT http://localhost:8333/rsilo-spec > /dev/null
+          for i in $(seq 1 120); do
+            if [ "$($S3 -X PUT --data-binary ok http://localhost:8333/rsilo-spec/warmup)" = "200" ]; then break; fi
+            sleep 1
+          done
+          [ "$($S3 -X DELETE http://localhost:8333/rsilo-spec/warmup)" = "204" ]
+          echo "SeaweedFS S3: accepting writes"
           {
             echo "S3_ENDPOINT=http://localhost:8333"
             echo "S3_BUCKET=rsilo-spec"
@@ -51,7 +66,7 @@ jobs:
             echo "S3_SECRET_ACCESS_KEY=rsilo-secret-123"
           } >> "$GITHUB_ENV"
 
-      - name: Live S3Storage test (creates the bucket)
+      - name: Live S3Storage test
         if: matrix.storage == 's3'
         run: bunx vitest run test/s3-live.test.ts
         env:
