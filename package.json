@@ -25,7 +25,6 @@
     "db:migrate:remote": "bun run src/scripts/deploy.ts --migrate-only"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.15.1",
     "@cloudflare/workers-types": "^4.20250415.0",
     "@types/bun": "^1.4.2",
     "@types/node": "^25.6.0",
