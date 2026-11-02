@@ -1,4 +1,5 @@
-export async function waitForServer(baseUrl: string, timeoutMs = 5000): Promise<void> {
+// Generous: a cold Bun start on a shared build machine can take many seconds.
+export async function waitForServer(baseUrl: string, timeoutMs = 25_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
 
