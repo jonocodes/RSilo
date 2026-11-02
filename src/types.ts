@@ -5,6 +5,8 @@ export interface AppEnv {
   STORAGE?: R2Bucket;
   DB: D1Database;
   STORAGE_LIMITER?: RateLimit;
+  PUBLIC_LIMITER?: RateLimit;
+  TOKEN_LIMITER?: RateLimit;
   RSILO_DEV_MODE?: string;
   /** Dev mode only: email of the local dev identity. Defaults to OWNER_EMAIL. */
   RSILO_DEV_EMAIL?: string;

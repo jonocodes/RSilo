@@ -6,6 +6,7 @@ import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { expectEveryRateLimiter } from './helpers/ratelimits';
 
 const DEPLOY = resolve('src/scripts/deploy.ts');
 const PROD_ID = '03fa4c6b-ebff-4588-a2f5-bb11ff5a14ad';
@@ -77,6 +78,8 @@ describe('bun run deploy without a local wrangler.prod.toml (Workers Builds)', (
     expect(read('migrated.toml')).toContain(`database_id = "${PROD_ID}"`);
     expect(read('deployed.toml')).toContain(`database_id = "${PROD_ID}"`);
     expect(deploys()).toEqual([expect.stringContaining('--keep-vars')]);
+    expectEveryRateLimiter(read('wrangler.prod.toml'));
+    expectEveryRateLimiter(read('deployed.toml'));
   });
 
   it('ignores a stale D1_DATABASE_ID build variable', () => {
@@ -104,6 +107,7 @@ describe('bun run deploy without a local wrangler.prod.toml (Workers Builds)', (
     const toml = read('deployed.toml');
     expect(toml).not.toMatch(/r2_buckets|bucket_name/);
     expect(toml).toContain(`database_id = "${PROD_ID}"`);
+    expectEveryRateLimiter(toml);
   });
 
   it('fails on CI, before migrating, when no database has that name', () => {
@@ -122,6 +126,14 @@ describe('bun run deploy without a local wrangler.prod.toml (Workers Builds)', (
     const res = deploy({ WORKERS_CI: '1' });
     expect(res.status, res.out).toBe(0);
     expect(read('deployed.toml')).toContain(`database_id = "${PROD_ID}"`);
+    expectEveryRateLimiter(read('deployed.toml'));
+  });
+
+  it('deploys the committed wrangler.toml, every rate limiter included, when nothing can be looked up (Deploy button)', () => {
+    const res = deploy();
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toContain('Using wrangler.toml');
+    expectEveryRateLimiter(read('deployed.toml'));
   });
 });
 
@@ -187,6 +199,20 @@ describe('bun run deploy safety', () => {
     const res = deploy();
     expect(res.status).not.toBe(0);
     expect(res.out).toContain('RSILO_DEV_MODE=true');
+    expect(calls()).toEqual([]);
+  });
+
+  it('refuses a stale wrangler.prod.toml missing a rate limiter, before touching Cloudflare', () => {
+    writeFileSync(
+      join(dir, 'wrangler.prod.toml'),
+      read('wrangler.toml')
+        .replace(/database_id = "[^"]*"/, `database_id = "${PROD_ID}"`)
+        .replace(/\[\[ratelimits\]\]\s*name = "TOKEN_LIMITER"[^[]*/, '')
+    );
+    const res = deploy();
+    expect(res.status).not.toBe(0);
+    expect(res.out).toContain('no [[ratelimits]] binding for TOKEN_LIMITER');
+    expect(res.out).toContain('Re-run bun run setup');
     expect(calls()).toEqual([]);
   });
 

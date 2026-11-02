@@ -5,6 +5,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RATE_LIMITS } from '../services/rate-limit';
+import { rateLimitBindings } from './setup-config';
 
 export type Wrangler = (args: string[], capture?: boolean) => { status: number; out: string };
 
@@ -13,6 +15,21 @@ export function devModeProblem(vars: Record<string, string>): string | null {
   return vars.RSILO_DEV_MODE === 'true'
     ? 'RSILO_DEV_MODE=true is set in the production config. Dev mode is for local servers only; remove it from [vars] and re-run.'
     : null;
+}
+
+/**
+ * A config missing a rate-limit binding the Worker uses. Production fails
+ * closed without one (503), so deploying it would take down whatever that
+ * limiter guards. `bun run deploy` checks it: a wrangler.prod.toml written
+ * before the binding existed is the usual cause (setup always rebuilds the
+ * file from wrangler.toml).
+ */
+export function rateLimiterProblem(toml: string): string | null {
+  const declared = new Set(rateLimitBindings(toml));
+  const missing = Object.keys(RATE_LIMITS).filter((name) => !declared.has(name));
+  if (missing.length === 0) return null;
+  return `The production config has no [[ratelimits]] binding for ${missing.join(', ')}, so the deployed Worker would answer 503 where it is used. `
+    + 'Re-run bun run setup to rebuild wrangler.prod.toml from wrangler.toml (it keeps your vars), or copy the [[ratelimits]] tables from wrangler.toml.';
 }
 
 /** `wrangler d1 migrations list` output with nothing left to apply (checked against wrangler 4.147). */

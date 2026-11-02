@@ -25,6 +25,16 @@ name = "STORAGE_LIMITER"
 namespace_id = "1002"
 simple = { limit = 20, period = 60 }
 
+[[ratelimits]]
+name = "PUBLIC_LIMITER"
+namespace_id = "1003"
+simple = { limit = 300, period = 60 }
+
+[[ratelimits]]
+name = "TOKEN_LIMITER"
+namespace_id = "1004"
+simple = { limit = 20, period = 60 }
+
 [observability]
 enabled = true
 

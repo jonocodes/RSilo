@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { prepareRelease, devModeProblem, type Wrangler } from './release';
+import { prepareRelease, devModeProblem, rateLimiterProblem, type Wrangler } from './release';
 import { readVars, withoutEmptyVars, withoutR2Buckets } from './setup-config';
 import { DEPLOY_CONFIG, PROD_CONFIG, configArgs } from './wrangler-config';
 
@@ -89,8 +89,8 @@ const wrangler: Wrangler = (cliArgs, capture = false) => {
   return { status: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 };
 
-const devMode = devModeProblem(readVars(deployToml));
-if (devMode) fail(devMode);
+const configProblem = devModeProblem(readVars(deployToml)) ?? rateLimiterProblem(deployToml);
+if (configProblem) fail(configProblem);
 
 const problem = prepareRelease(wrangler, args, { bundle: !migrateOnly });
 if (problem) fail(problem);

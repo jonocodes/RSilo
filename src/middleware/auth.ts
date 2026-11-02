@@ -1,5 +1,6 @@
 import type { Context, Next } from '../types';
-import { authorize, parseAuthHeader, hashToken } from '../services/auth';
+import { authorize, isPublicDocument, parseAuthHeader, hashToken } from '../services/auth';
+import { enforceRateLimit, trustedClientIp } from '../services/rate-limit';
 import type { TokenPayload } from '../services/auth';
 import { renewImplicitToken } from '../services/tokens';
 import { decodeItemPath } from '../protocol/item-path';
@@ -59,7 +60,15 @@ export function storageAuth() {
     const access = c.req.method === 'GET' || c.req.method === 'HEAD' ? 'r' : 'rw';
 
     const denied = authorize(payload, username, path, access);
-    if (!denied) return next();
+    if (!denied) {
+      // Public documents are open to anyone, so reads without the Account's
+      // own token are counted; the Account's apps are never throttled.
+      if (access === 'r' && isPublicDocument(path) && payload?.sub !== username) {
+        const limited = await enforceRateLimit(c, { limiter: 'PUBLIC_LIMITER', key: `public-read:ip:${trustedClientIp(c)}` });
+        if (limited) return limited;
+      }
+      return next();
+    }
 
     if (denied.status === 401) {
       return token

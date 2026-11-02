@@ -29,6 +29,8 @@ function minimalEnv(extra: Record<string, unknown> = {}) {
     DB: createSqliteD1(),
     RSILO_DEV_MODE: 'false',
     STORAGE_LIMITER: { limit: async () => ({ success: true }) },
+    PUBLIC_LIMITER: { limit: async () => ({ success: true }) },
+    TOKEN_LIMITER: { limit: async () => ({ success: true }) },
     OWNER_EMAIL: 'owner@example.com',
     ...extra,
   };

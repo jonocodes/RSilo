@@ -5,7 +5,8 @@ import { accountUrls } from '../services/discovery';
 import { PKCE_METHODS, verifyPkce } from '../services/pkce';
 import { ACCESS_TOKEN_TTL_SECONDS, issueTokens, redeemCode, rotateRefreshToken } from '../services/tokens';
 import type { IssuedTokens } from '../services/tokens';
-import type { Context } from '../types';
+import { enforceRateLimit, trustedClientIp } from '../services/rate-limit';
+import type { Context, Next } from '../types';
 
 export const oauthRouter = new Hono();
 
@@ -61,7 +62,16 @@ function tokenResponse(c: Context, tokens: IssuedTokens, scope: string): Respons
   });
 }
 
-oauthRouter.post('/:user/token', ...forAccount, async (c) => {
+// Every token request counts against its IP, before any D1 work. Apps call
+// this endpoint rarely, so the limit only bites on a flood, which would
+// otherwise spend D1 reads and writes on every attempt.
+async function tokenRateLimit(c: Context, next: Next) {
+  const limited = await enforceRateLimit(c, { limiter: 'TOKEN_LIMITER', key: `token:ip:${trustedClientIp(c)}` });
+  if (limited) return limited;
+  await next();
+}
+
+oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
   const params = await tokenRequestParams(c);
   if (!params) {
     return c.json({ error: 'invalid_request', error_description: 'body must be a form-encoded or JSON object' }, 400);
