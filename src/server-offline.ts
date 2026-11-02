@@ -32,6 +32,12 @@ loadDevVars('.dev.vars');
 const STORAGE_DIR = process.env.STORAGE_DIR || 'data/storage';
 const DB_PATH = process.env.DB_PATH || 'data/remotestorage.db';
 const port = parseInt(process.env.PORT || '8787');
+// Loopback by default: the dev identity trusts the Host header, which anyone
+// on the network could set to localhost if the server listened on every
+// interface. Listening beyond loopback (LISTEN_HOST=0.0.0.0 in the Docker
+// image) therefore switches the dev identity off; bearer tokens still work.
+const LISTEN_HOST = process.env.LISTEN_HOST || '127.0.0.1';
+const LOOPBACK = LISTEN_HOST === 'localhost' || LISTEN_HOST === '::1' || /^127\./.test(LISTEN_HOST);
 // Offline mode is dev mode: unset values fall back to the dev defaults, with
 // the public origin following the port actually listened on. The origin is
 // set explicitly because, unlike Cloudflare's edge, a plain Node server does
@@ -59,6 +65,7 @@ app.use('*', async (c, next) => {
   c.env.OWNER_EMAIL = OWNER_EMAIL;
   if (process.env.RSILO_DEV_EMAIL) c.env.RSILO_DEV_EMAIL = process.env.RSILO_DEV_EMAIL;
   c.env.PUBLIC_BASE_URL = PUBLIC_BASE_URL;
+  if (!LOOPBACK) c.env.RSILO_DEV_IDENTITY = 'off';
   // S3_* in the environment (e.g. a local MinIO) replace the local directory.
   for (const name of [...S3_VARS, 'MAX_OBJECT_SIZE_BYTES'] as const) {
     if (process.env[name]) c.env[name] = process.env[name];
@@ -76,14 +83,13 @@ console.log(`RemoteStorage Worker (offline mode)`);
 console.log(`Storage: ${process.env.S3_ENDPOINT ? `S3 bucket ${process.env.S3_BUCKET} at ${process.env.S3_ENDPOINT}` : STORAGE_DIR}`);
 console.log(`Database: ${DB_PATH}`);
 console.log(`Account: ${ACCOUNT_USERNAME} at ${PUBLIC_BASE_URL} (owner ${OWNER_EMAIL})`);
-console.log(`Listening on http://localhost:${port}`);
+console.log(`Listening on http://${LOOPBACK ? 'localhost' : LISTEN_HOST}:${port}`);
+if (!LOOPBACK) console.log(`Dev identity off: listening on ${LISTEN_HOST}, beyond loopback. /account and /debug need an identity source; storage works with bearer tokens.`);
 
-// Loopback only: the dev identity trusts the Host header, which anyone on the
-// network could set to localhost if the server listened on every interface.
 serve({
   fetch: app.fetch,
   port,
-  hostname: '127.0.0.1',
+  hostname: LISTEN_HOST,
 });
 
 process.on('SIGINT', () => {

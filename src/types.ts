@@ -16,6 +16,8 @@ export interface AppEnv {
   RSILO_DEV_MODE?: string;
   /** Dev mode only: email of the local dev identity. Defaults to OWNER_EMAIL. */
   RSILO_DEV_EMAIL?: string;
+  /** "off" disables the dev identity. The offline server sets it when it listens beyond loopback. */
+  RSILO_DEV_IDENTITY?: string;
   /** The one Account this Instance serves. Optional; defaults to "me" ("alice" in dev mode). */
   ACCOUNT_USERNAME?: string;
   /** The Owner's email as Cloudflare Access reports it. The only required setting; gates /account only. */

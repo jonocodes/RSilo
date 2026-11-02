@@ -1,0 +1,48 @@
+name: docker
+
+# Builds the offline-server image on every push and PR, smoke-tests it, and on
+# main publishes it to ghcr.io/jonocodes/rsilo (:main and :sha-<commit>).
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IMAGE: ghcr.io/jonocodes/rsilo
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build
+        run: docker build -t rsilo:ci .
+
+      # Start it, mint a token, write and read a document, and check that the
+      # dev identity is off now that the server listens beyond loopback.
+      - name: Smoke test
+        run: |
+          docker run -d --name rsilo -p 127.0.0.1:8787:8787 rsilo:ci
+          for _ in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:8787/health && break; sleep 0.5; done
+          curl -sf http://127.0.0.1:8787/health
+          token=$(docker exec rsilo bun src/scripts/dev-token.ts alice '*:rw' | tail -1)
+          curl -sf -X PUT -H "Authorization: Bearer $token" -H 'Content-Type: text/plain' --data hello \
+            http://127.0.0.1:8787/storage/alice/ci/hello.txt
+          test "$(curl -sf -H "Authorization: Bearer $token" http://127.0.0.1:8787/storage/alice/ci/hello.txt)" = hello
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost:8787' http://127.0.0.1:8787/account)
+          test "$status" = 503 || { echo "dev identity reachable: /account answered $status"; exit 1; }
+          docker stop rsilo
+
+      - name: Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for tag in main "sha-${GITHUB_SHA::7}"; do
+            docker tag rsilo:ci "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done

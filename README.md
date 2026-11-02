@@ -410,11 +410,23 @@ bun run db:setup:local   # creates data/remotestorage.db + data/storage/
 bun run dev:offline      # http://localhost:8787 with live reload
 ```
 
-`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. "Local" is read from the request's `Host` header, which any client can set, so the offline server listens on `127.0.0.1` only: whoever can reach its port is the Owner, so don't forward or proxy it. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404.
+`bun run dev:offline` explicitly enables local-development mode: the Instance serves the Account `alice` at `http://localhost:8787`, owned by `alice@example.com` (set `ACCOUNT_USERNAME` / `OWNER_EMAIL` / `PUBLIC_BASE_URL` to override; the default origin follows `PORT`). Its storage address is `alice@localhost:8787`. With no Cloudflare Access in front of it, requests to `localhost`, `127.0.0.1` or `[::1]` are signed in as a **dev identity** — `RSILO_DEV_EMAIL`, defaulting to `OWNER_EMAIL` (set it to another address to preview the "not allowed" page). The dev identity is unreachable unless `RSILO_DEV_MODE=true`, the host is local and no Access identity is present, so it cannot leak into production. "Local" is read from the request's `Host` header, which any client can set, so the offline server listens on `127.0.0.1` only: whoever can reach its port is the Owner, so don't forward or proxy it. Setting `LISTEN_HOST` to anything but a loopback address (as the Docker image below does) switches the dev identity off altogether. The same guard exposes the debug endpoints at `/debug/*` (see [docs/api.md](docs/api.md)); in production they are a 404.
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
 Offline documents are stored under `data/storage/` with percent-encoded file names and their metadata in `data/storage/.meta/`. A name whose encoding is over 255 bytes is stored under a shortened name ending in `~<sha256>`, with the full name in `data/storage/.meta/.names/`, so names as long as R2 or S3 accept work offline too; a path too long for the filesystem as a whole gets `414`. The percent-encoded layout is new, so delete `data/storage/` (or re-upload your files) after upgrading from an older RSilo.
+
+### Docker image
+
+`ghcr.io/jonocodes/rsilo` packages the offline server for test suites and quick local use, e.g. rclone's remoteStorage backend tests. `:main` follows `main`, and `:sha-<commit>` pins a build. It is not for production, which runs on Cloudflare.
+
+```bash
+docker run -d --name rsilo -p 127.0.0.1:8787:8787 -v rsilo-data:/data ghcr.io/jonocodes/rsilo:main
+docker exec rsilo bun src/scripts/dev-token.ts alice '*:rw'   # prints a bearer token
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:8787/storage/alice/
+```
+
+The image listens on `0.0.0.0` inside the container (`LISTEN_HOST`), so the dev identity is off: `/account` and `/debug` have no identity source, and storage works with dev-token bearer tokens. Publish the port on `127.0.0.1` anyway. Data lives in the `/data` volume. Set `PUBLIC_BASE_URL` when the published port differs from 8787, so WebFinger and OAuth links point at the right place. `S3_*` settings work as for the offline server, as long as the endpoint is reachable from inside the container.
 
 ## Local development (wrangler dev)
 

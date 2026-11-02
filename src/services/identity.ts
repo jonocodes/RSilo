@@ -61,11 +61,14 @@ function accessContext(c: Context): AccessContext | null {
 }
 
 /**
- * True only when the dev identity may be used: dev mode, no Access context,
- * and a request to localhost / 127.0.0.1 / [::1]. Also gates /debug/*.
+ * True only when the dev identity may be used: dev mode, not switched off
+ * (RSILO_DEV_IDENTITY=off, set when the offline server listens beyond
+ * loopback), no Access context, and a request to localhost / 127.0.0.1 /
+ * [::1]. Also gates /debug/*.
  */
 export function devIdentityAllowed(c: Context): boolean {
   if (!isLocalDevelopment(c.env)) return false;
+  if (c.env?.RSILO_DEV_IDENTITY === 'off') return false;
   if (accessContext(c)) return false;
   return LOCAL_HOSTNAMES.has(new URL(c.req.url).hostname);
 }
