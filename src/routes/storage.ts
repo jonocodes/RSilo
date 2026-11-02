@@ -7,7 +7,7 @@ import { decodeItemPath } from '../protocol/item-path';
 import { contentRange, parseRange, type ByteRange } from '../protocol/range';
 import type { Context, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
-import { PathConflictError, PreconditionFailedError } from '../services/storage-errors';
+import { KeyTooLongError, PathConflictError, PreconditionFailedError } from '../services/storage-errors';
 import { readFolderEtag, storeFolderEtag, type FolderEtagDatabase } from '../services/folder-etags';
 import { isLocalDevelopment } from '../config';
 import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
@@ -371,6 +371,7 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
 export function writeErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof PreconditionFailedError) return c.text('Precondition Failed', 412);
   if (error instanceof PathConflictError) return c.text(error.message, 409);
+  if (error instanceof KeyTooLongError) return c.text(error.message, 414);
   if (error instanceof QuotaExceededError) return c.text('Storage quota exceeded', 507);
   if (error instanceof StorageAccountingError) return c.text(error.message, 503);
   throw error;

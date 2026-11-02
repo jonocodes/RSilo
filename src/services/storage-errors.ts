@@ -15,6 +15,13 @@ export class PathConflictError extends Error {
   }
 }
 
+/** The key is longer than the backend can store (the offline store's filesystem path limit): answered with 414. */
+export class KeyTooLongError extends Error {
+  constructor() {
+    super('URI Too Long: the path is over the offline store\'s filesystem limit (4096 bytes on Linux, after percent-encoding)');
+  }
+}
+
 /** Whether `current` (a head() result, or null when absent) satisfies `condition`. */
 export function conditionHolds(current: { etag: string } | null, condition: WriteCondition | undefined): boolean {
   if (!condition) return true;

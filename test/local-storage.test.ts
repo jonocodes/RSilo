@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorage } from '../src/services/local-storage';
-import { PathConflictError } from '../src/services/storage-errors';
+import { KeyTooLongError, PathConflictError } from '../src/services/storage-errors';
 
 const P = 'users/alice/storage/documents/';
 const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
@@ -79,6 +79,47 @@ describe('LocalStorage', () => {
     await expect(storage.put(P + 'a/x', bytes('x'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
     await expect(storage.put(P + 'b', bytes('b'), 'text/plain')).rejects.toBeInstanceOf(PathConflictError);
     expect((await storage.list(P)).objects.map((o) => o.key)).toEqual([P + 'a', P + 'b/c']);
+  });
+
+  it('keeps every file name within 255 bytes, however long the key segment', async () => {
+    const long = 'ကခဂဃငစဆဇဈဉညဋဌဍဎဏတထဒဓနပဖဗဘမယရလဝသဟ.txt'; // 292 bytes percent-encoded
+    await storage.put(P + long + '/' + long, bytes('x'), 'text/plain');
+
+    const names = (path: string): string[] => readdirSync(path, { withFileTypes: true })
+      .flatMap((entry) => [entry.name, ...(entry.isDirectory() ? names(join(path, entry.name)) : [])]);
+    const onDisk = names(dir);
+    expect(Math.max(...onDisk.map((name) => Buffer.byteLength(name)))).toBeLessThanOrEqual(255);
+    // Still recognisable on disk.
+    expect(onDisk.filter((name) => name.startsWith('%E1%80%80%E1%80%81'))).toHaveLength(4);
+
+    await storage.delete(P + long + '/' + long);
+    expect(readdirSync(dir)).toEqual(['.meta']);
+    expect(readdirSync(join(dir, '.meta'))).toEqual(['.names']);
+  });
+
+  it('ignores a shortened name whose record is missing or damaged, and repairs it on the next write', async () => {
+    const key = P + 'a'.repeat(300);
+    await storage.put(key, bytes('x'), 'text/plain');
+    const names = join(dir, '.meta', '.names');
+    const [record] = readdirSync(names);
+    writeFileSync(join(names, record), 'a'.repeat(100)); // e.g. cut short by a crash
+    expect((await storage.list(P)).objects).toEqual([]);
+    rmSync(names, { recursive: true });
+    expect((await storage.list(P)).objects).toEqual([]);
+
+    await storage.put(key, bytes('y'), 'text/plain');
+    expect((await storage.list(P)).objects.map((o) => o.key)).toEqual([key]);
+    expect(readdirSync(names)).toEqual([record]);
+  });
+
+  it('refuses a key whose path the filesystem cannot hold with KeyTooLongError, leaving nothing behind', async () => {
+    const key = P + Array(20).fill('a'.repeat(250)).join('/'); // over Linux's 4096-byte PATH_MAX
+    await expect(storage.put(key, bytes('x'), 'text/plain')).rejects.toBeInstanceOf(KeyTooLongError);
+    expect(await storage.get(key)).toBeNull();
+    expect(await storage.head(key)).toBeNull();
+    await storage.delete(key);
+    expect(await storage.list(key.slice(0, key.lastIndexOf('/') + 1))).toEqual({ objects: [] });
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('refuses keys with empty segments rather than guessing a file', async () => {
