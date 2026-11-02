@@ -330,11 +330,30 @@ Because apps are not registered in advance, an app is identified by its `client_
 
 ## Share a file publicly
 
-Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. An app writes there with the same `<module>` scope as its private data; for a by-hand example, see [Public files](#public-files).
+Files written under `public/<module>/` are readable by anyone — no token needed (reads without your token are limited to 300 a minute per IP). Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. An app writes there with the same `<module>` scope as its private data; for a by-hand example, see [Public files](#public-files).
 
 ## One Account per Instance
 
 An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, the `/oauth/<username>/…` endpoints return `404` for any other username (consent is always for the Account), and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
+
+## Security logs
+
+RSilo writes one JSON line to the Worker's log for each security event. Successful storage requests are not logged. Every line has `event`, `ip` (from `CF-Connecting-IP`), `method` and `path`, plus:
+
+| `event` | When | Extra fields |
+| --- | --- | --- |
+| `storage.auth_denied` | Storage refused a request: `401` (`missing_token`, `invalid_token`) or `403` (`insufficient_scope`, `wrong_account`; `unknown_account` for a username other than the Account) | `status`, `reason`, `required_scope` |
+| `rate_limit.exceeded` | A `429` | `limiter` |
+| `oauth.consent_approved`, `oauth.consent_denied` | You allowed or denied an app (an implicit-flow token is issued on approval) | `client_id`, `scope`, `response_type` |
+| `oauth.token_issued` | An app exchanged a code for tokens | `grant_type`, `client_id`, `scope` |
+| `oauth.token_refreshed` | An app rotated its refresh token | `client_id`, `scope` |
+| `oauth.invalid_grant` | The token endpoint refused a code or refresh token | `grant_type`, `reason` (`invalid_code`, `redirect_uri_mismatch`, `pkce_mismatch`, `invalid_refresh_token`), `client_id` when known |
+| `account.app_revoked` | You revoked an app on `/account` | `client_id` |
+| `account.owner_rejected` | A signed-in identity other than `OWNER_EMAIL` reached `/account` | `email` |
+
+Tokens, codes, `code_verifier`s, `Authorization` headers and document contents are never logged. Paths are, so the names of files in refused requests appear in the log.
+
+To read them, open your Worker in the Cloudflare dashboard → **Observability** → **Logs** (`wrangler.toml` enables Workers Logs) and filter on `event`, or stream them live from a checkout with `wrangler tail <worker name> --format json`. Workers Logs keeps a few days of history; see Cloudflare's Workers Logs limits for your plan.
 
 ## Running on the Cloudflare free tier
 
@@ -535,7 +554,7 @@ src/
                       owner (/account gate + CSRF)
   services/           auth (scopes), identity (Owner resolver: Cloudflare Access or dev identity),
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger matching),
-                      tokens (codes, tokens, refresh rotation), pkce, rate-limit,
+                      tokens (codes, tokens, refresh rotation), pkce, rate-limit, security-log,
                       r2 (+ getStorage), s3, local-storage, quota-storage (quota-aware writes),
                       object-size, storage-errors, db/ (schema types, SQLite D1 shim)
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
@@ -559,7 +578,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 

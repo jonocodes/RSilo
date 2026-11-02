@@ -1,6 +1,7 @@
 import type { Context, Next } from '../types';
 import { authorize, isPublicDocument, parseAuthHeader, hashToken } from '../services/auth';
-import { enforceRateLimit, trustedClientIp } from '../services/rate-limit';
+import { enforceRateLimit } from '../services/rate-limit';
+import { securityEvent, trustedClientIp } from '../services/security-log';
 import type { TokenPayload } from '../services/auth';
 import { renewImplicitToken } from '../services/tokens';
 import { decodeItemPath } from '../protocol/item-path';
@@ -71,15 +72,18 @@ export function storageAuth() {
     }
 
     if (denied.status === 401) {
+      securityEvent(c, 'storage.auth_denied', { status: 401, reason: token ? 'invalid_token' : 'missing_token' });
       return token
         ? c.text('Invalid token', 401, { 'WWW-Authenticate': 'Bearer realm="storage" error="invalid_token"' })
         : c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
     }
     if (denied.requiredScope) {
+      securityEvent(c, 'storage.auth_denied', { status: 403, reason: 'insufficient_scope', required_scope: denied.requiredScope });
       return c.text('Insufficient scope', 403, {
         'WWW-Authenticate': `Bearer realm="storage" scope="${denied.requiredScope}" error="insufficient_scope"`,
       });
     }
+    securityEvent(c, 'storage.auth_denied', { status: 403, reason: 'wrong_account' });
     return c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' });
   };
 }

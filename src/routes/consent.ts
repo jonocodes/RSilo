@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { parseScopes } from '../services/auth';
 import { parsePkceRequest } from '../services/pkce';
+import { securityEvent } from '../services/security-log';
 import { IMPLICIT_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
 import type { Context } from '../types';
 
@@ -177,13 +178,18 @@ consentRouter.post('/authorize', async (c) => {
   if ('error' in parsed) return refuse(c, parsed);
   const request = parsed.request;
 
-  if (action === 'deny') return redirectWithError(c, request.redirectUri, request.state, 'access_denied');
+  const decision = { client_id: request.clientId, scope: request.scope, response_type: request.responseType };
+  if (action === 'deny') {
+    securityEvent(c, 'oauth.consent_denied', decision);
+    return redirectWithError(c, request.redirectUri, request.state, 'access_denied');
+  }
 
   // The grant must be stored before the app is sent its token or code.
   const db = (c.env as { DB?: D1Database }).DB;
   if (!db) return c.text('Server database is not configured', 503);
 
   const location = await issueGrant(db, c.get('instance').accountUsername, request);
+  securityEvent(c, 'oauth.consent_approved', decision);
   return c.redirect(location, 302);
 });
 

@@ -1,5 +1,6 @@
 import type { Context, Next } from '../types';
 import { isSameOriginRequest, resolveOwner } from '../services/identity';
+import { securityEvent } from '../services/security-log';
 import { finishSetupPage, forbiddenPage } from '../ui/setup-pages';
 
 declare module 'hono' {
@@ -23,6 +24,7 @@ export function requireOwner() {
       return new Response(finishSetupPage(result.setup, host), { status: 503, headers: HTML });
     }
     if (result.status === 'forbidden') {
+      securityEvent(c, 'account.owner_rejected', { email: result.email });
       return new Response(forbiddenPage(result.email, host), { status: 403, headers: HTML });
     }
     c.set('instance', result.config);

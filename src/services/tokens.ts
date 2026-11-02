@@ -119,13 +119,13 @@ export async function renewImplicitToken(
  * a superseded token (or the loser of two concurrent rotations) matches
  * nothing and gets null.
  */
-export async function rotateRefreshToken(db: D1Database, refreshToken: string): Promise<(IssuedTokens & { scope: string }) | null> {
+export async function rotateRefreshToken(db: D1Database, refreshToken: string): Promise<(IssuedTokens & { scope: string; clientId: string }) | null> {
   const now = nowSeconds();
   const accessToken = generateToken();
   const nextRefreshToken = generateToken();
   const row = await db.prepare(
     'UPDATE oauth_tokens SET access_token_hash = ?, refresh_token_hash = ?, expires_at = ?, refresh_expires_at = ? '
-    + 'WHERE refresh_token_hash = ? AND refresh_expires_at > ? RETURNING scopes'
+    + 'WHERE refresh_token_hash = ? AND refresh_expires_at > ? RETURNING scopes, client_id'
   ).bind(
     await hashToken(accessToken),
     await hashToken(nextRefreshToken),
@@ -133,6 +133,6 @@ export async function rotateRefreshToken(db: D1Database, refreshToken: string): 
     now + REFRESH_TOKEN_TTL_SECONDS,
     await hashToken(refreshToken),
     now,
-  ).first<{ scopes: string }>();
-  return row ? { accessToken, refreshToken: nextRefreshToken, scope: row.scopes } : null;
+  ).first<{ scopes: string; client_id: string }>();
+  return row ? { accessToken, refreshToken: nextRefreshToken, scope: row.scopes, clientId: row.client_id } : null;
 }

@@ -5,7 +5,8 @@ import { accountUrls } from '../services/discovery';
 import { PKCE_METHODS, verifyPkce } from '../services/pkce';
 import { ACCESS_TOKEN_TTL_SECONDS, issueTokens, redeemCode, rotateRefreshToken } from '../services/tokens';
 import type { IssuedTokens } from '../services/tokens';
-import { enforceRateLimit, trustedClientIp } from '../services/rate-limit';
+import { enforceRateLimit } from '../services/rate-limit';
+import { securityEvent, trustedClientIp } from '../services/security-log';
 import type { Context, Next } from '../types';
 
 export const oauthRouter = new Hono();
@@ -71,6 +72,12 @@ async function tokenRateLimit(c: Context, next: Next) {
   await next();
 }
 
+// An invalid_grant answer, logged with why (never the code or token itself).
+function invalidGrant(c: Context, grantType: string, reason: string, description: string, clientId: string | null = null): Response {
+  securityEvent(c, 'oauth.invalid_grant', { grant_type: grantType, reason, client_id: clientId });
+  return c.json({ error: 'invalid_grant', error_description: description }, 400);
+}
+
 oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
   const params = await tokenRequestParams(c);
   if (!params) {
@@ -93,17 +100,17 @@ oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
     // A code is spent by any attempt to redeem it, successful or not.
     const codeData = await redeemCode(db, code);
     if (!codeData) {
-      return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
+      return invalidGrant(c, grantType, 'invalid_code', 'Invalid or expired authorization code');
     }
 
     if (codeData.redirect_uri !== redirectUri) {
-      return c.json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
+      return invalidGrant(c, grantType, 'redirect_uri_mismatch', 'redirect_uri mismatch', codeData.client_id);
     }
 
     // Every code carries an S256 challenge (the consent page requires one).
     const codeVerifier = param('code_verifier');
     if (!codeVerifier || !await verifyPkce(codeVerifier, codeData.code_challenge)) {
-      return c.json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' }, 400);
+      return invalidGrant(c, grantType, 'pkce_mismatch', 'code_verifier does not match code_challenge', codeData.client_id);
     }
 
     const tokens = await issueTokens(db, {
@@ -112,6 +119,7 @@ oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
       scope: codeData.scope,
       withRefreshToken: true,
     });
+    securityEvent(c, 'oauth.token_issued', { grant_type: grantType, client_id: codeData.client_id, scope: codeData.scope });
     return tokenResponse(c, tokens, codeData.scope);
   }
 
@@ -125,8 +133,9 @@ oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
     // one works: a superseded refresh token is invalid_grant.
     const rotated = await rotateRefreshToken(db, refreshToken);
     if (!rotated) {
-      return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
+      return invalidGrant(c, grantType, 'invalid_refresh_token', 'Invalid or expired refresh token');
     }
+    securityEvent(c, 'oauth.token_refreshed', { client_id: rotated.clientId, scope: rotated.scope });
     return tokenResponse(c, rotated, rotated.scope);
   }
 

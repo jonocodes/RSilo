@@ -1,5 +1,6 @@
 import type { Context } from '../types';
 import { isLocalDevelopment } from '../config';
+import { securityEvent } from './security-log';
 
 // Native Workers rate-limit bindings (see [[ratelimits]] in wrangler.toml).
 // Counters are kept by Cloudflare per location — no KV reads or writes.
@@ -27,15 +28,6 @@ interface RateLimitOptions {
   key: string;
 }
 
-export function trustedClientIp(c: Context): string {
-  const cloudflareIp = c.req.header('CF-Connecting-IP');
-  if (cloudflareIp) return cloudflareIp;
-  if (isLocalDevelopment(c.env)) {
-    return c.req.header('X-Forwarded-For')?.split(',')[0].trim() || 'local';
-  }
-  return 'unknown';
-}
-
 function getLimiter(c: Context, name: RateLimiterName): RateLimit | null {
   const binding = (c.env as any)?.[name];
   return binding && typeof binding.limit === 'function' ? binding : null;
@@ -57,6 +49,7 @@ export async function enforceRateLimit(c: Context, options: RateLimitOptions): P
   const { success } = await limiter.limit({ key: options.key });
   if (success) return null;
 
+  securityEvent(c, 'rate_limit.exceeded', { limiter: options.limiter });
   return c.text('Rate limit exceeded', 429, {
     'Retry-After': RATE_LIMIT_PERIOD_SECONDS.toString(),
     'X-RateLimit-Limit': RATE_LIMITS[options.limiter].toString(),
