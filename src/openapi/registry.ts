@@ -237,8 +237,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       + 'for the Account. Rendered entirely from the query string, so it can be reloaded to retry. '
       + 'Advertised by WebFinger and /oauth/{user}.',
     parameters: [
-      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s http(s) URL. Clients are not pre-registered.' },
-      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An http(s) URL on the same origin as client_id.' },
+      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s https URL (http only on localhost, *.localhost, 127.0.0.1 or [::1]). Clients are not pre-registered.' },
+      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An https URL (http only on a loopback host) on the same origin as client_id.' },
       { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
       { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated <module>:r or <module>:rw scopes, e.g. documents:rw; *:r or *:rw for all of storage. Defaults to documents:rw.' },
       { name: 'state', in: 'query', required: false, schema: { type: 'string' } },

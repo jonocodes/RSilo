@@ -50,10 +50,16 @@ interface Refusal {
 
 type Parsed = { ok: true; request: AuthorizationRequest } | Refusal;
 
-function httpUrl(value: string): URL | null {
+// Plain http only for a loopback host, where no network sits between the
+// browser and the app to read the code or token in the redirect.
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+function appUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url : null;
+    return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname)) ? url : null;
   } catch {
     return null;
   }
@@ -74,13 +80,13 @@ function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
   if (!clientId || !redirectUri) {
     return { ok: false, error: 'invalid_request', description: 'client_id and redirect_uri are required' };
   }
-  const client = httpUrl(clientId);
+  const client = appUrl(clientId);
   if (!client) {
-    return { ok: false, error: 'invalid_request', description: 'client_id must be an http(s) URL' };
+    return { ok: false, error: 'invalid_request', description: 'client_id must be an https URL (http only for localhost)' };
   }
-  const redirect = httpUrl(redirectUri);
+  const redirect = appUrl(redirectUri);
   if (!redirect) {
-    return { ok: false, error: 'invalid_request', description: 'redirect_uri must be an http(s) URL' };
+    return { ok: false, error: 'invalid_request', description: 'redirect_uri must be an https URL (http only for localhost)' };
   }
   if (redirect.origin !== client.origin) {
     return { ok: false, error: 'invalid_request', description: 'redirect_uri must be on the same origin as client_id' };
@@ -154,8 +160,8 @@ consentRouter.get('/authorize', (c) => {
   // answers the POST. Chromium and WebKit apply form-action to redirects after
   // a form submission, so with plain `form-action 'self'` approving would be
   // blocked at the app's redirect. Allow exactly this request's app origin
-  // (already checked to be http(s) and equal to the client_id origin), and
-  // nothing else.
+  // (already checked to be https, or http on loopback, and equal to the
+  // client_id origin), and nothing else.
   c.set('formActionOrigin', parsed.request.appOrigin);
   return c.html(renderConsentPage(parsed.request, c.get('ownerEmail'), c.get('instance').accountUsername));
 });

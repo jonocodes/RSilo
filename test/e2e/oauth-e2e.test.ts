@@ -174,7 +174,7 @@ describe('OAuth E2E', () => {
   });
 
   it('the consent page auto-accepts an unknown client', async () => {
-    const res = await fetch(`${CONSENT}?client_id=http://some-new-app.example&redirect_uri=http://some-new-app.example/callback&response_type=code&code_challenge=${PKCE.challenge}&code_challenge_method=S256`);
+    const res = await fetch(`${CONSENT}?client_id=https://some-new-app.example&redirect_uri=https://some-new-app.example/callback&response_type=code&code_challenge=${PKCE.challenge}&code_challenge_method=S256`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toContain('some-new-app.example');

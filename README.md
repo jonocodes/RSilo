@@ -326,7 +326,7 @@ Apps built on remoteStorage.js get a token that lasts 30 days from its last use,
 
 Your `/account` dashboard lists each app that still holds an unexpired token once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
-Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `http(s)` URL, and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
+Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `https` URL (plain `http` only on `localhost`, `*.localhost`, `127.0.0.1` or `[::1]`), and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
 
 ## Share a file publicly
 
@@ -437,7 +437,7 @@ The consent page is always for the Account, so its URL has no username; tokens a
 
 PKCE is `S256` only. The `plain` method, or a challenge with no method, is a `400` on the consent page. The implicit flow ignores PKCE parameters. `/oauth/:user` advertises `code_challenge_methods_supported: ["S256"]`.
 
-Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
+Per protocol §10, `client_id` must be a URL and `redirect_uri` a URL on the same origin. Both must be `https`, except on a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`), where plain `http` is allowed for local development: anywhere else an `http` redirect would carry the code or token across the network in the clear. Otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
 
 The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) cache discovery results, so that URL still answers `GET` with a `302` to `/account/oauth/authorize`, passing the query string through unchanged. `POST` there returns `405`, and any `:user` other than the Account returns `404`.
 

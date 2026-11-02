@@ -146,6 +146,9 @@ describe('redirect_uri origin check (protocol §10)', () => {
     ['a non-URL redirect_uri', { redirect_uri: 'not-a-url' }],
     ['a non-URL client_id', { client_id: 'test-client' }],
     ['an ftp: client_id', { client_id: 'ftp://app.example', redirect_uri: 'ftp://app.example/cb' }],
+    ['a plain-http app on a non-loopback host', { client_id: 'http://app.example', redirect_uri: 'http://app.example/cb' }],
+    ['a plain-http app on a LAN address', { client_id: 'http://192.168.1.5:8080', redirect_uri: 'http://192.168.1.5:8080/cb' }],
+    ['a plain-http app on a host merely starting with localhost', { client_id: 'http://localhost.evil.example', redirect_uri: 'http://localhost.evil.example/cb' }],
   ];
 
   for (const [name, params] of BAD) {
@@ -180,6 +183,13 @@ describe('redirect_uri origin check (protocol §10)', () => {
     const res = await app.request(`${CONSENT_URL}?${query({ client_id: 'https://app.example/some/page', redirect_uri: 'https://APP.example:443/x?y=1' })}`, {}, devEnv());
     expect(res.status).toBe(200);
   });
+
+  for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:5173', 'http://myapp.localhost']) {
+    it(`accepts a plain-http app on loopback (${origin})`, async () => {
+      const res = await app.request(`${CONSENT_URL}?${query({ client_id: origin, redirect_uri: `${origin}/cb` })}`, {}, devEnv());
+      expect(res.status).toBe(200);
+    });
+  }
 });
 
 describe('scope validation', () => {
