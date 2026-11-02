@@ -395,7 +395,7 @@ bun run dev:offline      # http://localhost:8787 with live reload
 
 The offline database is built from the same `drizzle/migrations` as a real D1 database; applied migrations are recorded in `d1_migrations`, so opening it again applies only what is new. A database created by an older RSilo is upgraded the first time it is opened: a pre-hash database drops its tokens and clients once at migration `0005` (apps reconnect once), while the Account row and your files are untouched. Delete `data/remotestorage.db` any time to start over.
 
-Offline documents are stored under `data/storage/` with percent-encoded file names and their metadata in `data/storage/.meta/`; this layout is new, so delete `data/storage/` (or re-upload your files) after upgrading from an older RSilo.
+Offline documents are stored under `data/storage/` with percent-encoded file names and their metadata in `data/storage/.meta/`. A name whose encoding is over 255 bytes is stored under a shortened name ending in `~<sha256>`, with the full name in `data/storage/.meta/.names/`, so names as long as R2 or S3 accept work offline too; a path too long for the filesystem as a whole gets `414`. The percent-encoded layout is new, so delete `data/storage/` (or re-upload your files) after upgrading from an older RSilo.
 
 ## Local development (wrangler dev)
 

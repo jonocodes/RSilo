@@ -145,6 +145,20 @@ describe.each(backends)('StorageInterface contract: %s', (_name, make) => {
     expect(await keys(P + 'd/')).toEqual(names.map((name) => P + 'd/' + name).sort());
   });
 
+  it('stores document and folder names of 255 bytes and more', async () => {
+    const long = 'ကခဂဃငစဆဇဈဉညဋဌဍဎဏတထဒဓနပဖဗဘမယရလဝသဟ'; // 96 UTF-8 bytes, 288 percent-encoded
+    const names = [long + '.txt', long + long, 'a'.repeat(255), 'b'.repeat(256)];
+    const expected = names.flatMap((name) => [P + 'docs/' + name, P + 'folders/' + name + '/' + name]).sort();
+    for (const key of expected) await storage.put(key, bytes(key), 'text/plain');
+
+    expect(await keys(P)).toEqual(expected);
+    for (const key of expected) expect(await text((await storage.get(key))!.body)).toBe(key);
+    expect(await keys(P + 'folders/' + long + long + '/')).toEqual([P + 'folders/' + long + long + '/' + long + long]);
+
+    for (const key of expected) await storage.delete(key);
+    expect(await keys('')).toEqual([]);
+  });
+
   it('honours If-None-Match: * and If-Match on put, storing nothing when they fail, where the backend enforces them', async () => {
     if (!backend.conditionalPut) return;
     await expect(storage.put(P + 'a.txt', bytes('one'), 'text/plain', { ifMatch: '"nope"' })).rejects.toBeInstanceOf(PreconditionFailedError);

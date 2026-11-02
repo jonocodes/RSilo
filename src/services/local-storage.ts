@@ -1,10 +1,10 @@
 import { mkdirSync } from 'node:fs';
-import { mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
-import { conditionHolds, PathConflictError, PreconditionFailedError } from './storage-errors';
+import { conditionHolds, KeyTooLongError, PathConflictError, PreconditionFailedError } from './storage-errors';
 
 // The offline (dev-only) Storage backend: one file per object under baseDir.
 //
@@ -13,13 +13,23 @@ import { conditionHolds, PathConflictError, PreconditionFailedError } from './st
 // a file, even on a case-insensitive filesystem, and no segment is '..' or
 // starts with '.'. Content type and ETag live in a parallel tree under
 // `.meta/`, a name no key can produce.
+//
+// A file name holds at most 255 bytes, so a segment whose encoding is longer
+// is stored as the start of its encoding, '~' (which encoding never keeps) and
+// the SHA-256 of the segment. `.meta/.names/<sha256>` holds the segment
+// itself, for listings. Name records stay after a delete: they are small and
+// every key with that segment shares one.
 
 type Metadata = NonNullable<Awaited<ReturnType<StorageInterface['head']>>>;
 type Listing = Awaited<ReturnType<StorageInterface['list']>>;
 type ListedObject = Listing['objects'][number];
 
 const META_DIR = '.meta';
+const NAMES_DIR = join(META_DIR, '.names');
 const KEPT = /[a-z0-9_-]/;
+const MAX_NAME_BYTES = 255;
+const SHORTENED_PREFIX_BYTES = 128;
+const SHORTENED = /~([0-9a-f]{64})$/;
 
 function encodeSegment(segment: string): string {
   if (!segment) throw new Error('Storage keys cannot have empty segments');
@@ -31,19 +41,41 @@ function encodeSegment(segment: string): string {
   return encoded;
 }
 
-/** The key segment a file name encodes, or null for a name RSilo did not write. */
+/** The file name for a key segment. */
+function fileName(segment: string): string {
+  const encoded = encodeSegment(segment);
+  if (encoded.length <= MAX_NAME_BYTES) return encoded;
+  const prefix = encoded.slice(0, SHORTENED_PREFIX_BYTES).replace(/%[0-9A-F]?$/, '');
+  return `${prefix}~${createHash('sha256').update(segment).digest('hex')}`;
+}
+
+/** Whether `name` is the file name for `segment`. */
+function namesSegment(name: string, segment: string): boolean {
+  try {
+    return fileName(segment) === name;
+  } catch {
+    return false; // an empty segment
+  }
+}
+
+/** The key segment a (not shortened) file name encodes, or null for a name RSilo did not write. */
 function decodeSegment(name: string): string | null {
   try {
     const segment = decodeURIComponent(name);
-    return encodeSegment(segment) === name ? segment : null;
+    return namesSegment(name, segment) ? segment : null;
   } catch {
     return null;
   }
 }
 
+function errorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException).code;
+}
+
+// A path too long to exist names nothing.
 function isMissing(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
+  const code = errorCode(error);
+  return code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENAMETOOLONG';
 }
 
 async function fileStats(path: string): Promise<Stats | null> {
@@ -66,11 +98,45 @@ export class LocalStorage implements StorageInterface {
   }
 
   private dataPath(key: string): string {
-    return join(this.baseDir, ...key.split('/').map(encodeSegment));
+    return join(this.baseDir, ...key.split('/').map(fileName));
   }
 
   private metaPath(key: string): string {
-    return join(this.baseDir, META_DIR, ...key.split('/').map(encodeSegment));
+    return join(this.baseDir, META_DIR, ...key.split('/').map(fileName));
+  }
+
+  private namePath(hash: string): string {
+    return join(this.baseDir, NAMES_DIR, hash);
+  }
+
+  /** The segment recorded for a shortened name's hash, or null. */
+  private async recordedSegment(hash: string): Promise<string | null> {
+    try {
+      return await readFile(this.namePath(hash), 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
+  // Keys that share a segment share its record, so no key lock covers it:
+  // each record is written whole (a rename), and rewritten if it is wrong.
+  private async recordNames(key: string): Promise<void> {
+    for (const segment of key.split('/')) {
+      const hash = SHORTENED.exec(fileName(segment))?.[1];
+      if (!hash || (await this.recordedSegment(hash)) === segment) continue;
+      const temp = this.namePath(`${hash}.${randomUUID()}`);
+      await mkdir(dirname(temp), { recursive: true });
+      await writeFile(temp, segment);
+      await rename(temp, this.namePath(hash));
+    }
+  }
+
+  /** The key segment a directory entry stands for, or null for one RSilo did not write. */
+  private async entrySegment(name: string): Promise<string | null> {
+    const hash = SHORTENED.exec(name)?.[1];
+    if (!hash) return decodeSegment(name);
+    const segment = await this.recordedSegment(hash);
+    return segment !== null && namesSegment(name, segment) ? segment : null;
   }
 
   private async metadata(key: string, stats: Stats): Promise<Metadata> {
@@ -125,14 +191,23 @@ export class LocalStorage implements StorageInterface {
 
     return this.locked(key, async () => {
       if (condition && !conditionHolds(await this.head(key), condition)) throw new PreconditionFailedError();
+      await this.recordNames(key);
       try {
         await mkdir(dirname(path), { recursive: true });
         await mkdir(dirname(metaPath), { recursive: true });
+        // Open the metadata file, the longer path, before writing anything,
+        // so a path over the filesystem's limit stores nothing.
+        await (await open(metaPath, 'a')).close();
         await writeFile(path, bytes);
       } catch (error) {
         // A file cannot also be a directory, nor sit inside a file.
-        const code = (error as NodeJS.ErrnoException).code;
+        const code = errorCode(error);
         if (code === 'EEXIST' || code === 'ENOTDIR' || code === 'EISDIR') throw new PathConflictError();
+        if (code === 'ENAMETOOLONG') {
+          await this.removeEmptyParents(dirname(path));
+          await this.removeEmptyParents(dirname(metaPath));
+          throw new KeyTooLongError();
+        }
         throw error;
       }
       await writeFile(metaPath, JSON.stringify({ contentType, etag }));
@@ -163,8 +238,8 @@ export class LocalStorage implements StorageInterface {
     while (dir.length > this.baseDir.length && dir.startsWith(this.baseDir)) {
       try {
         await rmdir(dir);
-      } catch {
-        return; // not empty (or already gone)
+      } catch (error) {
+        if (!isMissing(error)) return; // not empty
       }
       dir = dirname(dir);
     }
@@ -198,7 +273,7 @@ export class LocalStorage implements StorageInterface {
       throw error;
     }
     await Promise.all(entries.map(async (entry) => {
-      const segment = decodeSegment(entry.name);
+      const segment = await this.entrySegment(entry.name);
       if (segment === null) return; // `.meta/` and anything RSilo did not write
       const key = keyPrefix + segment;
       if (entry.isDirectory()) return this.walk(join(dir, entry.name), key + '/', objects);

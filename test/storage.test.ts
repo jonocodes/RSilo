@@ -679,6 +679,15 @@ describe('Conditional deletes and name clashes', () => {
       expect(Object.keys(listing.items).sort()).toEqual(['doc', 'folder/']);
     });
   }
+
+  it('answers 414, not 500, when the offline store cannot hold a path', async () => {
+    const env = { STORAGE: new LocalStorage(localRoot), DB: createSqliteD1() };
+    const path = 'documents/' + Array(20).fill('a'.repeat(250)).join('/');
+    const put = await requestAs(env, 'PUT', path, {}, 'x');
+    expect(put.status).toBe(414);
+    expect(await put.text()).toMatch(/too long/i);
+    expect((await requestAs(env, 'GET', path)).status).toBe(404);
+  });
 });
 
 describe('Document reads from metadata', () => {
