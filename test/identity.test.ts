@@ -134,6 +134,14 @@ describe('development identity guard', () => {
     expect(res.status).toBe(503);
   });
 
+  // server-offline.ts sets this when LISTEN_HOST is not loopback (the Docker
+  // image), where anyone who can reach the port could send Host: localhost
+  it('is unreachable when RSILO_DEV_IDENTITY is "off", even on localhost', async () => {
+    const res = await app.request('http://localhost:8787/account', {}, devEnv({ RSILO_DEV_IDENTITY: 'off' }));
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain('alice@example.com');
+  });
+
   it('uses RSILO_DEV_EMAIL, which must still match OWNER_EMAIL', async () => {
     const res = await app.request('http://localhost/account', {}, devEnv({ RSILO_DEV_EMAIL: 'someone@example.com' }));
     expect(res.status).toBe(403);

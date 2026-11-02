@@ -1,0 +1,13 @@
+.git
+.github
+.flox
+.wrangler
+node_modules
+data
+test
+docs
+*.md
+!README.md
+.dev.vars
+wrangler.prod.toml
+wrangler.deploy.toml
