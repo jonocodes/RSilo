@@ -24,7 +24,7 @@ export async function readRequestBody(request: Request, maximum: number): Promis
   rejectOversizedContentLength(request, maximum);
   if (!request.body) return new ArrayBuffer(0);
 
-  const reader = request.body.getReader();
+  const reader = (request.body as ReadableStream<Uint8Array>).getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   while (true) {

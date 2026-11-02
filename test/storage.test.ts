@@ -675,7 +675,7 @@ describe('Conditional deletes and name clashes', () => {
 
       expect((await requestAs(env, 'PUT', 'documents/clash/doc/inside', {}, 'c')).status).toBe(409);
       expect((await requestAs(env, 'PUT', 'documents/clash/folder', {}, 'd')).status).toBe(409);
-      const listing = await (await requestAs(env, 'GET', 'documents/clash/')).json() as { items: Record<string, unknown> };
+      const listing = await (await requestAs(env, 'GET', 'documents/clash/')).json<{ items: Record<string, unknown> }>();
       expect(Object.keys(listing.items).sort()).toEqual(['doc', 'folder/']);
     });
   }

@@ -55,7 +55,7 @@ export type OwnerEmailResult =
 type InstanceEnv = Partial<Pick<AppEnv, 'ACCOUNT_USERNAME' | 'OWNER_EMAIL' | 'PUBLIC_BASE_URL'>>;
 
 function instanceEnv(env: unknown): InstanceEnv {
-  return (typeof env === 'object' && env !== null ? env : {}) as InstanceEnv;
+  return (typeof env === 'object' && env !== null ? env : {});
 }
 
 function parsePublicBaseUrl(value: string): URL | null {

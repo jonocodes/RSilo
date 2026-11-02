@@ -66,7 +66,7 @@ function appUrl(value: string): URL | null {
  * redirect target is exactly what cannot be trusted.
  */
 function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
-  const str = (key: string) => (typeof params[key] === 'string' ? params[key] as string : '');
+  const str = (key: string) => (typeof params[key] === 'string' ? params[key] : '');
   const clientId = str('client_id');
   const redirectUri = str('redirect_uri');
   const responseType = str('response_type');

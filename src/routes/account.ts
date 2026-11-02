@@ -251,7 +251,7 @@ accountRouter.get('/', async (c) => {
   if (!db || typeof db.prepare !== 'function') return c.text('Server database is not configured', 503);
 
   const usage = await db.prepare('SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
-    .bind(username).first() as { storage_quota_bytes?: number; used_storage_bytes?: number } | null;
+    .bind(username).first<{ storage_quota_bytes?: number; used_storage_bytes?: number }>();
   const quota = Number(usage?.storage_quota_bytes ?? 0);
   const used = Number(usage?.used_storage_bytes ?? 0);
   const percent = quota > 0 ? Math.min(100, (used / quota) * 100) : 100;

@@ -574,9 +574,12 @@ bun run test             # all tests (fast: real SQLite + offline server E2E)
 bun run test:watch       # watch mode
 bun run typecheck        # source tsc --noEmit
 bun run typecheck:test   # test-suite tsc --noEmit
-bun run lint             # eslint src and test
+bun run lint             # type-aware eslint, src and test
+bun run lint:prune       # drop fixed violations from eslint-suppressions.json
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
+
+Lint is type-aware (typescript-eslint `recommendedTypeChecked`, `no-explicit-any` included). Violations that predate it, nearly all `any` in tests, are baselined in `eslint-suppressions.json`; new ones fail. Once you fix a baselined one, lint fails until you run `bun run lint:prune`.
 
 The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 

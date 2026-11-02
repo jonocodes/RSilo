@@ -78,7 +78,7 @@ describe('range requests', () => {
 
   it('advertises range support in WebFinger', async () => {
     const res = await app.request('http://localhost/.well-known/webfinger?resource=acct:alice@localhost', {}, env);
-    const link = ((await res.json()) as { links: any[] }).links.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
+    const link = (await res.json<{ links: any[] }>()).links.find((l: any) => l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage');
     expect(link.properties['http://tools.ietf.org/html/rfc7233']).toBe('GET');
   });
 });

@@ -76,7 +76,7 @@ export class LocalStorage implements StorageInterface {
   private async metadata(key: string, stats: Stats): Promise<Metadata> {
     let stored: { contentType?: string; etag?: string } = {};
     try {
-      stored = JSON.parse(await readFile(this.metaPath(key), 'utf-8'));
+      stored = JSON.parse(await readFile(this.metaPath(key), 'utf-8')) as typeof stored;
     } catch {
       // No (readable) metadata, e.g. a file copied in by hand: fall back to
       // an ETag that still changes only when the file does.

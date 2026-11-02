@@ -56,7 +56,7 @@ export function parseScope(item: string): Scope | null {
 /** A scope parameter: space-separated scopes. Null if it is empty or any item is malformed. */
 export function parseScopes(scope: string): Scope[] | null {
   const scopes = scope.split(' ').filter(Boolean).map(parseScope);
-  return scopes.length && scopes.every(s => s !== null) ? scopes as Scope[] : null;
+  return scopes.length && scopes.every(s => s !== null) ? scopes : null;
 }
 
 /**

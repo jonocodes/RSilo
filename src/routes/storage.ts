@@ -16,7 +16,7 @@ import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services
 
 export const storageRouter = new Hono<HonoEnv>();
 
-storageRouter.use('/*', async (c, next) => {
+storageRouter.use('/*', async (c: Context, next) => {
   const url = new URL(c.req.url);
 
   // Dot segments, raw or encoded. Names merely containing dots ("..a") are
@@ -56,7 +56,7 @@ storageRouter.use('/*', async (c, next) => {
 // 404. It also needs the Account row (quota counter); in the username-mismatch
 // state every storage request is refused with 503.
 storageRouter.use('/*', requireInstanceConfig());
-storageRouter.use('/:username/*', async (c, next) => {
+storageRouter.use('/:username/*', async (c: Context, next) => {
   if (c.req.param('username') === c.get('instance').accountUsername) return next();
   const hasToken = Boolean(c.req.header('Authorization'));
   securityEvent(c, 'storage.auth_denied', { status: hasToken ? 403 : 401, reason: 'unknown_account' });

@@ -95,7 +95,7 @@ describe('OAuth E2E', () => {
   });
 
   it('the Owner approves a client (dev identity on localhost) and the code buys a working token', async () => {
-    const page = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'code', scope: 'documents:rw', state: 's1', code_challenge: PKCE.challenge, code_challenge_method: 'S256' })}`);
+    const page = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'code', scope: 'documents:rw', state: 's1', code_challenge: PKCE.challenge, code_challenge_method: 'S256' }).toString()}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain('action="/account/oauth/authorize"');
 
@@ -168,7 +168,7 @@ describe('OAuth E2E', () => {
   });
 
   it('refuses a redirect_uri on another origin than client_id, without redirecting', async () => {
-    const res = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: 'https://evil.example/cb', response_type: 'code' })}`, { redirect: 'manual' });
+    const res = await fetch(`${CONSENT}?${new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: 'https://evil.example/cb', response_type: 'code' }).toString()}`, { redirect: 'manual' });
     expect(res.status).toBe(400);
     expect(res.headers.get('Location')).toBeNull();
   });

@@ -30,7 +30,7 @@ function devEnv() {
 }
 
 function count(env: any, table: string): number {
-  return Number((env.DB.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as any).n);
+  return Number((env.DB.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).n);
 }
 
 async function approve(env: any, params: Record<string, string> = {}): Promise<Response> {
@@ -54,7 +54,7 @@ async function exchange(env: any, code: string, params: Record<string, string> =
 describe('PKCE on the consent page', () => {
   it('carries code_challenge and code_challenge_method through as hidden fields', async () => {
     const qs = new URLSearchParams({ ...REQUEST, ...PKCE });
-    const res = await app.request(`${CONSENT_URL}?${qs}`, {}, devEnv());
+    const res = await app.request(`${CONSENT_URL}?${qs.toString()}`, {}, devEnv());
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(`name="code_challenge" value="${CHALLENGE}"`);
@@ -73,7 +73,7 @@ describe('PKCE on the consent page', () => {
   for (const [name, params] of invalid) {
     it(`GET with ${name} is a 400 with no redirect`, async () => {
       const qs = new URLSearchParams({ ...REQUEST, ...params });
-      const res = await app.request(`${CONSENT_URL}?${qs}`, {}, devEnv());
+      const res = await app.request(`${CONSENT_URL}?${qs.toString()}`, {}, devEnv());
       expect(res.status).toBe(400);
       expect(res.headers.get('Location')).toBeNull();
       expect(await res.text()).toContain('invalid_request');

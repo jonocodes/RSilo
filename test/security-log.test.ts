@@ -56,7 +56,7 @@ async function token(env: object, body: Record<string, string>) {
     headers: { ...FORM, 'CF-Connecting-IP': IP },
     body: new URLSearchParams(body).toString(),
   }, env);
-  return { status: res.status, json: await res.json() as Record<string, string> };
+  return { status: res.status, json: await res.json<Record<string, string>>() };
 }
 
 function storage(env: object, path: string, init: RequestInit = {}) {

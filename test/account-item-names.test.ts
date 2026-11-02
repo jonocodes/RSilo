@@ -13,7 +13,7 @@ const KEY = 'users/alice/storage/documents/my notes?/to do#1.txt';
 describe('file manager with special characters in names', () => {
   const app = createServer({});
   let env: { STORAGE: MemoryStorage; DB: ReturnType<typeof createSqliteD1> };
-  const get = (path: string) => app.request(`http://localhost${path}`, {}, env as any);
+  const get = (path: string) => app.request(`http://localhost${path}`, {}, env);
 
   beforeEach(async () => {
     env = { STORAGE: new MemoryStorage(), DB: createSqliteD1() };
@@ -42,7 +42,7 @@ describe('file manager with special characters in names', () => {
 
   it('deletes by the encoded path and returns to the folder', async () => {
     const res = await app.request('http://localhost/account/delete/documents/my%20notes%3F/to%20do%231.txt',
-      { method: 'POST', headers: SAME_ORIGIN }, env as any);
+      { method: 'POST', headers: SAME_ORIGIN }, env);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/account/browse/documents/my%20notes%3F');
     expect(env.STORAGE.objects.has(KEY)).toBe(false);

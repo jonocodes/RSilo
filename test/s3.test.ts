@@ -224,7 +224,7 @@ describe('storage routes on S3', () => {
 
     const folder = await app.request('http://localhost/storage/alice/documents/', { headers: auth }, env);
     expect(folder.status).toBe(200);
-    expect(Object.keys((await folder.json() as { items: object }).items)).toEqual(['notes/']);
+    expect(Object.keys((await folder.json<{ items: object }>()).items)).toEqual(['notes/']);
 
     const del = await app.request(url, { method: 'DELETE', headers: auth }, env);
     expect(del.status).toBe(200);

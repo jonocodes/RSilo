@@ -83,7 +83,7 @@ oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
   if (!params) {
     return c.json({ error: 'invalid_request', error_description: 'body must be a form-encoded or JSON object' }, 400);
   }
-  const param = (name: string) => (typeof params[name] === 'string' && params[name] ? params[name] as string : undefined);
+  const param = (name: string) => (typeof params[name] === 'string' && params[name] ? params[name] : undefined);
   const grantType = param('grant_type');
 
   // Tokens and codes live in D1; dev mode may run without it.

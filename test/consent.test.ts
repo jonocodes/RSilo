@@ -101,7 +101,7 @@ describe('consent page (GET /account/oauth/authorize)', () => {
   it('defaults a missing scope to documents:rw', async () => {
     const params = new URLSearchParams(REQUEST);
     params.delete('scope');
-    const res = await app.request(`${CONSENT_URL}?${params}`, {}, devEnv());
+    const res = await app.request(`${CONSENT_URL}?${params.toString()}`, {}, devEnv());
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('name="scope" value="documents:rw"');
   });
