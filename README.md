@@ -129,6 +129,7 @@ Things to know:
 - **Daily transaction allowance.** B2's free tier includes 2,500 Class B and 2,500 Class C calls a day. Each folder listing an app fetches costs one Class C call. Each file download or unchanged-file check costs one Class B call. An upload costs one Class B call per segment of its path (checking the file's current version and write condition, and that no folder above it is a file) and one Class C call (checking that it is not a folder); a delete costs one Class B call. A light personal setup stays well inside this, but an app that re-syncs very often may not. Under **Caps & Alerts** in B2, set the daily caps to $0 so you are never billed; extra calls are then refused until the next day.
 - **Switching an existing Instance copies nothing.** If you move from R2 to S3 (or back), copy the bucket's contents first, for example with [rclone](https://rclone.org/), keeping the `users/` key layout. The storage usage figure on `/account` is not recomputed.
 - **Other providers work too**: AWS S3, Wasabi, Storj, iDrive e2, a MinIO server, or R2's own S3 endpoint. Set `S3_REGION` if your provider needs a region that is not part of its endpoint host.
+- **SeaweedFS**: run it with `-s3.allowBackslashInKey` (4.49 and later). Without it, SeaweedFS turns `\` in a key into `/`, so a file whose name contains a backslash overwrites a different path ([seaweedfs#11908](https://github.com/seaweedfs/seaweedfs/issues/11908)).
 
 ### Instance configuration
 
