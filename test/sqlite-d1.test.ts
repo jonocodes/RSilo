@@ -10,6 +10,7 @@ import { createSqliteD1, type SqliteD1 } from '../src/services/db/sqlite';
 const MIGRATIONS = join(process.cwd(), 'drizzle', 'migrations');
 const SHIPPED = readdirSync(MIGRATIONS).filter(file => file.endsWith('.sql')).sort();
 const HASH_MIGRATION = '0005_hash_oauth_secrets.sql';
+const FOLDER_ETAG_COLUMNS = ['user_id', 'path', 'version', 'etag', 'etag_version', 'cached_at'];
 
 let workdir: string;
 
@@ -37,6 +38,7 @@ describe('migration application', () => {
     expect(migrationNames(db)).toEqual(SHIPPED);
     expect(columns(db, 'oauth_tokens')).toContain('access_token_hash');
     expect(columns(db, 'users')).not.toContain('password_hash');
+    expect(columns(db, 'folder_etags')).toEqual(FOLDER_ETAG_COLUMNS);
   });
 
   it('does not re-run migrations when a database file is reopened', () => {
@@ -84,6 +86,7 @@ describe('migration application', () => {
     expect(migrationNames(after)).toEqual(SHIPPED);
     expect(columns(after, 'oauth_tokens')).toContain('access_token_hash');
     expect(columns(after, 'oauth_tokens')).not.toContain('access_token');
+    expect(columns(after, 'folder_etags')).toEqual(FOLDER_ETAG_COLUMNS);
     expect(after.sqlite.prepare('SELECT COUNT(*) AS n FROM oauth_tokens').get()).toEqual({ n: 0 });
     expect(after.sqlite.prepare('SELECT COUNT(*) AS n FROM oauth_clients').get()).toEqual({ n: 0 });
     expect(after.sqlite.prepare('SELECT username FROM users').all()).toEqual([{ username: 'alice' }]);
@@ -112,6 +115,7 @@ describe('migration application', () => {
     expect(migrationNames(after)).toEqual(SHIPPED);
     expect(after.sqlite.prepare('SELECT id FROM oauth_tokens').all()).toEqual([{ id: 't1' }]);
     expect(columns(after, 'oauth_tokens')).toContain('refresh_expires_at');
+    expect(columns(after, 'folder_etags')).toEqual(FOLDER_ETAG_COLUMNS);
     after.close();
   });
 });
