@@ -107,6 +107,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       '200': { description: 'Access token (and refresh token).' },
       '400': { description: 'invalid_request (including a body that is not a form-encoded or JSON object), invalid_grant, or unsupported_grant_type.' },
       '404': { description: '{user} is not ACCOUNT_USERNAME.' },
+      '429': { description: 'Too many token requests from this IP (20 per minute, counting every request).' },
+      '503': { description: 'Instance not configured, no database, or rate limiting unavailable.' },
     },
   },
 
@@ -118,13 +120,15 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
   'GET /storage/{username}/public/{path}': {
     summary: 'Read a public file',
     tags: ['Public files'],
-    description: 'No authentication required for files under the public/ folder. Supports If-None-Match.',
+    description: 'No authentication required for files under the public/ folder. Supports If-None-Match. '
+      + 'Reads without a valid token for the Account are rate limited per IP; the Account\'s own apps are not.',
     responses: {
       '200': { description: 'File body.' },
       '304': { description: 'Not modified (If-None-Match), with the ETag.' },
       '400': { description: 'Invalid path.' },
       '401': { description: 'A public folder listing without a token (listings need the module\'s read scope).' },
       '404': { description: 'Not found.' },
+      '429': { description: 'Too many reads without the Account\'s token from this IP (300 per minute).' },
       '503': { description: 'Instance not configured, or rate limiting unavailable.' },
     },
   },
@@ -192,6 +196,7 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       '401': { description: 'Missing or invalid token.' },
       '403': { description: 'The token\'s scope does not cover the path.' },
       '404': { description: 'Not found.' },
+      '429': { description: 'Too many failed authentications, or public-document reads without the Account\'s token, from this IP.' },
     },
   },
 
@@ -238,8 +243,8 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
       + 'for the Account. Rendered entirely from the query string, so it can be reloaded to retry. '
       + 'Advertised by WebFinger and /oauth/{user}.',
     parameters: [
-      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s http(s) URL. Clients are not pre-registered.' },
-      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An http(s) URL on the same origin as client_id.' },
+      { name: 'client_id', in: 'query', required: true, schema: { type: 'string' }, description: 'The app\'s https URL (http only on localhost, *.localhost, 127.0.0.1 or [::1]). Clients are not pre-registered.' },
+      { name: 'redirect_uri', in: 'query', required: true, schema: { type: 'string' }, description: 'An https URL (http only on a loopback host) on the same origin as client_id.' },
       { name: 'response_type', in: 'query', required: true, schema: { type: 'string', enum: ['code', 'token'] } },
       { name: 'scope', in: 'query', required: false, schema: { type: 'string' }, description: 'Space-separated <module>:r or <module>:rw scopes, e.g. documents:rw; *:r or *:rw for all of storage. Defaults to documents:rw.' },
       { name: 'state', in: 'query', required: false, schema: { type: 'string' } },

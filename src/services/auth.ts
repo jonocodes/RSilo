@@ -78,6 +78,11 @@ export function grants(tokenScopes: string, module: string, access: Access): boo
     && (scope.access === 'rw' || scope.access === access));
 }
 
+/** A document (not a folder) under public/: readable without a token. */
+export function isPublicDocument(path: string): boolean {
+  return path.startsWith('public/') && !path.endsWith('/');
+}
+
 /** Why a storage request is refused: no valid token (401), or not for this token (403). */
 export interface Denial {
   status: 401 | 403;
@@ -93,7 +98,7 @@ export interface Denial {
  * Account whose scopes cover the path's Module.
  */
 export function authorize(payload: TokenPayload | null, username: string, path: string, access: Access): Denial | null {
-  if (access === 'r' && path.startsWith('public/') && !path.endsWith('/')) return null;
+  if (access === 'r' && isPublicDocument(path)) return null;
   if (!payload) return { status: 401 };
   if (payload.sub !== username) return { status: 403 };
   const module = moduleOf(path);

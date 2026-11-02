@@ -12,5 +12,8 @@ export default defineConfig({
     // spawn took 17s, far past vitest's 5s/10s defaults.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Security events (services/security-log.ts) would flood the output of
+    // every test that is refused on purpose; test/security-log.test.ts spies on them.
+    onConsoleLog: (log) => !log.startsWith('{"event":'),
   },
 });

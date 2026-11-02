@@ -190,6 +190,22 @@ export function withoutR2Buckets(toml: string): string {
   return out.join('\n');
 }
 
+/** The binding names of the [[ratelimits]] tables. */
+export function rateLimitBindings(toml: string): string[] {
+  const names: string[] = [];
+  let inRateLimit = false;
+  for (const line of toml.split('\n')) {
+    const header = line.match(HEADER);
+    if (header) {
+      inRateLimit = header[1] === 'ratelimits';
+      continue;
+    }
+    const m = inRateLimit ? line.match(KEY_LINE) : null;
+    if (m?.[2] === 'name') names.push(parseValue(m[3]).value);
+  }
+  return names;
+}
+
 /** The workers.dev origin printed by `wrangler deploy`, if any. */
 export function workersDevUrl(deployOutput: string): string | null {
   return deployOutput.match(/https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/i)?.[0] ?? null;

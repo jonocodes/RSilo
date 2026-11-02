@@ -4,6 +4,7 @@ import { buildKey, getStorage } from '../services/r2';
 import { decodeItemPath, isValidItemName } from '../protocol/item-path';
 import { ACCOUNT_CLIENT_SCRIPT } from '../ui/account-client';
 import { changeSignInEmailSteps, usernameMismatchPage } from '../ui/setup-pages';
+import { securityEvent } from '../services/security-log';
 import { deleteUserObject, putUserObject } from '../services/quota-storage';
 import { writeErrorResponse } from './storage';
 import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from '../services/object-size';
@@ -370,6 +371,7 @@ accountRouter.post('/apps/revoke', async (c) => {
   await db.prepare('DELETE FROM oauth_clients WHERE id = ? AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE client_id = ?)')
     .bind(clientId, clientId)
     .run();
+  securityEvent(c, 'account.app_revoked', { client_id: clientId });
   return c.redirect('/account', 302);
 });
 

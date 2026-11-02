@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { parseScopes } from '../services/auth';
 import { parsePkceRequest } from '../services/pkce';
+import { securityEvent } from '../services/security-log';
 import { IMPLICIT_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
 import type { Context } from '../types';
 
@@ -50,10 +51,16 @@ interface Refusal {
 
 type Parsed = { ok: true; request: AuthorizationRequest } | Refusal;
 
-function httpUrl(value: string): URL | null {
+// Plain http only for a loopback host, where no network sits between the
+// browser and the app to read the code or token in the redirect.
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+function appUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url : null;
+    return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname)) ? url : null;
   } catch {
     return null;
   }
@@ -74,13 +81,13 @@ function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
   if (!clientId || !redirectUri) {
     return { ok: false, error: 'invalid_request', description: 'client_id and redirect_uri are required' };
   }
-  const client = httpUrl(clientId);
+  const client = appUrl(clientId);
   if (!client) {
-    return { ok: false, error: 'invalid_request', description: 'client_id must be an http(s) URL' };
+    return { ok: false, error: 'invalid_request', description: 'client_id must be an https URL (http only for localhost)' };
   }
-  const redirect = httpUrl(redirectUri);
+  const redirect = appUrl(redirectUri);
   if (!redirect) {
-    return { ok: false, error: 'invalid_request', description: 'redirect_uri must be an http(s) URL' };
+    return { ok: false, error: 'invalid_request', description: 'redirect_uri must be an https URL (http only for localhost)' };
   }
   if (redirect.origin !== client.origin) {
     return { ok: false, error: 'invalid_request', description: 'redirect_uri must be on the same origin as client_id' };
@@ -154,8 +161,8 @@ consentRouter.get('/authorize', (c) => {
   // answers the POST. Chromium and WebKit apply form-action to redirects after
   // a form submission, so with plain `form-action 'self'` approving would be
   // blocked at the app's redirect. Allow exactly this request's app origin
-  // (already checked to be http(s) and equal to the client_id origin), and
-  // nothing else.
+  // (already checked to be https, or http on loopback, and equal to the
+  // client_id origin), and nothing else.
   c.set('formActionOrigin', parsed.request.appOrigin);
   return c.html(renderConsentPage(parsed.request, c.get('ownerEmail'), c.get('instance').accountUsername));
 });
@@ -171,13 +178,18 @@ consentRouter.post('/authorize', async (c) => {
   if ('error' in parsed) return refuse(c, parsed);
   const request = parsed.request;
 
-  if (action === 'deny') return redirectWithError(c, request.redirectUri, request.state, 'access_denied');
+  const decision = { client_id: request.clientId, scope: request.scope, response_type: request.responseType };
+  if (action === 'deny') {
+    securityEvent(c, 'oauth.consent_denied', decision);
+    return redirectWithError(c, request.redirectUri, request.state, 'access_denied');
+  }
 
   // The grant must be stored before the app is sent its token or code.
   const db = (c.env as { DB?: D1Database }).DB;
   if (!db) return c.text('Server database is not configured', 503);
 
   const location = await issueGrant(db, c.get('instance').accountUsername, request);
+  securityEvent(c, 'oauth.consent_approved', decision);
   return c.redirect(location, 302);
 });
 

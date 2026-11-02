@@ -165,7 +165,7 @@ bun run deploy
 
 If `wrangler.prod.toml` is missing, it looks your D1 database up by name and writes one for it (see [Automatic deploys](#automatic-deploys-cloudflare-workers-builds)); if that finds nothing, it deploys the committed `wrangler.toml`, the path Cloudflare's button uses, where the IDs are injected for you. To rebuild the prod config after provisioning new resources, re-run `bun run setup` (or copy `wrangler.toml` and paste in the IDs by hand).
 
-Each deploy first bundles the Worker without uploading it (`wrangler deploy --dry-run`), so a build error stops it before the database changes. It then applies pending D1 migrations, and stops without deploying if they were not applied (for example when you answer "no" at wrangler's prompt). It refuses a config that sets `RSILO_DEV_MODE=true`.
+Each deploy first bundles the Worker without uploading it (`wrangler deploy --dry-run`), so a build error stops it before the database changes. It then applies pending D1 migrations, and stops without deploying if they were not applied (for example when you answer "no" at wrangler's prompt). It refuses a config that sets `RSILO_DEV_MODE=true`, and one that lacks any of the `[[ratelimits]]` bindings in `wrangler.toml` (production answers `503` without them): a `wrangler.prod.toml` written before a release added a limiter is fixed by re-running `bun run setup`.
 
 ### Rolling back a bad release
 
@@ -327,15 +327,34 @@ Apps built on remoteStorage.js get a token that lasts 30 days from its last use,
 
 Your `/account` dashboard lists each app that still holds an unexpired token once, by its origin host, with the modules it can access and when it was first granted and last issued a token. **Revoke** removes all of that app's tokens at once; it loses access immediately.
 
-Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `http(s)` URL, and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
+Because apps are not registered in advance, an app is identified by its `client_id`, which must be an `https` URL (plain `http` only on `localhost`, `*.localhost`, `127.0.0.1` or `[::1]`), and it may only be sent back to a `redirect_uri` on that same origin. Any other request gets a `400` error page and no redirect. If your Access session expires while the consent page is open, the approval is lost to the Access sign-in; reload the page (all its parameters are in the URL) and allow again.
 
 ## Share a file publicly
 
-Files written under `public/<module>/` are readable by anyone — no token needed. Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. An app writes there with the same `<module>` scope as its private data; for a by-hand example, see [Public files](#public-files).
+Files written under `public/<module>/` are readable by anyone — no token needed (reads without your token are limited to 300 a minute per IP). Folder listings still need a token with read access to the module (`*:r` for `public/` itself), as for private folders. An app writes there with the same `<module>` scope as its private data; for a by-hand example, see [Public files](#public-files).
 
 ## One Account per Instance
 
 An Instance serves only `ACCOUNT_USERNAME`: WebFinger resolves no other user, the `/oauth/<username>/…` endpoints return `404` for any other username (consent is always for the Account), and every `/storage/<username>/…` request for another username is refused (`401` without a token, `403` with one, including anonymous `public/` reads). If you migrate a deployment that had several users, every other user's data and tokens become unreachable; their rows, R2 objects and tokens are left in place, not deleted. For a second account, deploy a second Instance.
+
+## Security logs
+
+RSilo writes one JSON line to the Worker's log for each security event. Successful storage requests are not logged. Every line has `event`, `ip` (from `CF-Connecting-IP`), `method` and `path`, plus:
+
+| `event` | When | Extra fields |
+| --- | --- | --- |
+| `storage.auth_denied` | Storage refused a request: `401` (`missing_token`, `invalid_token`) or `403` (`insufficient_scope`, `wrong_account`; `unknown_account` for a username other than the Account) | `status`, `reason`, `required_scope` |
+| `rate_limit.exceeded` | A `429` | `limiter` |
+| `oauth.consent_approved`, `oauth.consent_denied` | You allowed or denied an app (an implicit-flow token is issued on approval) | `client_id`, `scope`, `response_type` |
+| `oauth.token_issued` | An app exchanged a code for tokens | `grant_type`, `client_id`, `scope` |
+| `oauth.token_refreshed` | An app rotated its refresh token | `client_id`, `scope` |
+| `oauth.invalid_grant` | The token endpoint refused a code or refresh token | `grant_type`, `reason` (`invalid_code`, `redirect_uri_mismatch`, `pkce_mismatch`, `invalid_refresh_token`), `client_id` when known |
+| `account.app_revoked` | You revoked an app on `/account` | `client_id` |
+| `account.owner_rejected` | A signed-in identity other than `OWNER_EMAIL` reached `/account` | `email` |
+
+Tokens, codes, `code_verifier`s, `Authorization` headers and document contents are never logged. Paths are, so the names of files in refused requests appear in the log.
+
+To read them, open your Worker in the Cloudflare dashboard → **Observability** → **Logs** (`wrangler.toml` enables Workers Logs) and filter on `event`, or stream them live from a checkout with `wrangler tail <worker name> --format json`. Workers Logs keeps a few days of history; see Cloudflare's Workers Logs limits for your plan.
 
 ## Running on the Cloudflare free tier
 
@@ -438,7 +457,7 @@ The consent page is always for the Account, so its URL has no username; tokens a
 
 PKCE is `S256` only. The `plain` method, or a challenge with no method, is a `400` on the consent page. The implicit flow ignores PKCE parameters. `/oauth/:user` advertises `code_challenge_methods_supported: ["S256"]`.
 
-Per protocol §10, `client_id` must be an `http(s)` URL and `redirect_uri` an `http(s)` URL on the same origin; otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
+Per protocol §10, `client_id` must be a URL and `redirect_uri` a URL on the same origin. Both must be `https`, except on a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`), where plain `http` is allowed for local development: anywhere else an `http` redirect would carry the code or token across the network in the clear. Otherwise the consent page (on `GET` and on approve or deny) answers `400` with a plain-text error and never redirects.
 
 The consent page used to be `/oauth/:user/authorize`. Apps (remoteStorage.js) cache discovery results, so that URL still answers `GET` with a `302` to `/account/oauth/authorize`, passing the query string through unchanged. `POST` there returns `405`, and any `:user` other than the Account returns `404`.
 
@@ -536,7 +555,7 @@ src/
                       owner (/account gate + CSRF)
   services/           auth (scopes), identity (Owner resolver: Cloudflare Access or dev identity),
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger matching),
-                      tokens (codes, tokens, refresh rotation), pkce, rate-limit,
+                      tokens (codes, tokens, refresh rotation), pkce, rate-limit, security-log,
                       r2 (+ getStorage), s3, local-storage, quota-storage (quota-aware writes),
                       object-size, storage-errors, db/ (schema types, SQLite D1 shim)
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
@@ -560,7 +579,7 @@ bun run lint             # eslint src and test
 bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 ```
 
-The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 
@@ -568,7 +587,7 @@ Every test that touches the database runs the real SQL that production runs: the
 
 ## Known limitations
 
-- **Rate limiting is per Cloudflare location.** The native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Storage counts only failed authentication (20 per 60s per IP), so syncs with a valid token are never throttled. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7).
+- **Rate limiting is per Cloudflare location.** The native rate-limit bindings count per data centre, not globally, so a distributed attacker gets more attempts. Three limiters, each per IP per 60s: failed storage authentication (20), public-document reads without a valid token for the Account (300, enough for a page that loads many shared files at once), and every request to the token endpoint (20; an app redeems a code once and refreshes at most hourly). Syncs and public reads with the Account's own token are never throttled. Over the limit is `429` with `Retry-After`. Production fails closed with `503` when a limiter binding is missing; local-development mode skips limiting. KV is deliberately not used: its free tier allows only 1,000 writes a day, which per-request counters exhaust in minutes (#7).
 - **Buffered uploads.** Upload bodies are bounded by `MAX_OBJECT_SIZE_BYTES` but buffered before storage so quota deltas can be reserved accurately. Downloads stream, except from the offline server.
 - **Conditional writes are not atomic on S3.** On R2, `If-Match` / `If-None-Match: *` on `PUT` are checked by R2 in the same operation as the write. Backblaze B2 refuses those headers on uploads, so on S3 storage RSilo checks them against the `HEAD` it makes just before writing, and two apps writing the same file at the same moment can both succeed. Deletes are checked the same way on both backends, because R2 has no conditional delete.
 - **Edits made directly to the bucket can take up to an hour to show in folder ETags.** RSilo caches each folder's ETag in D1 and clears it on every write it makes. A change made around RSilo, such as restoring files with `rclone copy`, is seen once the cached ETag expires, after an hour; until then apps see those folders as unchanged.

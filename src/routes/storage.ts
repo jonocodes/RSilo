@@ -10,7 +10,8 @@ import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingE
 import { KeyTooLongError, PathConflictError, PreconditionFailedError } from '../services/storage-errors';
 import { readFolderEtag, storeFolderEtag, type FolderEtagDatabase } from '../services/folder-etags';
 import { isLocalDevelopment } from '../config';
-import { enforceRateLimit, rateLimiterUnavailable, trustedClientIp } from '../services/rate-limit';
+import { enforceRateLimit, rateLimiterUnavailable } from '../services/rate-limit';
+import { securityEvent, trustedClientIp } from '../services/security-log';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
 
 export const storageRouter = new Hono();
@@ -57,7 +58,9 @@ storageRouter.use('/*', async (c, next) => {
 storageRouter.use('/*', requireInstanceConfig());
 storageRouter.use('/:username/*', async (c, next) => {
   if (c.req.param('username') === c.get('instance').accountUsername) return next();
-  return c.req.header('Authorization')
+  const hasToken = Boolean(c.req.header('Authorization'));
+  securityEvent(c, 'storage.auth_denied', { status: hasToken ? 403 : 401, reason: 'unknown_account' });
+  return hasToken
     ? c.text('Forbidden', 403, { 'WWW-Authenticate': 'Bearer realm="storage"' })
     : c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer realm="storage"' });
 });

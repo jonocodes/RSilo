@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readVars, setVars } from '../src/scripts/setup-config';
+import { expectEveryRateLimiter } from './helpers/ratelimits';
 
 const SETUP = resolve('src/scripts/setup.ts');
 
@@ -96,6 +97,13 @@ describe('bun run setup (fake wrangler)', () => {
     expect(res.out).toContain('Zero Trust → Access → Applications → RSilo app → Policies');
   });
 
+  it('carries every rate-limit binding into wrangler.prod.toml and the deployed config', () => {
+    const res = setup(['--owner-email', 'me@example.com']);
+    expect(res.status, res.out).toBe(0);
+    expectEveryRateLimiter(readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8'));
+    expectEveryRateLimiter(readFileSync(join(dir, 'deployed-0.toml'), 'utf8'));
+  });
+
   it('accepts --account-username as an optional override', () => {
     const res = setup(['--account-username=jono', '--owner-email=me@example.com']);
     expect(res.status, res.out).toBe(0);
@@ -178,6 +186,7 @@ describe('bun run setup with S3 storage (fake wrangler)', () => {
     const prod = readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8');
     expect(prod).not.toMatch(/r2_buckets|bucket_name/);
     expect(prod).toMatch(/\[\[d1_databases\]\]/);
+    expectEveryRateLimiter(prod);
     expect(prodVars()).toEqual({
       OWNER_EMAIL: 'me@example.com',
       S3_ENDPOINT: 'https://s3.us-west-004.backblazeb2.com',

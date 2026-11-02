@@ -274,7 +274,7 @@ debugRouter.get('/env', (c) => {
     bindings: {
       STORAGE: !!env?.STORAGE,
       DB: !!(env?.DB && typeof env.DB.prepare === 'function'),
-      STORAGE_LIMITER: typeof env?.STORAGE_LIMITER?.limit === 'function',
+      ...Object.fromEntries(Object.keys(RATE_LIMITS).map((name) => [name, typeof env?.[name]?.limit === 'function'])),
     },
     config_set: {
       ACCOUNT_USERNAME: isSet('ACCOUNT_USERNAME'),
