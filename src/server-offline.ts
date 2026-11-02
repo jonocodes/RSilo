@@ -8,6 +8,7 @@ import { LocalStorage } from './services/local-storage';
 import { createSqliteD1 } from './services/db/sqlite';
 import { readFileSync } from 'fs';
 import { DEV_ACCOUNT_USERNAME, DEV_OWNER_EMAIL, S3_VARS } from './config';
+import type { HonoEnv } from './types';
 
 function loadDevVars(path: string) {
   try {
@@ -45,21 +46,22 @@ const localStorage = new LocalStorage(STORAGE_DIR);
 const db = createSqliteD1(DB_PATH);
 
 // Route on the raw path, as the Worker does (src/index.ts).
-const app = new Hono({ getPath: rawRequestPath });
+const app = new Hono<HonoEnv>({ getPath: rawRequestPath });
 
 app.use('*', corsMiddleware());
 
 app.use('*', async (c, next) => {
-  (c.env as any).STORAGE = localStorage;
-  (c.env as any).DB = db;
-  (c.env as any).RSILO_DEV_MODE = 'true';
-  (c.env as any).ACCOUNT_USERNAME = ACCOUNT_USERNAME;
-  (c.env as any).OWNER_EMAIL = OWNER_EMAIL;
-  if (process.env.RSILO_DEV_EMAIL) (c.env as any).RSILO_DEV_EMAIL = process.env.RSILO_DEV_EMAIL;
-  (c.env as any).PUBLIC_BASE_URL = PUBLIC_BASE_URL;
+  c.env.STORAGE = localStorage;
+  // The SQLite shim implements the part of the D1 API that RSilo uses.
+  c.env.DB = db as unknown as D1Database;
+  c.env.RSILO_DEV_MODE = 'true';
+  c.env.ACCOUNT_USERNAME = ACCOUNT_USERNAME;
+  c.env.OWNER_EMAIL = OWNER_EMAIL;
+  if (process.env.RSILO_DEV_EMAIL) c.env.RSILO_DEV_EMAIL = process.env.RSILO_DEV_EMAIL;
+  c.env.PUBLIC_BASE_URL = PUBLIC_BASE_URL;
   // S3_* in the environment (e.g. a local MinIO) replace the local directory.
-  for (const name of [...S3_VARS, 'MAX_OBJECT_SIZE_BYTES']) {
-    if (process.env[name]) (c.env as any)[name] = process.env[name];
+  for (const name of [...S3_VARS, 'MAX_OBJECT_SIZE_BYTES'] as const) {
+    if (process.env[name]) c.env[name] = process.env[name];
   }
   await next();
 });

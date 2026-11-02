@@ -29,7 +29,7 @@ interface RateLimitOptions {
 }
 
 function getLimiter(c: Context, name: RateLimiterName): RateLimit | null {
-  const binding = (c.env as any)?.[name];
+  const binding = c.env?.[name];
   return binding && typeof binding.limit === 'function' ? binding : null;
 }
 

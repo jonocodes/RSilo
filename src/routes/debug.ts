@@ -1,30 +1,36 @@
 import { Hono } from 'hono';
 import { grants, hashToken, moduleOf, parseScope } from '../services/auth';
-import { buildKey, getStorage } from '../services/r2';
-import { RATE_LIMITS } from '../services/rate-limit';
+import { buildKey, getStorage, isR2Bucket } from '../services/r2';
+import { RATE_LIMITS, type RateLimiterName } from '../services/rate-limit';
 import { S3_VARS, getInstanceConfig, getStorageConfig, isLocalDevelopment } from '../config';
 import pkg from '../../package.json';
+import type { AppEnv, Context, HonoEnv } from '../types';
 
-const RATE_LIMITER_NAMES = Object.keys(RATE_LIMITS);
+const RATE_LIMITER_NAMES = Object.keys(RATE_LIMITS) as RateLimiterName[];
 
 // Agent-driven local debugging (ADR-0004). Mounted at /debug, and answered only
 // when the dev identity would be (dev mode, local host, no Cloudflare Access);
 // everywhere else every /debug/* path is a 404 (see routes/mount.ts).
-export const debugRouter = new Hono();
+export const debugRouter = new Hono<HonoEnv>();
 
 const VERSION = (pkg as { version?: string }).version || 'unknown';
 
-function storageBackend(env: any): 's3' | 'r2' | 'local' | 'unknown' {
+function storageBackend(env: AppEnv): 's3' | 'r2' | 'local' | 'unknown' {
   const config = getStorageConfig(env);
   if ('problems' in config || config.s3) return 's3';
   const raw = env?.STORAGE;
-  if (raw && typeof raw.createMultipartUpload === 'function') return 'r2';
+  if (isR2Bucket(raw)) return 'r2';
   if (raw && typeof raw.list === 'function') return 'local';
   return 'unknown';
 }
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+// An error's message, or the thrown value itself when it has none.
+function errorDetail(e: unknown): string {
+  return String((e as { message?: unknown } | null | undefined)?.message || e);
 }
 
 function parseScopes(scopes: string): { raw: string; module: string; permissions: string }[] {
@@ -56,13 +62,14 @@ interface Introspection {
 // Mirrors the storage auth middleware: a token is valid only while its
 // unexpired row exists in oauth_tokens. Expired rows are still reported so the
 // expiry is visible.
-async function introspectToken(c: any, token: string): Promise<Introspection> {
+async function introspectToken(c: Context, token: string): Promise<Introspection> {
   const db = c.env?.DB;
   if (!db || typeof db.prepare !== 'function') {
     return { valid: false, source: null, reason: 'DB binding not available' };
   }
 
-  const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token_hash = ?').bind(await hashToken(token)).first() as any;
+  const row = await db.prepare('SELECT * FROM oauth_tokens WHERE access_token_hash = ?').bind(await hashToken(token))
+    .first<{ user_id: string; scopes: string; created_at: number; expires_at: number }>();
   if (!row) {
     return { valid: false, source: null, reason: 'unknown or revoked token' };
   }
@@ -83,14 +90,14 @@ async function introspectToken(c: any, token: string): Promise<Introspection> {
   return result;
 }
 
-async function tokenHandler(c: any) {
+async function tokenHandler(c: Context) {
   let token = c.req.query('token') || c.req.header('X-RS-Token') || '';
 
   if (!token && c.req.method === 'POST') {
     const contentType = c.req.header('Content-Type') || '';
     try {
       if (contentType.includes('application/json')) {
-        const body = await c.req.json();
+        const body = await c.req.json<{ token?: string; access_token?: string } | null>();
         token = body?.token || body?.access_token || '';
       } else {
         const body = await c.req.parseBody();
@@ -132,8 +139,7 @@ debugRouter.get('/storage', async (c) => {
   const config = getInstanceConfig(c.env, c.req.url);
   if ('problems' in config) return c.json({ error: 'Instance is not configured', problems: config.problems }, 503);
   const username = config.config.accountUsername;
-  const env = c.env as any;
-  const db = env?.DB;
+  const db = c.env?.DB;
   if (!db || typeof db.prepare !== 'function') {
     return c.json({ error: 'Database not available' }, 503);
   }
@@ -141,18 +147,18 @@ debugRouter.get('/storage', async (c) => {
   const user = await db
     .prepare('SELECT username, storage_quota_bytes, used_storage_bytes FROM users WHERE username = ?')
     .bind(username)
-    .first() as any;
+    .first<{ username: string; storage_quota_bytes: number | null; used_storage_bytes: number | null }>();
   if (!user) return c.json({ error: 'Account row not found' }, 404);
 
   const storage = getStorage(c);
   const prefix = buildKey(username, '');
 
-  let objects: any[] = [];
+  let objects: { key: string; size: number }[] = [];
   try {
     const listed = await storage.list(prefix);
     objects = listed.objects || [];
-  } catch (e: any) {
-    return c.json({ error: 'Storage list failed', detail: String(e?.message || e) }, 502);
+  } catch (e) {
+    return c.json({ error: 'Storage list failed', detail: errorDetail(e) }, 502);
   }
 
   let actualBytes = 0;
@@ -197,8 +203,8 @@ debugRouter.get('/storage', async (c) => {
 // Does a real round-trip against each binding instead of reporting a static
 // status, so a misconfigured deployment is obvious in one request.
 debugRouter.get('/health/deep', async (c) => {
-  const env = c.env as any;
-  const checks: Record<string, any> = {};
+  const env = c.env;
+  const checks: Record<string, { ok: boolean; [detail: string]: unknown }> = {};
 
   const storage = getStorage(c);
   const key = `_healthcheck/${crypto.randomUUID()}`;
@@ -219,13 +225,13 @@ debugRouter.get('/health/deep', async (c) => {
       backend: storageBackend(env),
       ...(ok ? {} : { error: 'round-trip body mismatch' }),
     };
-  } catch (e: any) {
+  } catch (e) {
     try { await storage.delete(key); } catch { /* best effort cleanup */ }
     checks.storage = {
       ok: false,
       latency_ms: Date.now() - storageStart,
       backend: storageBackend(env),
-      error: String(e?.message || e),
+      error: errorDetail(e),
     };
   }
 
@@ -235,10 +241,10 @@ debugRouter.get('/health/deep', async (c) => {
   } else {
     const dbStart = Date.now();
     try {
-      const row = await db.prepare('SELECT 1 as ok').first() as any;
+      const row = await db.prepare('SELECT 1 as ok').first<{ ok: number }>();
       checks.database = { ok: row?.ok === 1, latency_ms: Date.now() - dbStart };
-    } catch (e: any) {
-      checks.database = { ok: false, latency_ms: Date.now() - dbStart, error: String(e?.message || e) };
+    } catch (e) {
+      checks.database = { ok: false, latency_ms: Date.now() - dbStart, error: errorDetail(e) };
     }
   }
 
@@ -262,19 +268,22 @@ debugRouter.get('/health/deep', async (c) => {
 
 // Redacted capability report: bindings and configuration as booleans only.
 debugRouter.get('/env', (c) => {
-  const env = c.env as any;
-  const isSet = (name: string) => typeof env?.[name] === 'string' && env[name].length > 0;
+  const env = c.env;
+  const isSet = (name: keyof AppEnv) => {
+    const value = env?.[name];
+    return typeof value === 'string' && value.length > 0;
+  };
   const backend = storageBackend(env);
 
   return c.json({
     runtime: backend === 'r2' ? 'cloudflare-worker' : 'offline-or-custom',
     version: VERSION,
-    git_sha: env?.GIT_SHA ?? null,
+    git_sha: (env as { GIT_SHA?: string } | undefined)?.GIT_SHA ?? null,
     storage_backend: backend,
     bindings: {
       STORAGE: !!env?.STORAGE,
       DB: !!(env?.DB && typeof env.DB.prepare === 'function'),
-      ...Object.fromEntries(Object.keys(RATE_LIMITS).map((name) => [name, typeof env?.[name]?.limit === 'function'])),
+      ...Object.fromEntries(RATE_LIMITER_NAMES.map((name) => [name, typeof env?.[name]?.limit === 'function'])),
     },
     config_set: {
       ACCOUNT_USERNAME: isSet('ACCOUNT_USERNAME'),
@@ -286,25 +295,29 @@ debugRouter.get('/env', (c) => {
   });
 });
 
+// Rows of the OAuth tables (drizzle/migrations), as far as /debug/oauth reads them.
+interface OAuthClientRow { id: string; name: string; user_id: string; redirect_uris: string; created_at: number }
+interface OAuthTokenRow { id: string; user_id: string; client_id: string; scopes: string; created_at: number; expires_at: number; refresh_token_hash: string | null }
+interface OAuthCodeRow { code_hash: string; client_id: string; user_id: string; scope: string; redirect_uri: string; created_at: number; expires_at: number }
+
 // Read-only view of the OAuth tables. Token and code secrets are never
 // returned (refresh tokens are reduced to a boolean, codes to a prefix).
 debugRouter.get('/oauth', async (c) => {
-  const env = c.env as any;
-  const db = env?.DB;
+  const db = c.env?.DB;
   if (!db || typeof db.prepare !== 'function') {
     return c.json({ error: 'Database not available' }, 503);
   }
 
   const now = nowSeconds();
-  let clients: any[] = [];
-  let tokens: any[] = [];
-  let codes: any[] = [];
+  let clients: OAuthClientRow[] = [];
+  let tokens: OAuthTokenRow[] = [];
+  let codes: OAuthCodeRow[] = [];
   try {
-    clients = (await db.prepare('SELECT * FROM oauth_clients').all()).results || [];
-    tokens = (await db.prepare('SELECT * FROM oauth_tokens').all()).results || [];
-    codes = (await db.prepare('SELECT * FROM oauth_codes').all()).results || [];
-  } catch (e: any) {
-    return c.json({ error: 'Failed to read OAuth tables', detail: String(e?.message || e) }, 502);
+    clients = (await db.prepare('SELECT * FROM oauth_clients').all<OAuthClientRow>()).results || [];
+    tokens = (await db.prepare('SELECT * FROM oauth_tokens').all<OAuthTokenRow>()).results || [];
+    codes = (await db.prepare('SELECT * FROM oauth_codes').all<OAuthCodeRow>()).results || [];
+  } catch (e) {
+    return c.json({ error: 'Failed to read OAuth tables', detail: errorDetail(e) }, 502);
   }
 
   const tokenRows = tokens.map((t) => ({
@@ -397,7 +410,7 @@ debugRouter.all('/echo', async (c) => {
   const tokenInfo = token ? await introspectToken(c, token) : null;
 
   const storagePath = c.req.query('path') || (url.pathname.startsWith('/storage/') ? url.pathname : null);
-  let storage: any = null;
+  let storage: Record<string, unknown> | null = null;
   if (storagePath) {
     const segments = storagePath.split('/').filter(Boolean);
     const start = segments[0] === 'storage' ? 1 : 0;

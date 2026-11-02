@@ -43,7 +43,7 @@ function form(params: Record<string, string> = {}): string {
   return new URLSearchParams({ ...REQUEST, action: 'approve', ...params }).toString();
 }
 
-function post(env: unknown, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
+function post(env: object, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
   return app.request(url, { method: 'POST', headers, body }, env, ctx);
 }
 

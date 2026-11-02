@@ -7,9 +7,9 @@ import { ACCESS_TOKEN_TTL_SECONDS, issueTokens, redeemCode, rotateRefreshToken }
 import type { IssuedTokens } from '../services/tokens';
 import { enforceRateLimit } from '../services/rate-limit';
 import { securityEvent, trustedClientIp } from '../services/security-log';
-import type { Context, Next } from '../types';
+import type { Context, HonoEnv, Next } from '../types';
 
-export const oauthRouter = new Hono();
+export const oauthRouter = new Hono<HonoEnv>();
 
 // Token issuance is for the Account only: any other username is a 404, and the
 // canonical ACCOUNT_USERNAME (not the path segment) is used for every row
@@ -87,7 +87,7 @@ oauthRouter.post('/:user/token', tokenRateLimit, ...forAccount, async (c) => {
   const grantType = param('grant_type');
 
   // Tokens and codes live in D1; dev mode may run without it.
-  const db = (c.env as { DB?: D1Database }).DB;
+  const db = c.env.DB;
   if (!db) return c.json({ error: 'server_error', error_description: 'Server database is not configured' }, 503);
 
   if (grantType === 'authorization_code') {

@@ -31,7 +31,7 @@ function devEnv(extra: Record<string, unknown> = {}) {
   return { STORAGE: new MemoryStorage(), DB: createSqliteD1(), ...extra };
 }
 
-function consent(env: unknown, params: Record<string, string>) {
+function consent(env: object, params: Record<string, string>) {
   const body = new URLSearchParams({
     client_id: CLIENT,
     redirect_uri: REDIRECT_URI,
@@ -45,12 +45,12 @@ function consent(env: unknown, params: Record<string, string>) {
   return app.request('http://localhost/account/oauth/authorize', { method: 'POST', headers: { ...SAME_ORIGIN, 'CF-Connecting-IP': IP }, body: body.toString() }, env);
 }
 
-async function approveCode(env: unknown): Promise<string> {
+async function approveCode(env: object): Promise<string> {
   const res = await consent(env, {});
   return new URL(res.headers.get('Location')!).searchParams.get('code')!;
 }
 
-async function token(env: unknown, body: Record<string, string>) {
+async function token(env: object, body: Record<string, string>) {
   const res = await app.request('http://localhost/oauth/alice/token', {
     method: 'POST',
     headers: { ...FORM, 'CF-Connecting-IP': IP },
@@ -59,7 +59,7 @@ async function token(env: unknown, body: Record<string, string>) {
   return { status: res.status, json: await res.json() as Record<string, string> };
 }
 
-function storage(env: unknown, path: string, init: RequestInit = {}) {
+function storage(env: object, path: string, init: RequestInit = {}) {
   return app.request(`http://localhost/storage/alice/${path}`, { ...init, headers: { 'CF-Connecting-IP': IP, ...init.headers } }, env);
 }
 

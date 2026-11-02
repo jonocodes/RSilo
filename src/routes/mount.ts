@@ -6,9 +6,10 @@ import { oauthRouter } from './oauth';
 import { accountRouter } from './account';
 import { debugRouter } from './debug';
 import { devIdentityAllowed } from '../services/identity';
+import type { HonoEnv } from '../types';
 
 /** Mounts every route; shared by the Worker (index.ts) and server-offline.ts. */
-export function mountRoutes(app: Hono): void {
+export function mountRoutes(app: Hono<HonoEnv>): void {
   // An unexpected error is logged and answered with a bare 500 that reveals
   // nothing about it. Errors thrown in the routers below land here too.
   app.onError((error, c) => {

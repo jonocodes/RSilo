@@ -41,7 +41,7 @@ async function signedJwt(username: string, secret: string): Promise<string> {
   return `${signingInput}.${base64Url(signature)}`;
 }
 
-async function getDocument(env: unknown, token: string) {
+async function getDocument(env: object, token: string) {
   const app = createServer(env);
   return app.request(
     'http://localhost/storage/alice/documents/note.txt',

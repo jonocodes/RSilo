@@ -1,14 +1,7 @@
 import type { Context, Next } from '../types';
 import { configurationMessage, getInstanceConfig, isLocalDevelopment } from '../config';
-import type { InstanceConfig } from '../config';
 import { ensureAccount, storedUsernames, usernameMismatchMessage } from '../services/account';
 import type { UsernameMismatch } from '../ui/setup-pages';
-
-declare module 'hono' {
-  interface ContextVariableMap {
-    instance: InstanceConfig;
-  }
-}
 
 /** Resolves ACCOUNT_USERNAME / PUBLIC_BASE_URL for this request, or answers 503 naming an invalid value. */
 export function requireInstanceConfig() {
@@ -30,7 +23,7 @@ export function requireInstanceConfig() {
 export function requireAccountRow(render?: (mismatch: UsernameMismatch) => string) {
   return async (c: Context, next: Next) => {
     const { accountUsername } = c.get('instance');
-    const db = (c.env as any)?.DB;
+    const db = c.env?.DB;
     if (!db || typeof db.prepare !== 'function') {
       // Mirrors storage accounting: dev mode tolerates a missing database.
       if (isLocalDevelopment(c.env)) return next();

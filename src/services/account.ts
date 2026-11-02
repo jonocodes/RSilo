@@ -14,7 +14,9 @@
 export type AccountStatus = 'ready' | 'username_mismatch';
 
 interface D1Like {
-  prepare(sql: string): any;
+  prepare(sql: string): {
+    bind(...values: unknown[]): { first(): Promise<unknown>; all(): Promise<unknown>; run(): Promise<unknown> };
+  };
 }
 
 // Memoised per isolate and per database binding: once a username is known to

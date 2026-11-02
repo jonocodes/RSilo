@@ -3,11 +3,12 @@ import { corsMiddleware } from './middleware/cors';
 import { mountRoutes } from './routes/mount';
 import { mountDocs } from './routes/docs';
 import { rawRequestPath } from './protocol/item-path';
+import type { HonoEnv } from './types';
 export { buildKey, R2Storage } from './services/r2';
 export type { AppEnv } from './types';
 
 // Route on the raw path; handlers decode item names (protocol/item-path.ts).
-const app = new Hono({ getPath: rawRequestPath });
+const app = new Hono<HonoEnv>({ getPath: rawRequestPath });
 
 app.use('*', corsMiddleware());
 

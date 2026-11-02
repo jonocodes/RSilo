@@ -7,7 +7,7 @@ export const FOLDER_MIME_TYPE = 'application/ld+json; charset=utf-8';
 // Empty folder structure per RemoteStorage spec
 export interface FolderItem {
   '@context': 'http://remotestorage.io/spec/folder-description';
-  items: Record<string, { ETag: string; 'Content-Type'?: string; 'Content-Length'?: number }>;
+  items: Record<string, { ETag: string; 'Content-Type'?: string; 'Content-Length'?: number; 'Last-Modified'?: string }>;
 }
 
 export function createEmptyFolder(): FolderItem {

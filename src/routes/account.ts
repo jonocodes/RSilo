@@ -11,8 +11,9 @@ import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from
 import { requireAccountRow } from '../middleware/instance';
 import { requireOwner, requireSameOrigin } from '../middleware/owner';
 import { consentRouter } from './consent';
+import type { Context, HonoEnv, StorageInterface } from '../types';
 
-export const accountRouter = new Hono();
+export const accountRouter = new Hono<HonoEnv>();
 
 // `formActionOrigin` is set only by the consent page, whose form must be
 // allowed to follow the approve/deny redirect to the app (routes/consent.ts).
@@ -49,15 +50,14 @@ accountRouter.get('/client.js', (_c) => new Response(ACCOUNT_CLIENT_SCRIPT, {
   },
 }));
 
-function getDb(c: any) {
+function getDb(c: Context) {
   return c.env.DB;
 }
 
-async function listFolder(storage: any, username: string, storagePath: string): Promise<{ name: string; isDir: boolean; size: number; etag: string }[]> {
+async function listFolder(storage: StorageInterface, username: string, storagePath: string): Promise<{ name: string; isDir: boolean; size: number; etag: string }[]> {
   const prefixPath = storagePath ? (storagePath.endsWith('/') ? storagePath : storagePath + '/') : '';
   const prefix = buildKey(username, prefixPath);
-  const raw = await storage.list(prefix);
-  const objects: { key: string; size: number; etag: string }[] = raw.objects;
+  const { objects } = await storage.list(prefix);
 
   const files: { name: string; isDir: boolean; size: number; etag: string }[] = [];
   const seenDirs = new Set<string>();
@@ -260,7 +260,7 @@ accountRouter.get('/', async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const tokensResult = await db.prepare(
     'SELECT client_id, scopes, created_at FROM oauth_tokens WHERE user_id = ? AND (expires_at > ? OR refresh_expires_at > ?)'
-  ).bind(username, now, now).all();
+  ).bind(username, now, now).all<{ client_id: string; scopes: string; created_at: number }>();
   const grants = groupGrants(tokensResult.results);
 
   const address = `${username}@${instance.publicHost}`;
@@ -595,8 +595,8 @@ accountRouter.post('/save/*', async (c) => {
   if (!filePath) return c.redirect('/account/browse', 302);
   if (!isValidDocumentPath(filePath)) return c.text('Invalid path', 400);
 
-  const body = await c.req.parseBody() as any;
-  const content: string = body.content ?? '';
+  const body = await c.req.parseBody();
+  const content = String(body.content ?? '');
 
   const storage = getStorage(c);
   const key = buildKey(username, filePath);
@@ -637,10 +637,10 @@ accountRouter.post('/upload/*', async (c) => {
   const folderPath = accountItemPath(c, 'upload');
   if (folderPath === null) return c.text('Invalid path', 400);
 
-  const body = await c.req.parseBody({ all: true }) as any;
+  const body = await c.req.parseBody({ all: true });
   const rawFiles = body['files'];
   const fileList: File[] = rawFiles
-    ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]).filter((f: any) => f instanceof File && f.size > 0)
+    ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]).filter((f): f is File => f instanceof File && f.size > 0)
     : [];
 
   if (!fileList.length) {

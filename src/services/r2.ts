@@ -1,5 +1,5 @@
 import type { R2Bucket, R2ListOptions } from '@cloudflare/workers-types';
-import type { StorageGetOptions, StorageInterface, WriteCondition } from '../types';
+import type { AppEnv, StorageGetOptions, StorageInterface, WriteCondition } from '../types';
 import { configurationMessage, getStorageConfig } from '../config';
 import { stripQuotes } from '../protocol/constants';
 import { S3Storage } from './s3';
@@ -9,17 +9,22 @@ import { PreconditionFailedError } from './storage-errors';
 // S3_* vars select an S3-compatible bucket (ADR-0005). Otherwise, in the Worker
 // runtime STORAGE is a raw R2Bucket; offline it is a LocalStorage instance (or
 // a test double) that already implements the interface.
-export function getStorage(c: any): StorageInterface {
+export function getStorage(c: { env: AppEnv }): StorageInterface {
   const config = getStorageConfig(c.env);
   // Routes resolve getInstanceConfig() first, which answers 503 for these.
   if ('problems' in config) throw new Error(configurationMessage(config.problems));
   if (config.s3) return new S3Storage(config.s3);
 
   const raw = c.env.STORAGE;
-  if (raw && typeof raw.createMultipartUpload === 'function') {
-    return new R2Storage(raw as R2Bucket);
+  if (isR2Bucket(raw)) {
+    return new R2Storage(raw);
   }
   return raw as StorageInterface;
+}
+
+/** Whether a STORAGE binding is a raw R2 bucket rather than a StorageInterface. */
+export function isR2Bucket(binding: AppEnv['STORAGE']): binding is R2Bucket {
+  return typeof (binding as Partial<R2Bucket> | undefined)?.createMultipartUpload === 'function';
 }
 
 export interface BlobMetadata {
@@ -38,10 +43,10 @@ export class R2Storage {
 
     const body = object.body || await object.arrayBuffer();
     const metadata: BlobMetadata = {
-      contentType: (object as any).contentType || (object as any).metadata?.contentType || (object as any).httpMetadata?.contentType || 'application/octet-stream',
-      contentLength: object.size ?? (object as any).metadata?.contentLength ?? (body instanceof ArrayBuffer ? body.byteLength : 0),
-      etag: (object as any).etag ?? (object as any).metadata?.etag ?? null,
-      lastModified: (object as any).uploaded?.toISOString?.() ?? (object as any).lastModified,
+      contentType: object.httpMetadata?.contentType || 'application/octet-stream',
+      contentLength: object.size,
+      etag: object.etag,
+      lastModified: object.uploaded?.toISOString(),
     };
 
     return { body, metadata };
@@ -71,7 +76,7 @@ export class R2Storage {
       contentType: object.httpMetadata?.contentType || 'application/octet-stream',
       contentLength: object.size,
       etag: object.etag,
-      lastModified: (object as any).uploaded?.toISOString?.() ?? (object as any).lastModified,
+      lastModified: object.uploaded?.toISOString(),
     };
   }
 
@@ -91,7 +96,7 @@ export class R2Storage {
         size: obj.size,
         etag: obj.etag,
         contentType: obj.httpMetadata?.contentType,
-        lastModified: (obj as any).uploaded?.toISOString?.(),
+        lastModified: obj.uploaded?.toISOString(),
       })));
 
       if (!listed.truncated || (limit && objects.length >= limit)) break;
