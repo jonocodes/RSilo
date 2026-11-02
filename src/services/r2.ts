@@ -1,4 +1,4 @@
-import type { R2Bucket, R2ListOptions } from '@cloudflare/workers-types';
+import type { R2Bucket } from '@cloudflare/workers-types/2023-07-01';
 import type { AppEnv, StorageGetOptions, StorageInterface, WriteCondition } from '../types';
 import { configurationMessage, getStorageConfig } from '../config';
 import { stripQuotes } from '../protocol/constants';
@@ -87,10 +87,8 @@ export class R2Storage {
 
     do {
       // R2 omits httpMetadata (the content type) from listings unless asked.
-      // `include` is missing from the default (oldest compatibility date)
-      // R2ListOptions type, though this Worker's compatibility date needs it.
       const pageLimit = limit ? Math.min(1000, limit - objects.length) : undefined;
-      const listed = await this.bucket.list({ prefix, cursor, limit: pageLimit, include: ['httpMetadata'] } as R2ListOptions);
+      const listed = await this.bucket.list({ prefix, cursor, limit: pageLimit, include: ['httpMetadata'] });
       objects.push(...listed.objects.map(obj => ({
         key: obj.key,
         size: obj.size,

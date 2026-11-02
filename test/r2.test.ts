@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { R2Bucket } from '@cloudflare/workers-types';
+import type { R2Bucket } from '@cloudflare/workers-types/2023-07-01';
 import { R2Storage } from '../src/services/r2';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';

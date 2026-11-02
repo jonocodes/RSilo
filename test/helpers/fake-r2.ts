@@ -6,7 +6,7 @@
 // listed object unless asked with include: ['httpMetadata'].
 
 import { createHash } from 'node:crypto';
-import type { R2Bucket } from '@cloudflare/workers-types';
+import type { R2Bucket } from '@cloudflare/workers-types/2023-07-01';
 
 export interface FakeR2Object {
   body: Uint8Array<ArrayBuffer>;
