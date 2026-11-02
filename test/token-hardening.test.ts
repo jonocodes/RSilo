@@ -36,7 +36,7 @@ function rows(env: { DB: SqliteD1 }, sql: string): any[] {
   return env.DB.sqlite.prepare(sql).all() as any[];
 }
 
-async function approve(env: unknown, params: Record<string, string> = {}) {
+async function approve(env: object, params: Record<string, string> = {}) {
   return app.request(CONSENT_URL, {
     method: 'POST',
     headers: SAME_ORIGIN,
@@ -44,25 +44,25 @@ async function approve(env: unknown, params: Record<string, string> = {}) {
   }, env);
 }
 
-async function authorizationCode(env: unknown): Promise<string> {
+async function authorizationCode(env: object): Promise<string> {
   const res = await approve(env);
   expect(res.status).toBe(302);
   return new URL(res.headers.get('Location')!).searchParams.get('code')!;
 }
 
-function exchange(env: unknown, params: Record<string, string>) {
+function exchange(env: object, params: Record<string, string>) {
   return app.request(TOKEN_URL, { method: 'POST', headers: FORM, body: new URLSearchParams(params).toString() }, env);
 }
 
-function redeem(env: unknown, code: string) {
+function redeem(env: object, code: string) {
   return exchange(env, { grant_type: 'authorization_code', code, redirect_uri: REQUEST.redirect_uri, code_verifier: PKCE.verifier });
 }
 
-function refresh(env: unknown, refreshToken: string) {
+function refresh(env: object, refreshToken: string) {
   return exchange(env, { grant_type: 'refresh_token', refresh_token: refreshToken });
 }
 
-function putFile(env: unknown, token: string) {
+function putFile(env: object, token: string) {
   return app.request('http://localhost/storage/alice/documents/a.txt', {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
@@ -180,7 +180,7 @@ describe('refresh token rotation', () => {
 });
 
 describe('implicit-flow tokens', () => {
-  async function implicitToken(env: unknown): Promise<URLSearchParams> {
+  async function implicitToken(env: object): Promise<URLSearchParams> {
     const res = await approve(env, { response_type: 'token', code_challenge: '', code_challenge_method: '' });
     expect(res.status).toBe(302);
     return new URLSearchParams(new URL(res.headers.get('Location')!).hash.slice(1));

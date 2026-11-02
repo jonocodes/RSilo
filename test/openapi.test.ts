@@ -11,7 +11,7 @@ const doc = buildOpenApiDocument(app);
 
 function documentedKeys(): Set<string> {
   const keys = new Set<string>();
-  for (const [path, item] of Object.entries(doc.paths as Record<string, Record<string, unknown>>)) {
+  for (const [path, item] of Object.entries(doc.paths)) {
     for (const method of Object.keys(item)) keys.add(routeKey(method.toUpperCase(), path));
   }
   return keys;

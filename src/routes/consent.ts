@@ -3,7 +3,7 @@ import { parseScopes } from '../services/auth';
 import { parsePkceRequest } from '../services/pkce';
 import { securityEvent } from '../services/security-log';
 import { IMPLICIT_TOKEN_TTL_SECONDS, issueCode, issueTokens, recordClient } from '../services/tokens';
-import type { Context } from '../types';
+import type { Context, HonoEnv } from '../types';
 
 // The OAuth consent dialog (ADR-0004). Mounted by the /account router at
 // /oauth, so it inherits the whole /account gate: the Owner check, the
@@ -14,14 +14,7 @@ import type { Context } from '../types';
 // between rendering and submitting (Access swallows the POST into its login
 // redirect) the Owner can simply reload and retry.
 
-declare module 'hono' {
-  interface ContextVariableMap {
-    /** Extra origin the page's CSP form-action allows (see routes/account.ts). */
-    formActionOrigin: string;
-  }
-}
-
-export const consentRouter = new Hono();
+export const consentRouter = new Hono<HonoEnv>();
 
 const DEFAULT_SCOPE = 'documents:rw';
 
@@ -73,7 +66,7 @@ function appUrl(value: string): URL | null {
  * redirect target is exactly what cannot be trusted.
  */
 function parseAuthorizationRequest(params: Record<string, unknown>): Parsed {
-  const str = (key: string) => (typeof params[key] === 'string' ? params[key] as string : '');
+  const str = (key: string) => (typeof params[key] === 'string' ? params[key] : '');
   const clientId = str('client_id');
   const redirectUri = str('redirect_uri');
   const responseType = str('response_type');
@@ -185,7 +178,7 @@ consentRouter.post('/authorize', async (c) => {
   }
 
   // The grant must be stored before the app is sent its token or code.
-  const db = (c.env as { DB?: D1Database }).DB;
+  const db = c.env.DB;
   if (!db) return c.text('Server database is not configured', 503);
 
   const location = await issueGrant(db, c.get('instance').accountUsername, request);

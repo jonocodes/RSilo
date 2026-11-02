@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import { storageAuth } from '../middleware/auth';
 import { requireAccountRow, requireInstanceConfig } from '../middleware/instance';
 import { buildKey, getStorage } from '../services/r2';
-import { FOLDER_MIME_TYPE, normalizeETag, stripQuotes, createEmptyFolder } from '../protocol/constants';
+import { FOLDER_MIME_TYPE, normalizeETag, stripQuotes, createEmptyFolder, type FolderItem } from '../protocol/constants';
 import { decodeItemPath } from '../protocol/item-path';
 import { contentRange, parseRange, type ByteRange } from '../protocol/range';
-import type { Context, StorageInterface } from '../types';
+import type { Context, HonoEnv, StorageInterface } from '../types';
 import { deleteUserObject, putUserObject, QuotaExceededError, StorageAccountingError } from '../services/quota-storage';
 import { KeyTooLongError, PathConflictError, PreconditionFailedError } from '../services/storage-errors';
 import { readFolderEtag, storeFolderEtag, type FolderEtagDatabase } from '../services/folder-etags';
@@ -14,9 +14,9 @@ import { enforceRateLimit, rateLimiterUnavailable } from '../services/rate-limit
 import { securityEvent, trustedClientIp } from '../services/security-log';
 import { maxObjectSize, ObjectTooLargeError, readRequestBody } from '../services/object-size';
 
-export const storageRouter = new Hono();
+export const storageRouter = new Hono<HonoEnv>();
 
-storageRouter.use('/*', async (c, next) => {
+storageRouter.use('/*', async (c: Context, next) => {
   const url = new URL(c.req.url);
 
   // Dot segments, raw or encoded. Names merely containing dots ("..a") are
@@ -56,7 +56,7 @@ storageRouter.use('/*', async (c, next) => {
 // 404. It also needs the Account row (quota counter); in the username-mismatch
 // state every storage request is refused with 503.
 storageRouter.use('/*', requireInstanceConfig());
-storageRouter.use('/:username/*', async (c, next) => {
+storageRouter.use('/:username/*', async (c: Context, next) => {
   if (c.req.param('username') === c.get('instance').accountUsername) return next();
   const hasToken = Boolean(c.req.header('Authorization'));
   securityEvent(c, 'storage.auth_denied', { status: hasToken ? 403 : 401, reason: 'unknown_account' });
@@ -125,7 +125,7 @@ const DOCUMENT_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 };
 
-async function handleStorageGet(c: any, username: string, fullPath: string): Promise<Response> {
+async function handleStorageGet(c: Context, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
 
   if (path === null) {
@@ -223,7 +223,7 @@ function ifNoneMatchIncludes(c: Context, etag: string): boolean {
 // not cached: a client only GETs a subfolder whose ETag changed, which needs
 // the body, so a listing for it is made either way. Changes made to the bucket
 // directly show after FOLDER_ETAG_MAX_AGE_SECONDS at most.
-async function handleFolderGet(c: any, storage: StorageInterface, username: string, path: string): Promise<Response> {
+async function handleFolderGet(c: Context, storage: StorageInterface, username: string, path: string): Promise<Response> {
   const folderPath = path === '' || path.endsWith('/') ? path : path + '/';
   const folderKey = buildKey(username, folderPath);
 
@@ -238,7 +238,7 @@ async function handleFolderGet(c: any, storage: StorageInterface, username: stri
 
   const { objects } = await storage.list(folderKey);
 
-  const items: Record<string, any> = {};
+  const items: FolderItem['items'] = {};
   // Directory markers (keys ending in `/`, which some S3 tools create) are not
   // documents, so they never count towards a folder's version.
   const documents: { path: string; etag: string }[] = [];
@@ -299,7 +299,7 @@ function logCacheFailure(error: unknown): undefined {
   return undefined;
 }
 
-async function handleStoragePut(c: any, username: string, fullPath: string): Promise<Response> {
+async function handleStoragePut(c: Context, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
 
   if (path === null) {
@@ -328,7 +328,7 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   try {
     const { etag, created } = await putUserObject({
       storage,
-      db: (c.env as any).DB,
+      db: c.env.DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
       key,
@@ -342,7 +342,7 @@ async function handleStoragePut(c: any, username: string, fullPath: string): Pro
   }
 }
 
-async function handleStorageDelete(c: any, username: string, fullPath: string): Promise<Response> {
+async function handleStorageDelete(c: Context, username: string, fullPath: string): Promise<Response> {
   const path = storagePath(fullPath, username);
 
   if (path === null) {
@@ -356,7 +356,7 @@ async function handleStorageDelete(c: any, username: string, fullPath: string): 
   try {
     const etag = await deleteUserObject({
       storage: getStorage(c),
-      db: (c.env as any).DB,
+      db: c.env.DB,
       allowUnaccounted: isLocalDevelopment(c.env),
       username,
       key: buildKey(username, path),

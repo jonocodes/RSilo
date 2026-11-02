@@ -48,7 +48,7 @@ describe('item names', () => {
   async function listing(folder = '') {
     const res = await req(`${ROOT}/${folder}`);
     expect(res.status).toBe(200);
-    return ((await res.json()) as { items: Record<string, unknown> }).items;
+    return (await res.json<{ items: Record<string, unknown> }>()).items;
   }
 
   for (const name of NAMES) {

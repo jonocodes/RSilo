@@ -43,7 +43,7 @@ function form(params: Record<string, string> = {}): string {
   return new URLSearchParams({ ...REQUEST, action: 'approve', ...params }).toString();
 }
 
-function post(env: unknown, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
+function post(env: object, body: string, headers: Record<string, string> = SAME_ORIGIN, url = CONSENT_URL, ctx?: any) {
   return app.request(url, { method: 'POST', headers, body }, env, ctx);
 }
 
@@ -101,7 +101,7 @@ describe('consent page (GET /account/oauth/authorize)', () => {
   it('defaults a missing scope to documents:rw', async () => {
     const params = new URLSearchParams(REQUEST);
     params.delete('scope');
-    const res = await app.request(`${CONSENT_URL}?${params}`, {}, devEnv());
+    const res = await app.request(`${CONSENT_URL}?${params.toString()}`, {}, devEnv());
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('name="scope" value="documents:rw"');
   });

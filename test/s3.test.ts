@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { R2Bucket } from '@cloudflare/workers-types/2023-07-01';
 import { getInstanceConfig, getStorageConfig } from '../src/config';
 import { createServer } from '../src/index';
 import { getStorage, R2Storage } from '../src/services/r2';
@@ -77,7 +78,8 @@ describe('getStorageConfig', () => {
 
 describe('getStorage', () => {
   it('prefers S3 over an R2 binding that is still present', () => {
-    const r2 = { createMultipartUpload() {} };
+    // getStorage recognises an R2 binding by createMultipartUpload alone.
+    const r2 = { createMultipartUpload() {} } as unknown as R2Bucket;
     expect(getStorage({ env: { ...S3_ENV, STORAGE: r2 } })).toBeInstanceOf(S3Storage);
     expect(getStorage({ env: { STORAGE: r2 } })).toBeInstanceOf(R2Storage);
   });
@@ -222,7 +224,7 @@ describe('storage routes on S3', () => {
 
     const folder = await app.request('http://localhost/storage/alice/documents/', { headers: auth }, env);
     expect(folder.status).toBe(200);
-    expect(Object.keys((await folder.json() as { items: object }).items)).toEqual(['notes/']);
+    expect(Object.keys((await folder.json<{ items: object }>()).items)).toEqual(['notes/']);
 
     const del = await app.request(url, { method: 'DELETE', headers: auth }, env);
     expect(del.status).toBe(200);

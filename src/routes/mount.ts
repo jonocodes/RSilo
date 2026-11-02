@@ -6,9 +6,10 @@ import { oauthRouter } from './oauth';
 import { accountRouter } from './account';
 import { debugRouter } from './debug';
 import { devIdentityAllowed } from '../services/identity';
+import type { Context, HonoEnv } from '../types';
 
 /** Mounts every route; shared by the Worker (index.ts) and server-offline.ts. */
-export function mountRoutes(app: Hono): void {
+export function mountRoutes(app: Hono<HonoEnv>): void {
   // An unexpected error is logged and answered with a bare 500 that reveals
   // nothing about it. Errors thrown in the routers below land here too.
   app.onError((error, c) => {
@@ -25,7 +26,7 @@ export function mountRoutes(app: Hono): void {
   app.get('/account/', (c) => c.redirect('/account', 301));
   app.route('/account', accountRouter);
   // Dev-only: outside the dev identity guard every /debug/* path is a 404.
-  app.use('/debug/*', async (c, next) => {
+  app.use('/debug/*', async (c: Context, next) => {
     if (!devIdentityAllowed(c)) return c.notFound();
     await next();
   });

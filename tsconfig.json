@@ -5,7 +5,9 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "types": ["@cloudflare/workers-types", "@types/node", "bun", "vitest/globals"],
+    // Workers types for wrangler.toml's compatibility_date (2025-01-01): the
+    // newest dated entrypoint not after it. Imports name the same entrypoint.
+    "types": ["@cloudflare/workers-types/2023-07-01", "@types/node", "bun", "vitest/globals"],
     "lib": ["ES2022"],
     "skipLibCheck": true,
     "isolatedModules": true,

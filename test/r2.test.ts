@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { R2Bucket } from '@cloudflare/workers-types';
+import type { R2Bucket } from '@cloudflare/workers-types/2023-07-01';
 import { R2Storage } from '../src/services/r2';
 import { createServer } from '../src/index';
 import { createSqliteD1 } from '../src/services/db/sqlite';
@@ -54,7 +54,7 @@ describe('R2 binding through the routes', () => {
     expect(await got.text()).toBe('{}');
 
     const folder = await app.request('http://localhost/storage/alice/documents/', { headers: auth }, env);
-    const listing = await folder.json() as { items: Record<string, { 'Content-Type': string; 'Content-Length': number }> };
+    const listing = await folder.json<{ items: Record<string, { 'Content-Type': string; 'Content-Length': number }> }>();
     expect(listing.items).toEqual({ 'note.json': expect.objectContaining({ 'Content-Type': 'application/json', 'Content-Length': 2 }) });
 
     expect((await app.request(url, { method: 'DELETE', headers: auth }, env)).status).toBe(200);

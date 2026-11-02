@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { buildOpenApiDocument } from '../openapi/spec';
+import type { HonoEnv } from '../types';
 
 // The page runs on the account origin, so the third-party script is pinned to
 // one exact build and checked by Subresource Integrity. To upgrade, change the
@@ -36,7 +37,7 @@ export function apiDocsHtml(): string {
 </html>`;
 }
 
-export function mountDocs(app: Hono): void {
+export function mountDocs(app: Hono<HonoEnv>): void {
   app.get('/api', (c) => c.html(apiDocsHtml()));
   app.get('/openapi.json', (c) => c.json(buildOpenApiDocument(app)));
 }

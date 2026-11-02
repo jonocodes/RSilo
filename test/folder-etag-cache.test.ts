@@ -40,7 +40,7 @@ beforeEach(() => {
   token = seedToken(env, 'alice', '*:rw');
 });
 
-function request(method: string, path: string, headers: Record<string, string> = {}, body?: string) {
+async function request(method: string, path: string, headers: Record<string, string> = {}, body?: string) {
   return app.request(
     `http://localhost/storage/alice/${path}`,
     { method, headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain', ...headers }, body },
@@ -93,7 +93,7 @@ describe('folder ETag cache', () => {
       fresh.forEach((etag, i) => expect(etag).not.toBe(etags[i]));
 
       // The parent's entry for a/b/ is still the ETag a/b/ serves.
-      const parent = await (await request('GET', 'documents/a/')).json() as { items: Record<string, { ETag: string }> };
+      const parent = await (await request('GET', 'documents/a/')).json<{ items: Record<string, { ETag: string }> }>();
       expect(`"${parent.items['b/'].ETag}"`).toBe(fresh[3]);
 
       expect((await request('GET', 'documents/x/', ifNoneMatch(sibling))).status).toBe(304);
@@ -150,7 +150,7 @@ describe('folder ETag cache', () => {
     expect((await request('PUT', 'documents/a', {}, 'one')).status).toBe(201);
     const res = await request('GET', 'documents/');
     expect(res.status).toBe(200);
-    expect(Object.keys((await res.json() as { items: object }).items)).toEqual(['a']);
+    expect(Object.keys((await res.json<{ items: object }>()).items)).toEqual(['a']);
     expect(logged).toHaveBeenCalled();
     logged.mockRestore();
   });

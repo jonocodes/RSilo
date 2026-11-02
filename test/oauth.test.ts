@@ -44,7 +44,7 @@ function withLatency(db: SqliteD1): SqliteD1 {
   return { ...db, prepare: (sql: string) => statement(db.prepare(sql)) };
 }
 
-function exchange(env: unknown, body: Record<string, string>) {
+function exchange(env: object, body: Record<string, string>) {
   return createServer(env).request('http://localhost/oauth/alice/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

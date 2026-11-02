@@ -86,7 +86,7 @@ async function identityEmail(c: Context, ownerEmail: string | null): Promise<str
     }
   }
   if (devIdentityAllowed(c)) {
-    const devEmail = (c.env as { RSILO_DEV_EMAIL?: string } | undefined)?.RSILO_DEV_EMAIL?.trim();
+    const devEmail = c.env?.RSILO_DEV_EMAIL?.trim();
     return devEmail || ownerEmail;
   }
   return undefined;

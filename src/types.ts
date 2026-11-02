@@ -1,9 +1,15 @@
-import type { R2Bucket, RateLimit } from '@cloudflare/workers-types';
+import type { Context as HonoContext, Next as HonoNext } from 'hono';
+import type { R2Bucket, RateLimit } from '@cloudflare/workers-types/2023-07-01';
+import type { InstanceConfig } from './config';
 
 export interface AppEnv {
-  /** R2 bucket. Unused, and may be absent, when the S3_* vars are set (ADR-0005). */
-  STORAGE?: R2Bucket;
-  DB: D1Database;
+  /**
+   * R2 bucket. Unused, and may be absent, when the S3_* vars are set (ADR-0005).
+   * Offline (server-offline.ts) and in tests it is a StorageInterface instead.
+   */
+  STORAGE?: R2Bucket | StorageInterface;
+  /** Always bound in a deployed Worker; routes answer 503 without it (dev mode tolerates its absence). */
+  DB?: D1Database;
   STORAGE_LIMITER?: RateLimit;
   PUBLIC_LIMITER?: RateLimit;
   TOKEN_LIMITER?: RateLimit;
@@ -59,5 +65,21 @@ export interface StorageInterface {
   list(prefix: string, options?: { limit?: number }): Promise<{ objects: { key: string; size: number; etag: string; contentType?: string; lastModified?: string }[] }>;
 }
 
-export type Context = import('hono').Context;
-export type Next = import('hono').Next;
+/** Request-scoped values that middleware sets (c.set) for later handlers (c.get). */
+export interface AppVariables {
+  /** Set by requireInstanceConfig() or requireOwner() (middleware/). */
+  instance: InstanceConfig;
+  /** Set by requireOwner(): the signed-in Owner's email. */
+  ownerEmail: string;
+  /** Set only by the consent page: an extra origin its CSP form-action allows (routes/account.ts). */
+  formActionOrigin?: string;
+}
+
+/** The Hono environment of every app, router and middleware: `new Hono<HonoEnv>()`. */
+export interface HonoEnv {
+  Bindings: AppEnv;
+  Variables: AppVariables;
+}
+
+export type Context = HonoContext<HonoEnv>;
+export type Next = HonoNext;

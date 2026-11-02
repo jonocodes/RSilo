@@ -42,7 +42,7 @@ function safeDecode(segment: string): string {
 export function storageAuth() {
   return async (c: Context, next: Next) => {
     // Tokens live in D1, so storage auth is configured once the DB is bound.
-    const db = (c.env as { DB?: D1Database } | undefined)?.DB;
+    const db = c.env?.DB;
     if (!db) {
       return c.text('Server authentication is not configured', 503);
     }

@@ -3,12 +3,6 @@ import { isSameOriginRequest, resolveOwner } from '../services/identity';
 import { securityEvent } from '../services/security-log';
 import { finishSetupPage, forbiddenPage } from '../ui/setup-pages';
 
-declare module 'hono' {
-  interface ContextVariableMap {
-    ownerEmail: string;
-  }
-}
-
 const HTML = { 'Content-Type': 'text/html; charset=utf-8' };
 
 /**

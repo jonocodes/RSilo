@@ -66,11 +66,12 @@ function wrangler(args: string[], capture = false, input?: string): { status: nu
   return { status: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 }
 
-function parseJsonArray(raw: string): any[] {
+// The entries of `wrangler ... --json` lists, as far as setup reads them.
+function parseJsonArray(raw: string): { name?: string; uuid?: string }[] {
   const start = raw.indexOf('[');
   if (start === -1) return [];
   try {
-    return JSON.parse(raw.slice(start));
+    return JSON.parse(raw.slice(start)) as { name?: string; uuid?: string }[];
   } catch {
     return [];
   }

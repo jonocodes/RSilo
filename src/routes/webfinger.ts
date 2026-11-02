@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { PROTOCOL_VERSION } from '../protocol/constants';
 import { requireInstanceConfig } from '../middleware/instance';
 import { accountUrls, isAccountResource } from '../services/discovery';
-import type { Context } from '../types';
+import type { Context, HonoEnv } from '../types';
 
-export const webfingerRouter = new Hono();
+export const webfingerRouter = new Hono<HonoEnv>();
 
 webfingerRouter.get('/', (c) => {
   return c.html(`<!DOCTYPE html>
