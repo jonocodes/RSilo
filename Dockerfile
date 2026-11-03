@@ -8,7 +8,15 @@
 # identity off (see LISTEN_HOST in src/server-offline.ts): /account and /debug
 # have no identity source, and storage works with dev-token bearer tokens.
 # Publish the port on 127.0.0.1 all the same.
-FROM oven/bun:1.3.14-slim
+FROM oven/bun:1.3.14-alpine
+
+# Our own OCI labels, or the image inherits bun's: GHCR links the package to the
+# repo named in image.source. CI adds revision, version and created per build.
+LABEL org.opencontainers.image.source="https://github.com/jonocodes/RSilo" \
+      org.opencontainers.image.url="https://github.com/jonocodes/RSilo" \
+      org.opencontainers.image.title="rsilo" \
+      org.opencontainers.image.description="RSilo offline server (remoteStorage on SQLite and a local directory) for test suites and local use" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 WORKDIR /app
 COPY package.json bun.lock ./
