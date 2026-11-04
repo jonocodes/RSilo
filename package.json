@@ -43,7 +43,7 @@
   "cloudflare": {
     "bindings": {
       "OWNER_EMAIL": {
-        "description": "Your email address, the only setting RSilo needs. Only this email may open `/account`; allow the same email in the Cloudflare Access policy (see the README, **Set up Cloudflare Access**). Your storage address will be `me@<your Worker's host>`."
+        "description": "Your email address, the only setting RSilo needs. Only this email may open `/account`; allow the same email in the Cloudflare Access policy (see https://github.com/jonocodes/RSilo/blob/main/docs/self-hosting.md#set-up-cloudflare-access). Your storage address will be `me@<your Worker's host>`."
       }
     }
   }
