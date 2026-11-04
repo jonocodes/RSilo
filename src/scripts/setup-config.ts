@@ -213,7 +213,7 @@ export function workersDevUrl(deployOutput: string): string | null {
 
 export const ZERO_TRUST_DASHBOARD_URL = 'https://one.dash.cloudflare.com/';
 
-/** Numbered manual Cloudflare Access steps for this Instance (see README). */
+/** Numbered manual Cloudflare Access steps for this Instance (see docs/self-hosting.md). */
 export function accessSteps(publicBaseUrl: string, ownerEmail?: string): string {
   const host = new URL(publicBaseUrl).host;
   const email = ownerEmail ? `${ownerEmail} (your OWNER_EMAIL)` : 'your OWNER_EMAIL';

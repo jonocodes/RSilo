@@ -191,12 +191,12 @@ console.log('✓ Cloudflare authenticated');
 if (s3Mode) {
   console.log(`• Files go to S3 bucket '${settings.S3_BUCKET}' at ${settings.S3_ENDPOINT}; R2 is not used`);
   if (existsSync(PROD_CONFIG_PATH) && !existingVars.S3_ENDPOINT) {
-    console.log('! This Instance used R2 until now. Files already in R2 are not copied to the S3 bucket (see README).');
+    console.log('! This Instance used R2 until now. Files already in R2 are not copied to the S3 bucket (see docs/self-hosting.md).');
   }
 } else {
   const buckets = wrangler(['r2', 'bucket', 'list'], true);
   if (/enable R2/i.test(buckets.out)) {
-    fail('R2 is not enabled on this account. Enable it in the Cloudflare dashboard (R2 → Enable) and re-run, or use an S3 bucket instead (see README).');
+    fail('R2 is not enabled on this account. Enable it in the Cloudflare dashboard (R2 → Enable) and re-run, or use an S3 bucket instead (see docs/self-hosting.md).');
   }
 
   const r2 = wrangler(['r2', 'bucket', 'create', BUCKET], true);
