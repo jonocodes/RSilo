@@ -1,5 +1,5 @@
 // An in-memory Cloudflare API for the Access endpoints `bun run setup` uses
-// (src/scripts/cloudflare-access.ts): the Zero Trust organization, identity
+// (src/services/cloudflare-access.ts): the Zero Trust organization, identity
 // providers, self-hosted apps with app-scoped policies, and reusable policies.
 // It answers in Cloudflare's { success, errors, result } envelope, refuses any
 // other bearer token with 403 / code 10000 as Cloudflare does, and shapes app

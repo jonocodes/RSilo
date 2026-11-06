@@ -1,6 +1,6 @@
 # Can `bun run setup` create the Cloudflare Access app itself?
 
-> **Status:** a snapshot from 2026-11-06, the spike for [#61](https://github.com/jonocodes/RSilo/issues/61). It was built from these findings: `src/scripts/cloudflare-access.ts`.
+> **Status:** a snapshot from 2026-11-06, the spike for [#61](https://github.com/jonocodes/RSilo/issues/61). It was built from these findings: `src/services/cloudflare-access.ts`.
 
 Checked 2026-11-06 against wrangler 4.147.0, Cloudflare's API docs, and read-only calls to the Access API of the production account. Anything not settled that way is marked **unverified**.
 

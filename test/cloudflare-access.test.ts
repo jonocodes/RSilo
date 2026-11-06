@@ -1,8 +1,8 @@
-// ensureAccessApp (src/scripts/cloudflare-access.ts) against an in-memory
+// ensureAccessApp (src/services/cloudflare-access.ts) against an in-memory
 // Cloudflare API: the Access app `bun run setup` creates, finds again on a
 // re-run, and brings back in line with OWNER_EMAIL.
 import { describe, expect, it } from 'vitest';
-import { CloudflareApiError, cloudflareApi, ensureAccessApp } from '../src/scripts/cloudflare-access';
+import { CloudflareApiError, cloudflareApi, ensureAccessApp } from '../src/services/cloudflare-access';
 import { emailPolicy, FAKE_ACCOUNT_ID, FAKE_API_BASE, FAKE_TOKEN, fakeCloudflareApi, manualApp } from './helpers/fake-cloudflare-api';
 
 const HOST = 'rsilo.my-sub.workers.dev';

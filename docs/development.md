@@ -100,11 +100,12 @@ src/
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger matching),
                       tokens (codes, tokens, refresh rotation), pkce, rate-limit, security-log,
                       r2 (+ getStorage), s3, local-storage, quota-storage (quota-aware writes),
-                      object-size, storage-errors, db/ (schema types, SQLite D1 shim)
+                      object-size, storage-errors, cloudflare-access (creates the Access app; used
+                      by setup and the finish-setup page), db/ (schema types, SQLite D1 shim)
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
   ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
-  scripts/            setup (+ setup-config: pure, unit-tested helpers; cloudflare-access: the Access app), deploy, release
+  scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
                       (bundle check + migrations, shared by both), wrangler-config,
                       dev-token, setup-local-db, render-api-docs, screenshots
 drizzle/migrations/   D1 migrations

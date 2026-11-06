@@ -3,7 +3,7 @@
 // Access texts (manual steps, token prompt, summary). No I/O here, so it is
 // unit-tested without Cloudflare.
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
-import type { AccessResult } from './cloudflare-access';
+import type { AccessResult } from '../services/cloudflare-access';
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
