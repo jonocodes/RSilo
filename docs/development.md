@@ -69,6 +69,20 @@ GET    /openapi.json     The OpenAPI 3.1 spec
 
 A static, always-current list of every endpoint lives in **[docs/api.md](api.md)**. The spec is derived from `app.routes` and a metadata registry, so the list of routes cannot drift (summaries and status codes in the registry are maintained by hand): `bun run docs:api` regenerates the static list, `bun run docs:api:check` verifies it without writing, and a test (run in CI) fails if it is stale.
 
+## Screenshots
+
+The README's screenshots live in `docs/images/`. After a UI change, regenerate them:
+
+```bash
+bun run docs:screenshots
+```
+
+It starts a throwaway offline server on port 8797 with a temporary database, seeds sample files, connects three apps through the real consent page, captures the dashboard, the file manager and the consent page, then deletes the temporary data. It drives Chromium through `playwright-core`, which uses a browser installed with `bunx playwright install chromium`. Where that browser will not launch (NixOS, for example), point `CHROME_PATH` at another Chromium build:
+
+```bash
+CHROME_PATH=$(ls -d /nix/store/*-playwright-chromium/*/chrome | head -1) bun run docs:screenshots
+```
+
 ## Project layout
 
 ```
@@ -92,7 +106,7 @@ src/
   protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
   scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
                       (bundle check + migrations, shared by both), wrangler-config,
-                      dev-token, setup-local-db, render-api-docs
+                      dev-token, setup-local-db, render-api-docs, screenshots
 drizzle/migrations/   D1 migrations
 test/                 unit, contract, compliance and E2E suites; helpers/ holds the storage and D1 fakes
 ```
