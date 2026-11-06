@@ -6,6 +6,8 @@ A [RemoteStorage.io](https://remotestorage.io)-compatible personal storage serve
 
 **Why this exists:** to give anyone — especially people who aren't technical — their own free, self-hosted place to back up and sync app data. One person, a small amount of data, no monthly bill, no vendor lock-in. Each deployment (an *Instance*) serves exactly one *Account*; more accounts means more Instances ([ADR-0002](docs/adr/0002-instances-are-single-user.md)).
 
+![The /account dashboard: your storage address, storage used against your quota, and the apps you have granted access, each revocable](docs/images/dashboard.png)
+
 ## What is RemoteStorage?
 
 RemoteStorage is an open protocol for syncing app data across devices. A server advertises where data lives, apps ask for permission to a module (like `documents` or `pictures`), then read/write files over plain HTTP.
@@ -21,6 +23,11 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 - **OAuth + WebFinger** so RemoteStorage apps can connect
 - **Public sharing** through the `public` module
 - Everything fits inside Cloudflare's **free tier** (see [Running on the Cloudflare free tier](docs/self-hosting.md#running-on-the-cloudflare-free-tier))
+
+<p>
+  <img src="docs/images/files.png" alt="The file manager: browse folders, then view, download, delete or upload files" width="68%">
+  <img src="docs/images/consent.png" alt="The consent page: an app asks for read and write access to the documents module, and you allow or deny it" width="30%">
+</p>
 
 ## Where to start
 
