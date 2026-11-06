@@ -315,9 +315,16 @@ Last step: open ${accountUrl} and sign in as ${ownerEmail}.
 ${ACCESS_AFTERWORD}`;
     default: {
       const what = { created: 'created the RSilo app', updated: 'updated its Allow policy', unchanged: 'already set up' }[outcome.status];
+      const pinAdded = outcome.status === 'created' && outcome.addedOneTimePin
+        ? `
+• Added the One-time PIN login method to your Zero Trust organization.
+  Your other Access apps that allow every login method offer it too; their
+  policies still decide who may sign in.
+`
+        : '';
       return `✓ Cloudflare Access protects ${host}/account (${what}): only ${ownerEmail}
   may sign in, with a one-time PIN sent to that address.
-
+${pinAdded}
 Last step: open ${accountUrl} and sign in.
 
 ${ACCESS_AFTERWORD}`;

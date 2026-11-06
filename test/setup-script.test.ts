@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readVars, setVars } from '../src/scripts/setup-config';
-import { FAKE_API_BASE, FAKE_TOKEN, fakeCloudflareApi, type FakeCloudflareApi } from './helpers/fake-cloudflare-api';
+import { emailPolicy, FAKE_API_BASE, FAKE_TOKEN, fakeCloudflareApi, manualApp, type FakeCloudflareApi } from './helpers/fake-cloudflare-api';
 import { expectEveryRateLimiter } from './helpers/ratelimits';
 
 const SETUP = resolve('src/scripts/setup.ts');
@@ -236,6 +236,22 @@ describe('bun run setup sets up Cloudflare Access (fake wrangler + fake Cloudfla
     expect(res.out).not.toContain('Add an application');
     expect(res.out).not.toContain(FAKE_TOKEN);
     expect(readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8')).not.toContain(FAKE_TOKEN);
+  });
+
+  it('on an account that already uses Zero Trust for other apps: adds the RSilo app, touches nothing else, says what it added', async () => {
+    const others = [manualApp('wiki.example.com', [emailPolicy('team@example.com')])];
+    fake.state.apps = structuredClone(others);
+    fake.state.identityProviders = [{ id: 'github-idp', name: 'GitHub', type: 'github' }];
+
+    const res = await setupWithAccess(['--owner-email=me@example.com']);
+    expect(res.status, res.out).toBe(0);
+    expect(fake.state.apps).toHaveLength(2);
+    expect(fake.state.apps[0]).toEqual(others[0]);
+    expect(fake.state.apps[1].domain).toBe('rsilo.test-sub.workers.dev/account');
+    expect(fake.state.identityProviders.map((idp) => idp.type)).toEqual(['github', 'onetimepin']);
+    expect(res.out).toContain('(created the RSilo app)');
+    expect(res.out).toContain('Added the One-time PIN login method to your Zero Trust organization.');
+    expect(res.out).not.toContain('Add an application');
   });
 
   it('changes the email in one step: a re-run with --owner-email updates both OWNER_EMAIL and the policy', async () => {

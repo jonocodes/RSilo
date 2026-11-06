@@ -106,7 +106,13 @@ interface AccessApp {
 }
 
 export type AccessResult =
-  | { status: 'created' | 'updated' | 'unchanged'; appId: string }
+  /**
+   * `addedOneTimePin`: the account had no One-time PIN login method, so one was
+   * added to its Zero Trust organization. Other Access apps that allow every
+   * login method now offer it too (their policies still decide who gets in).
+   */
+  | { status: 'created'; appId: string; addedOneTimePin: boolean }
+  | { status: 'updated' | 'unchanged'; appId: string }
   /** The app's Allow policy is a reusable one other apps use too, so it was left as is. */
   | { status: 'shared-policy'; appId: string; policyName: string }
   /** The account has no Zero Trust organization: the Owner must pick a team name and plan in the dashboard. */
@@ -131,11 +137,12 @@ function includesOnly(policy: AccessPolicy, ownerEmail: string): boolean {
 }
 
 /** The id of the account's one-time PIN login method, created if missing. */
-async function oneTimePinId(api: CloudflareApi): Promise<string> {
+async function oneTimePin(api: CloudflareApi): Promise<{ id: string; added: boolean }> {
   const idps = await api.call<IdentityProvider[]>('GET', '/access/identity_providers');
   const existing = idps.find((idp) => idp.type === 'onetimepin');
-  if (existing) return existing.id;
-  return (await api.call<IdentityProvider>('POST', '/access/identity_providers', { name: 'One-time PIN', type: 'onetimepin', config: {} })).id;
+  if (existing) return { id: existing.id, added: false };
+  const created = await api.call<IdentityProvider>('POST', '/access/identity_providers', { name: 'One-time PIN', type: 'onetimepin', config: {} });
+  return { id: created.id, added: true };
 }
 
 function ownerInclude(ownerEmail: string) {
@@ -196,15 +203,15 @@ export async function ensureAccessApp(api: CloudflareApi, opts: { host: string; 
     return { status: 'updated', appId: existing.id };
   }
 
-  const idp = await oneTimePinId(api);
+  const pin = await oneTimePin(api);
   const app = await api.call<AccessApp>('POST', '/access/apps', {
     name: ACCESS_APP_NAME,
     type: 'self_hosted',
     domain,
     destinations: [{ type: 'public', uri: domain }],
-    allowed_idps: [idp],
+    allowed_idps: [pin.id],
     auto_redirect_to_identity: true,
     policies: [{ name: OWNER_POLICY_NAME, decision: 'allow', include: ownerInclude(opts.ownerEmail), precedence: 1 }],
   });
-  return { status: 'created', appId: app.id };
+  return { status: 'created', appId: app.id, addedOneTimePin: pin.added };
 }

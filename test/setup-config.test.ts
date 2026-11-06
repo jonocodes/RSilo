@@ -236,7 +236,7 @@ describe('accessSummary', () => {
   const BASE = 'https://rsilo.my-sub.workers.dev';
 
   it('after automatic setup: names what is protected, for whom, and the one step left', () => {
-    const text = accessSummary({ status: 'created', appId: 'a' }, BASE, 'me@example.com');
+    const text = accessSummary({ status: 'created', appId: 'a', addedOneTimePin: false }, BASE, 'me@example.com');
     expect(text).toContain('✓ Cloudflare Access protects rsilo.my-sub.workers.dev/account');
     expect(text).toContain('me@example.com');
     expect(text).toMatch(/Last step: open https:\/\/rsilo\.my-sub\.workers\.dev\/account and sign in/);
@@ -245,9 +245,16 @@ describe('accessSummary', () => {
   });
 
   it('says whether the app was created, updated or already right', () => {
-    expect(accessSummary({ status: 'created', appId: 'a' }, BASE, 'me@example.com')).toMatch(/created/i);
+    expect(accessSummary({ status: 'created', appId: 'a', addedOneTimePin: false }, BASE, 'me@example.com')).toMatch(/created/i);
     expect(accessSummary({ status: 'updated', appId: 'a' }, BASE, 'me@example.com')).toMatch(/updated/i);
     expect(accessSummary({ status: 'unchanged', appId: 'a' }, BASE, 'me@example.com')).toMatch(/already/i);
+  });
+
+  it('mentions the One-time PIN login method only when setup had to add it to the account', () => {
+    const added = accessSummary({ status: 'created', appId: 'a', addedOneTimePin: true }, BASE, 'me@example.com');
+    expect(added).toMatch(/Added the One-time PIN login method to your Zero Trust organization/);
+    expect(added).toMatch(/other Access apps/);
+    expect(accessSummary({ status: 'created', appId: 'a', addedOneTimePin: false }, BASE, 'me@example.com')).not.toMatch(/Added the One-time PIN/);
   });
 
   it('for a shared reusable policy: names it and asks the Owner to check it', () => {

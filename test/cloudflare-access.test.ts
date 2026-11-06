@@ -17,7 +17,7 @@ describe('ensureAccessApp', () => {
     const result = await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'me@example.com' });
 
     expect(fake.state.apps).toHaveLength(1);
-    expect(result).toEqual({ status: 'created', appId: fake.state.apps[0].id });
+    expect(result).toEqual({ status: 'created', appId: fake.state.apps[0].id, addedOneTimePin: false });
     expect(fake.state.apps[0]).toMatchObject({
       name: 'RSilo',
       type: 'self_hosted',
@@ -93,13 +93,29 @@ describe('ensureAccessApp', () => {
     expect((err as Error).message).toContain('Authentication error (10000)');
   });
 
-  it('adds the one-time PIN login method when the account does not have it yet', async () => {
+  it('on an account already using Zero Trust for other apps: adds the RSilo app and leaves the rest alone', async () => {
+    const others = [manualApp('wiki.example.com', [emailPolicy('team@example.com')]), manualApp('grafana.example.com', [emailPolicy('ops@example.com')])];
+    const fake = fakeCloudflareApi({
+      apps: structuredClone(others),
+      identityProviders: [{ id: 'otp-idp', name: '', type: 'onetimepin' }, { id: 'github-idp', name: 'GitHub', type: 'github' }],
+    });
+
+    const result = await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'me@example.com' });
+    expect(fake.state.apps).toHaveLength(3);
+    expect(result).toEqual({ status: 'created', appId: fake.state.apps[2].id, addedOneTimePin: false });
+    expect(fake.state.apps.slice(0, 2)).toEqual(others);
+    expect(fake.state.apps[2].allowed_idps).toEqual(['otp-idp']);
+    expect(fake.writes()).toEqual(['POST /access/apps']);
+  });
+
+  it('adds the one-time PIN login method when the account does not have it yet, and says so', async () => {
     const fake = fakeCloudflareApi({ identityProviders: [{ id: 'github-idp', name: 'GitHub', type: 'github' }] });
-    await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'me@example.com' });
+    const result = await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'me@example.com' });
 
     const pin = fake.state.identityProviders.find((idp) => idp.type === 'onetimepin');
     expect(pin).toBeDefined();
     expect(fake.state.apps[0].allowed_idps).toEqual([pin!.id]);
+    expect(result).toMatchObject({ status: 'created', addedOneTimePin: true });
   });
 
   it('adds an Allow policy to an existing app that has none, instead of creating a second app', async () => {
