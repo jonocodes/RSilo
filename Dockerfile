@@ -10,7 +10,7 @@
 # Publish the port on 127.0.0.1 all the same.
 
 # Pinned by digest so a rebuild gets the same base; Dependabot bumps both.
-FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+FROM oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a
 
 # Our own OCI labels, or the image inherits bun's: GHCR links the package to the
 # repo named in image.source. CI adds revision, version and created per build.
