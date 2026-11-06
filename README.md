@@ -34,6 +34,7 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 | Work on the code or run it locally | [Development guide](docs/development.md) |
 | Read the endpoints, OAuth flow and storage scopes | [API reference](docs/api.md) |
 | Understand the design decisions | [Domain glossary](CONTEXT.md) and [ADRs](docs/adr/) |
+| See what changed, or report a security issue | [Changelog](CHANGELOG.md) · [Security policy](SECURITY.md) |
 
 ### Deploy your own
 

@@ -3,7 +3,7 @@ name: docker
 # Builds the offline-server image for amd64 and arm64, each on a native runner,
 # on every push and PR, and smoke-tests each. On main each leg pushes its image
 # by digest, then `manifest` joins them under ghcr.io/jonocodes/rsilo (:main and
-# :sha-<commit>).
+# :sha-<commit>). A release tag v<version> publishes :<version> and :latest.
 
 on:
   push:
@@ -37,11 +37,22 @@ jobs:
         run: |
           docker buildx create --use --name rsilo
           epoch=$(git log -1 --format=%ct)
+          case "$GITHUB_REF" in
+            refs/tags/v*) version=${GITHUB_REF_NAME#v} ;;
+            *) version=sha-${GITHUB_SHA::7} ;;
+          esac
           echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
           echo "BUILD_ARGS=--platform linux/${{ matrix.arch }} --provenance=false \
             --label org.opencontainers.image.revision=$GITHUB_SHA \
-            --label org.opencontainers.image.version=sha-${GITHUB_SHA::7} \
+            --label org.opencontainers.image.version=$version \
             --label org.opencontainers.image.created=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      # A release tag must name the version package.json declares.
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          declared=$(jq -r .version package.json)
+          test "$GITHUB_REF_NAME" = "v$declared" || { echo "tag $GITHUB_REF_NAME, package.json $declared"; exit 1; }
 
       - name: Build
         run: |
@@ -74,7 +85,7 @@ jobs:
           docker stop rsilo
 
       - name: Publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           # shellcheck disable=SC2086 # BUILD_ARGS is a list of flags
@@ -83,7 +94,7 @@ jobs:
           mkdir digests
           jq -r '."containerimage.digest"' meta.json > digests/${{ matrix.arch }}
 
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: digest-${{ matrix.arch }}
@@ -94,7 +105,7 @@ jobs:
   # platforms made it in.
   manifest:
     needs: image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -107,9 +118,15 @@ jobs:
       - name: Publish
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # :sha-<commit> stays the main build of that commit, so a release
+          # only adds its version tags.
+          case "$GITHUB_REF" in
+            refs/tags/v*) tag=${GITHUB_REF_NAME#v}; extra=latest ;;
+            *) tag=main; extra=sha-${GITHUB_SHA::7} ;;
+          esac
           # shellcheck disable=SC2046 # one argument per digest
-          docker buildx imagetools create -t "$IMAGE:main" -t "$IMAGE:sha-${GITHUB_SHA::7}" \
+          docker buildx imagetools create -t "$IMAGE:$tag" -t "$IMAGE:$extra" \
             $(sed "s|^|$IMAGE@|" digests/*)
-          platforms=$(docker buildx imagetools inspect --raw "$IMAGE:sha-${GITHUB_SHA::7}" \
+          platforms=$(docker buildx imagetools inspect --raw "$IMAGE:$tag" \
             | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')
           test "$platforms" = "linux/amd64 linux/arm64" || { echo "platforms: $platforms"; exit 1; }

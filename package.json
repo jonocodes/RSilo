@@ -1,6 +1,6 @@
 {
   "name": "rsilo",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "RSilo - RemoteStorage server for Cloudflare Workers + R2 + D1",
   "private": true,
   "engines": {
@@ -38,9 +38,9 @@
     "wrangler": "^4.147.0"
   },
   "dependencies": {
-    "@hono/node-server": "^2.0.1",
+    "@hono/node-server": "^2.0.5",
     "aws4fetch": "^1.0.20",
-    "hono": "^4.7.5"
+    "hono": "^4.12.18"
   },
   "cloudflare": {
     "bindings": {
