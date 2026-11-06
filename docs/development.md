@@ -38,7 +38,7 @@ Offline documents are stored under `data/storage/` with percent-encoded file nam
 
 ### Docker image
 
-`ghcr.io/jonocodes/rsilo` packages the offline server for test suites and quick local use, e.g. rclone's remoteStorage backend tests. `:main` follows `main`, and `:sha-<commit>` pins a build. It is public (no login needed to pull) and based on `oven/bun:*-alpine` (pinned by digest; Dependabot opens weekly PRs when it changes), built for `linux/amd64` and `linux/arm64` (each built and smoke-tested on a native runner); `docker buildx imagetools inspect ghcr.io/jonocodes/rsilo:main` lists its platforms. It is not for production, which runs on Cloudflare.
+`ghcr.io/jonocodes/rsilo` packages the offline server for test suites and quick local use, e.g. rclone's remoteStorage backend tests. `:main` follows `main`, `:sha-<commit>` pins a build, and each release is tagged `:<version>` (`:latest` is the newest release). It is public (no login needed to pull) and based on `oven/bun:*-alpine` (pinned by digest; Dependabot opens weekly PRs when it changes), built for `linux/amd64` and `linux/arm64` (each built and smoke-tested on a native runner); `docker buildx imagetools inspect ghcr.io/jonocodes/rsilo:main` lists its platforms. It is not for production, which runs on Cloudflare.
 
 ```bash
 docker run -d --name rsilo -p 127.0.0.1:8787:8787 -v rsilo-data:/data ghcr.io/jonocodes/rsilo:main
@@ -131,3 +131,17 @@ Every test that touches the database runs the real SQL that production runs: the
 
 `test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
+
+## Releasing
+
+1. On a branch, set `version` in `package.json` and add its entry at the top of [CHANGELOG.md](../CHANGELOG.md); merge it to `main`.
+2. Tag the merge commit and push the tag:
+
+   ```bash
+   git tag -a v0.3.0 -m "RSilo 0.3.0" && git push origin v0.3.0
+   ```
+
+   The docker workflow checks that the tag matches `package.json` and publishes `ghcr.io/jonocodes/rsilo:<version>` and `:latest`.
+3. Create the GitHub release from the tag, with the changelog entry as its notes: `gh release create v0.3.0 --notes-file <entry>`.
+
+Deploy-button Instances follow `main`, not tags, so `main` must stay deployable between releases.
