@@ -8,7 +8,9 @@
 # identity off (see LISTEN_HOST in src/server-offline.ts): /account and /debug
 # have no identity source, and storage works with dev-token bearer tokens.
 # Publish the port on 127.0.0.1 all the same.
-FROM oven/bun:1.3.14-alpine
+
+# Pinned by digest so a rebuild gets the same base; Dependabot bumps both.
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
 
 # Our own OCI labels, or the image inherits bun's: GHCR links the package to the
 # repo named in image.source. CI adds revision, version and created per build.

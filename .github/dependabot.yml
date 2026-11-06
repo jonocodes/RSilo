@@ -1,0 +1,11 @@
+# Opens PRs when the Dockerfile's base image (oven/bun, pinned by tag and
+# digest) has a new release or a rebuilt tag. The docker workflow builds and
+# smoke-tests each PR on amd64 and arm64; merging publishes the new image.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(docker)"

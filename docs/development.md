@@ -38,7 +38,7 @@ Offline documents are stored under `data/storage/` with percent-encoded file nam
 
 ### Docker image
 
-`ghcr.io/jonocodes/rsilo` packages the offline server for test suites and quick local use, e.g. rclone's remoteStorage backend tests. `:main` follows `main`, and `:sha-<commit>` pins a build. It is public (no login needed to pull) and based on `oven/bun:*-alpine`, built for `linux/amd64` and `linux/arm64` (each built and smoke-tested on a native runner); `docker buildx imagetools inspect ghcr.io/jonocodes/rsilo:main` lists its platforms. It is not for production, which runs on Cloudflare.
+`ghcr.io/jonocodes/rsilo` packages the offline server for test suites and quick local use, e.g. rclone's remoteStorage backend tests. `:main` follows `main`, and `:sha-<commit>` pins a build. It is public (no login needed to pull) and based on `oven/bun:*-alpine` (pinned by digest; Dependabot opens weekly PRs when it changes), built for `linux/amd64` and `linux/arm64` (each built and smoke-tested on a native runner); `docker buildx imagetools inspect ghcr.io/jonocodes/rsilo:main` lists its platforms. It is not for production, which runs on Cloudflare.
 
 ```bash
 docker run -d --name rsilo -p 127.0.0.1:8787:8787 -v rsilo-data:/data ghcr.io/jonocodes/rsilo:main
