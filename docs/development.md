@@ -131,7 +131,6 @@ Every test that touches the database runs the real SQL that production runs: the
 
 `test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
-
 ## Releasing
 
 1. On a branch, set `version` in `package.json` and add its entry at the top of [CHANGELOG.md](../CHANGELOG.md); merge it to `main`.
@@ -146,4 +145,15 @@ Every test that touches the database runs the real SQL that production runs: the
 
 Deploy-button Instances follow `main`, not tags, so `main` must stay deployable between releases.
 
-Before announcing a release that changes deploying, Cloudflare Access or `/account`, run the [fresh-user walkthrough](usability-walkthrough.md).
+### Fresh-user check
+
+The tests can't tell whether someone non-technical can actually set RSilo up. Before announcing a release that changes deploying, Cloudflare Access or `/account`, watch one such person try it. They need a **new** Cloudflare account and a GitHub account; give them only the README link, and don't help. Ask them to:
+
+1. Get their own RSilo running, using the free option.
+2. Sign in to `/account`.
+3. Connect a remoteStorage app (say [Savr](https://savr.link)) and save something in it.
+4. Open the app on a second device and see the same data.
+5. Find what they saved in the file manager.
+6. Revoke the app.
+
+Note every place they stall or need a hint, and file each one as a `needs-triage` issue. The Cloudflare Access step is the one most likely to go wrong ([#61](https://github.com/jonocodes/RSilo/issues/61)).
