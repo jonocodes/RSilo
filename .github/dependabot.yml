@@ -1,4 +1,4 @@
-# Opens PRs when the Dockerfile's base image (oven/bun, pinned by tag and
+# docker: opens PRs when the Dockerfile's base image (oven/bun, pinned by tag and
 # digest) has a new release or a rebuilt tag. The docker workflow builds and
 # smoke-tests each PR on amd64 and arm64; merging publishes the new image.
 version: 2
@@ -9,3 +9,14 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(docker)"
+
+  # Actions are pinned by commit SHA; this bumps the SHA and its version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
