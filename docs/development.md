@@ -145,3 +145,5 @@ Every test that touches the database runs the real SQL that production runs: the
 3. Create the GitHub release from the tag, with the changelog entry as its notes: `gh release create v0.3.0 --notes-file <entry>`.
 
 Deploy-button Instances follow `main`, not tags, so `main` must stay deployable between releases.
+
+Before announcing a release that changes deploying, Cloudflare Access or `/account`, run the [fresh-user walkthrough](usability-walkthrough.md).
