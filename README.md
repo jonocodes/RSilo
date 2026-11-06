@@ -40,7 +40,7 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jonocodes/RSilo)
 
-Click the button and enter your email, or run `bun install && wrangler login && bun run setup` from a checkout. Then [set up Cloudflare Access](docs/self-hosting.md#set-up-cloudflare-access) so only you can open `/account`. The [self-hosting guide](docs/self-hosting.md) covers both paths, S3 storage, updates, backups and staying on the free tier.
+Click the button and enter your email, or run `bun install && wrangler login && bun run setup` from a checkout. Cloudflare Access must then protect `/account` so only you can open it: `bun run setup` does that itself when you paste a Cloudflare API token it links you to; otherwise [set it up in the dashboard](docs/self-hosting.md#set-up-cloudflare-access). The [self-hosting guide](docs/self-hosting.md) covers both paths, S3 storage, updates, backups and staying on the free tier.
 
 ### Run it locally
 

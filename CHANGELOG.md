@@ -2,6 +2,10 @@
 
 Notable changes to RSilo, newest first. Versions follow [semantic versioning](https://semver.org/); before 1.0 a minor version may change configuration or require a migration, and its entry says so.
 
+## Unreleased
+
+- `bun run setup` sets up Cloudflare Access itself ([#61](https://github.com/jonocodes/RSilo/issues/61)). Given a Cloudflare API token that may edit Access (setup links to the token form, pre-filled), it creates or fixes the self-hosted Access application for `<host>/account`: an Allow policy for `OWNER_EMAIL` and the One-time PIN login method. Re-runs never create a second application, and `bun run setup --owner-email=…` now changes the sign-in email in one step. Without a token, setup prints the dashboard steps as before.
+
 ## 0.3.0 — 2026-11-05
 
 The first tagged release. Everything before it was untagged development on `main`; a deployment from that time upgrades with `bun run deploy` (see [Upgrading an existing deployment](docs/self-hosting.md#upgrading-an-existing-deployment)).

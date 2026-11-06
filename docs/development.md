@@ -131,6 +131,8 @@ Every test that touches the database runs the real SQL that production runs: the
 
 `test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
+`test/cloudflare-access-live.test.ts` runs the Cloudflare Access part of `bun run setup` against the real Cloudflare API: it creates, re-checks, updates and deletes one Access app for a throwaway `workers.dev` host. It is skipped unless `RSILO_ACCESS_LIVE_TOKEN` is set (the file header shows how to run it); CI does not run it.
+
 
 ## Releasing
 

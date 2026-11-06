@@ -1,7 +1,9 @@
 // Pure helpers for `bun run setup` (src/scripts/setup.ts) and `bun run deploy`:
-// Instance var validation, [vars] editing in wrangler TOML, and the manual
-// Cloudflare Access steps. No I/O here, so it is unit-tested without Cloudflare.
+// Instance var validation, [vars] editing in wrangler TOML, and the Cloudflare
+// Access texts (manual steps, token prompt, summary). No I/O here, so it is
+// unit-tested without Cloudflare.
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
+import type { AccessResult } from './cloudflare-access';
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
@@ -211,6 +213,18 @@ export function workersDevUrl(deployOutput: string): string | null {
   return deployOutput.match(/https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/i)?.[0] ?? null;
 }
 
+/** The account id from `wrangler whoami --json` output, when it lists exactly one account. */
+export function whoamiAccountId(output: string): string | undefined {
+  const start = output.indexOf('{');
+  if (start === -1) return undefined;
+  try {
+    const accounts = (JSON.parse(output.slice(start)) as { accounts?: { id?: string }[] }).accounts ?? [];
+    return accounts.length === 1 && accounts[0].id ? accounts[0].id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const ZERO_TRUST_DASHBOARD_URL = 'https://one.dash.cloudflare.com/';
 
 /** Numbered manual Cloudflare Access steps for this Instance (see docs/self-hosting.md). */
@@ -229,26 +243,101 @@ Open ${ZERO_TRUST_DASHBOARD_URL} (Cloudflare Zero Trust), then:
   6. Save the application.
   7. Open ${new URL('/account', publicBaseUrl).href} and sign in.
 
-Optional, to sign in less often (both default to 24 hours):
+${ACCESS_AFTERWORD}`;
+}
+
+const ACCESS_AFTERWORD = `Optional, to sign in less often (both default to 24 hours):
   - Access → Applications → RSilo → Edit → Session Duration: 1 month
   - Settings → Authentication → Global session timeout: 1 month
 
 Do not use the Worker-level "protect this Worker" / workers.dev Access toggle
 in the Worker's settings: it gates the whole Worker, including /storage and
 WebFinger, so your apps could no longer sync.`;
+
+/** The env var `bun run setup` reads a Cloudflare API token from, to set up Access itself. */
+export const ACCESS_TOKEN_ENV = 'CLOUDFLARE_ACCESS_API_TOKEN';
+
+/**
+ * The dashboard's API token form, pre-filled with the permissions setup needs:
+ * Access: Apps and Policies (`access`) and Access: Organizations, Identity
+ * Providers, and Groups (`access_acct`, for the one-time PIN login method).
+ * See https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
+ */
+export function accessTokenUrl(accountId?: string): string {
+  const keys = [{ key: 'access', type: 'edit' }, { key: 'access_acct', type: 'edit' }];
+  const params = new URLSearchParams({
+    permissionGroupKeys: JSON.stringify(keys),
+    accountId: accountId ?? '*',
+    zoneId: 'all',
+    name: 'RSilo Access',
+  });
+  return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`;
+}
+
+/** What setup prints before asking for the Access token (plain text). */
+export function accessTokenSteps(accountId?: string): string {
+  return `Last step: protect /account with Cloudflare Access. Setup can do it for you
+with a Cloudflare API token that may edit Access (wrangler's login cannot):
+
+  1. Open ${accessTokenUrl(accountId)}
+  2. Click Continue to summary → Create Token, and copy the token.
+
+The token is used for this run only and never saved. (Or set ${ACCESS_TOKEN_ENV}
+before running setup.)`;
+}
+
+/** How Access setup went: ensureAccessApp's result, or `manual` when setup could not do it. */
+export type AccessOutcome = AccessResult | { status: 'manual'; problem?: string };
+
+/** The Access part of setup's closing summary (plain text). */
+export function accessSummary(outcome: AccessOutcome, publicBaseUrl: string, ownerEmail: string): string {
+  const host = new URL(publicBaseUrl).host;
+  const accountUrl = new URL('/account', publicBaseUrl).href;
+  switch (outcome.status) {
+    case 'manual':
+      if (outcome.problem) return `! ${outcome.problem}\n\n${accessSteps(publicBaseUrl, ownerEmail)}`;
+      return `${accessSteps(publicBaseUrl, ownerEmail)}
+
+To have setup do these steps for you, re-run it with ${ACCESS_TOKEN_ENV} set to a
+Cloudflare API token that may edit Access (see docs/self-hosting.md).`;
+    case 'no-zero-trust':
+      return `! Cloudflare Zero Trust is not set up on this account yet (Cloudflare said: ${outcome.detail}).
+
+  Open ${ZERO_TRUST_DASHBOARD_URL}, pick a team name and the Free plan,
+  then re-run bun run setup: it sets up Access for ${host}/account itself.`;
+    case 'shared-policy':
+      return `! The Access app for ${host}/account allows sign-in through the reusable policy
+  "${outcome.policyName}", which other apps use too, so setup left it alone. Make sure it
+  lets ${ownerEmail} in: Zero Trust → Access → Policies → ${outcome.policyName}.
+
+Last step: open ${accountUrl} and sign in as ${ownerEmail}.
+
+${ACCESS_AFTERWORD}`;
+    default: {
+      const what = { created: 'created the RSilo app', updated: 'updated its Allow policy', unchanged: 'already set up' }[outcome.status];
+      return `✓ Cloudflare Access protects ${host}/account (${what}): only ${ownerEmail}
+  may sign in, with a one-time PIN sent to that address.
+
+Last step: open ${accountUrl} and sign in.
+
+${ACCESS_AFTERWORD}`;
+    }
+  }
 }
 
 /**
  * How to change the sign-in email later (plain text), for an Instance set up
  * from the CLI. Its OWNER_EMAIL lives in wrangler.prod.toml, which every
  * `bun run deploy` sends, so a dashboard edit would be undone by the next one.
+ * With the Access token, the same re-run updates the Access policy too.
  */
 export function changeOwnerEmailSteps(): string {
-  return `To change your sign-in email later, update it in two places:
-
-  1. OWNER_EMAIL: re-run bun run setup --owner-email=new@example.com
-     (not in the Cloudflare dashboard: wrangler.prod.toml would put the old
-     email back on your next bun run deploy)
-  2. The Access Allow policy: Zero Trust → Access → Applications → RSilo app → Policies
-     (otherwise Cloudflare Access will not let the new email through at all)`;
+  return `To change your sign-in email later, re-run
+  bun run setup --owner-email=new@example.com
+with the Access token (${ACCESS_TOKEN_ENV}, or paste it when asked): it updates
+OWNER_EMAIL and the Access Allow policy together. Do not change OWNER_EMAIL in the
+Cloudflare dashboard: wrangler.prod.toml would put the old email back on your
+next bun run deploy. Without the token, also add the new email to the Access
+Allow policy yourself: Zero Trust → Access → Applications → RSilo app → Policies
+(otherwise Cloudflare Access will not let the new email through at all).`;
 }

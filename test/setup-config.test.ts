@@ -6,6 +6,8 @@ import {
   withoutR2Buckets,
   REQUIRED_VARS,
   accessSteps,
+  accessSummary,
+  accessTokenUrl,
   parseSetupArgs,
   readVars,
   resolveSetting,
@@ -210,6 +212,70 @@ describe('accessSteps', () => {
     expect(text).toMatch(/optional/i);
     expect(text).toMatch(/Session Duration[^\n]*1 month/i);
     expect(text).toMatch(/Global session timeout[^\n]*1 month/i);
+  });
+});
+
+describe('accessTokenUrl', () => {
+  it('opens the API token form pre-filled with the two Access permissions, for the given account', () => {
+    const url = new URL(accessTokenUrl('abc123'));
+    expect(url.origin + url.pathname).toBe('https://dash.cloudflare.com/profile/api-tokens');
+    expect(JSON.parse(url.searchParams.get('permissionGroupKeys')!)).toEqual([
+      { key: 'access', type: 'edit' },
+      { key: 'access_acct', type: 'edit' },
+    ]);
+    expect(url.searchParams.get('accountId')).toBe('abc123');
+    expect(url.searchParams.get('name')).toBe('RSilo Access');
+  });
+
+  it('lets the Owner pick the account when setup does not know it', () => {
+    expect(new URL(accessTokenUrl()).searchParams.get('accountId')).toBe('*');
+  });
+});
+
+describe('accessSummary', () => {
+  const BASE = 'https://rsilo.my-sub.workers.dev';
+
+  it('after automatic setup: names what is protected, for whom, and the one step left', () => {
+    const text = accessSummary({ status: 'created', appId: 'a' }, BASE, 'me@example.com');
+    expect(text).toContain('✓ Cloudflare Access protects rsilo.my-sub.workers.dev/account');
+    expect(text).toContain('me@example.com');
+    expect(text).toMatch(/Last step: open https:\/\/rsilo\.my-sub\.workers\.dev\/account and sign in/);
+    expect(text).not.toContain('Add an application');
+    expect(text).toMatch(/Session Duration[^\n]*1 month/i);
+  });
+
+  it('says whether the app was created, updated or already right', () => {
+    expect(accessSummary({ status: 'created', appId: 'a' }, BASE, 'me@example.com')).toMatch(/created/i);
+    expect(accessSummary({ status: 'updated', appId: 'a' }, BASE, 'me@example.com')).toMatch(/updated/i);
+    expect(accessSummary({ status: 'unchanged', appId: 'a' }, BASE, 'me@example.com')).toMatch(/already/i);
+  });
+
+  it('for a shared reusable policy: names it and asks the Owner to check it', () => {
+    const text = accessSummary({ status: 'shared-policy', appId: 'a', policyName: 'Family' }, BASE, 'me@example.com');
+    expect(text).toContain('"Family"');
+    expect(text).toMatch(/other apps/);
+    expect(text).toContain('me@example.com');
+  });
+
+  it('without Zero Trust: sends the Owner to the one sign-up page, then back to setup', () => {
+    const text = accessSummary({ status: 'no-zero-trust', detail: 'GET /access/organizations: HTTP 404' }, BASE, 'me@example.com');
+    expect(text).toContain('https://one.dash.cloudflare.com/');
+    expect(text).toMatch(/team name and the Free plan/);
+    expect(text).toMatch(/re-run bun run setup/);
+    expect(text).toContain('HTTP 404');
+    expect(text).not.toContain('Add an application');
+  });
+
+  it('when setup could not do it: why, then the manual steps', () => {
+    const text = accessSummary({ status: 'manual', problem: 'Cloudflare refused the token' }, BASE, 'me@example.com');
+    expect(text).toContain('Cloudflare refused the token');
+    expect(text).toBe(`! Cloudflare refused the token\n\n${accessSteps(BASE, 'me@example.com')}`);
+  });
+
+  it('with no token: the manual steps, and how to have setup do them next time', () => {
+    const text = accessSummary({ status: 'manual' }, BASE, 'me@example.com');
+    expect(text).toContain(accessSteps(BASE, 'me@example.com'));
+    expect(text).toContain('CLOUDFLARE_ACCESS_API_TOKEN');
   });
 });
 
