@@ -10,7 +10,7 @@ Every Instance needs one setting, plain text (with R2, RSilo has no secrets):
 
 - `OWNER_EMAIL` — your email; only you may open `/account`
 
-Everything else has a default: your storage address is `me@<your Worker's host>`, and every URL RSilo advertises uses the address the Worker was reached at. Both deploy options below ask only for your email; the optional settings are in [Instance configuration](#instance-configuration). Afterwards you do one manual step in the Cloudflare dashboard: [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
+Everything else has a default: your storage address is `me@<your Worker's host>`, and every URL RSilo advertises uses the address the Worker was reached at. Both deploy options below ask only for your email; the optional settings are in [Instance configuration](#instance-configuration). Afterwards Cloudflare Access must protect `/account`: `bun run setup` does that for you when you give it an Access API token; otherwise it is one manual step in the Cloudflare dashboard. See [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
 
 ### Option A — Deploy to Cloudflare button (no CLI)
 
@@ -36,7 +36,7 @@ wrangler login
 bun run setup
 ```
 
-It asks for one thing, your email. It deploys once, reads your `workers.dev` address from the deploy output, and prints your storage address (`me@<your-worker>.<subdomain>.workers.dev`), the numbered Access steps with your hostname filled in, and how to change your email later.
+It asks for one thing, your email. It deploys once, reads your `workers.dev` address from the deploy output, and prints your storage address (`me@<your-worker>.<subdomain>.workers.dev`). Then it offers to set up Cloudflare Access itself: it prints a link that opens Cloudflare's API token form already filled in, and asks you to paste the token (press Enter to skip and get the numbered dashboard steps instead). Finally it prints how to change your email later.
 
 Re-running `bun run setup` is safe: it offers your saved email as the default (press Enter to keep it) and keeps any other saved settings. To run it without prompts, pass the email as a flag or environment variable. `--account-username` and `--public-base-url` are optional overrides (for example a custom domain); they are never prompted for:
 
@@ -47,7 +47,13 @@ OWNER_EMAIL=me@example.com bun run setup
 bun run setup --owner-email=me@example.com --account-username=jono --public-base-url=https://rs.example.com
 ```
 
-Then [set up Cloudflare Access](#set-up-cloudflare-access).
+With an Access token it also accepts `CLOUDFLARE_ACCESS_API_TOKEN` instead of the prompt, so a scripted run sets up Access too:
+
+```bash
+CLOUDFLARE_ACCESS_API_TOKEN=<token> bun run setup --owner-email=me@example.com
+```
+
+If you skipped the token, [set up Cloudflare Access](#set-up-cloudflare-access) by hand.
 
 <details>
 <summary>Manual CLI steps</summary>
@@ -186,7 +192,25 @@ To release on every push to `main`, connect the repository to your Worker using 
 
 ## Set up Cloudflare Access
 
-RSilo has no password of its own. **Cloudflare Access** signs you in to your account area (`/account`), for example with a one-time code sent to your email, and RSilo then checks that the signed-in email is your `OWNER_EMAIL`. Access is part of Cloudflare **Zero Trust**, whose free plan covers a single person and needs no payment method. You do this once, after either deploy option; `bun run setup` prints these steps with your address filled in.
+RSilo has no password of its own. **Cloudflare Access** signs you in to your account area (`/account`), for example with a one-time code sent to your email, and RSilo then checks that the signed-in email is your `OWNER_EMAIL`. Access is part of Cloudflare **Zero Trust**, whose free plan covers a single person and needs no payment method. You do this once, after either deploy option.
+
+### Automatically, with `bun run setup`
+
+`bun run setup` creates the Access application itself when it has a Cloudflare API token that may edit Access. Wrangler's own login cannot, so the token is a separate one:
+
+1. Open the link setup prints. It opens **My Profile → API Tokens** with a token named *RSilo Access* already filled in: **Access: Apps and Policies → Edit** and **Access: Organizations, Identity Providers, and Groups → Edit**, for your account.
+2. Click **Continue to summary → Create Token**, and copy the token.
+3. Paste it when setup asks (the input is hidden), or set `CLOUDFLARE_ACCESS_API_TOKEN` before running setup.
+
+Setup then makes sure a self-hosted Access application protects `<your Worker's host>/account`, with an **Allow** policy for exactly your `OWNER_EMAIL` and the **One-time PIN** login method. It never saves the token. This works the same on a new Cloudflare account and on one that already uses Zero Trust for other things: setup only adds the RSilo application and leaves your other applications and policies alone. If your Zero Trust organization has no One-time PIN login method yet (say, it only uses Google), setup adds it and tells you. Your other applications that allow every login method will then offer it too; their policies still decide who may sign in. Re-running is safe: it finds the application by hostname and path and never creates a second one. If the application already exists (for example one you made by hand), it only points its Allow policy at `OWNER_EMAIL`, keeping its name, login methods and other settings. A reusable policy that other applications share is left alone; setup tells you to check it. Setup uses the account in `CLOUDFLARE_ACCOUNT_ID`, else the one `wrangler whoami` reports.
+
+If your account has never used Zero Trust, setup says so: open [one.dash.cloudflare.com](https://one.dash.cloudflare.com/), pick a team name and the **Free** plan, and re-run `bun run setup`. If Cloudflare refuses the token, setup says why and prints the manual steps below.
+
+Then open `https://<your Worker's host>/account`. Access asks for your email, sends you a code, and you land on your dashboard.
+
+### By hand, in the Zero Trust dashboard
+
+Use this after a Deploy-button install, or if you skipped the token; `bun run setup` prints these steps with your address filled in.
 
 1. Open the Zero Trust dashboard, [one.dash.cloudflare.com](https://one.dash.cloudflare.com/). If it is your first time, pick a team name and the **Free** plan.
 2. Go to **Access → Applications → Add an application**, choose **Self-hosted**, and name it **RSilo**.
@@ -207,7 +231,7 @@ The trade-off is that anyone using your unlocked browser can open `/account` for
 
 Nothing needs to be set in RSilo after creating the Access application.
 
-**What the pages you might see mean:**
+### What the pages you might see mean
 
 - ***Finish setup* (503).** Shown on `/account` (and the consent page) when they are not ready yet. It has up to three parts:
   - **Set your sign-in email (OWNER_EMAIL)** — `OWNER_EMAIL` is missing or not an email address. If you are already signed in through Access, the page says *"You're signed in through Cloudflare Access as …"* and shows that email ready to copy: set `OWNER_EMAIL` to exactly that. It gives the click path (**Workers & Pages → \<worker name\> → Settings → Variables and Secrets → Add → Type: Text, Variable name: OWNER_EMAIL, Value: your email → Deploy**; for an invalid value, edit the existing one instead). It never repeats an invalid value back. Apps already connected keep syncing meanwhile.
@@ -223,6 +247,8 @@ Every state-changing `/account` request must come from the page itself (`Sec-Fet
 ## Change your sign-in email
 
 Your dashboard shows **Signed in as \<email\>** and a **Change your sign-in email** section with these steps. The email lives in two places, and both must change:
+
+If you set up with `bun run setup` and have an Access token, this is one step: re-run `bun run setup --owner-email=new@example.com` and give it the token (paste it, or set `CLOUDFLARE_ACCESS_API_TOKEN`). It updates both places below. Otherwise:
 
 1. **The Worker's `OWNER_EMAIL`.** If you set up with `bun run setup`, re-run `bun run setup --owner-email=new@example.com`. Don't edit it in the dashboard: `wrangler.prod.toml` holds the old email, and your next `bun run deploy` would put it back. Otherwise (Deploy button, or settings kept in the dashboard): **Workers & Pages → \<worker name\> → Settings → Variables and Secrets → OWNER_EMAIL → Edit → Deploy**.
 2. **The Access application's Allow policy:** **Zero Trust → Access → Applications → RSilo app → Policies**, and include the new email. Otherwise Access will not let the new email through at all.

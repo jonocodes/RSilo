@@ -1,12 +1,15 @@
-// Drives `bun run setup` end to end against a fake wrangler, so the script's
-// flow (one prompt, one deploy, optional overrides, idempotent re-run) is tested without
-// touching Cloudflare.
-import { spawnSync } from 'node:child_process';
+// Drives `bun run setup` end to end against a fake wrangler (and, for Cloudflare
+// Access, a fake Cloudflare API), so the script's flow (one prompt, one deploy,
+// optional overrides, idempotent re-run, Access) is tested without touching Cloudflare.
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readVars, setVars } from '../src/scripts/setup-config';
+import { emailPolicy, FAKE_API_BASE, FAKE_TOKEN, fakeCloudflareApi, manualApp, type FakeCloudflareApi } from './helpers/fake-cloudflare-api';
 import { expectEveryRateLimiter } from './helpers/ratelimits';
 
 const SETUP = resolve('src/scripts/setup.ts');
@@ -15,7 +18,7 @@ const FAKE_WRANGLER = `#!/usr/bin/env bash
 dir="$(dirname "$0")"
 echo "$*" >> "$dir/calls.log"
 case "$1 $2" in
-  "whoami "*) echo "You are logged in";;
+  "whoami "*) echo '{"loggedIn":true,"authType":"OAuth Token","accounts":[{"id":"0123456789abcdef0123456789abcdef","name":"Test account"}]}';;
   "r2 bucket") echo "ok";;
   "d1 create") echo 'database_id = "11111111-2222-3333-4444-555555555555"';;
   "d1 migrations")
@@ -87,7 +90,7 @@ describe('bun run setup (fake wrangler)', () => {
     expect(res.out).toContain('https://rsilo.test-sub.workers.dev/account');
     expect(res.out).toMatch(/1\. .*\n[\s\S]*domain rsilo\.test-sub\.workers\.dev, path account/);
     expect(res.out).toContain('https://one.dash.cloudflare.com/');
-    expect(res.out).toContain('OWNER_EMAIL: re-run bun run setup --owner-email=new@example.com');
+    expect(res.out).toContain('re-run\n  bun run setup --owner-email=new@example.com\nwith the Access token (CLOUDFLARE_ACCESS_API_TOKEN');
     expect(res.out).not.toContain('Variables and Secrets → OWNER_EMAIL');
     expect(res.out).toContain('wrangler d1 time-travel restore DB --bookmark=00000001-00000002-00000003-abc --config wrangler.prod.toml');
     expect(calls().map((c) => c.split(' --')[0])).toEqual([
@@ -167,6 +170,125 @@ describe('bun run setup (fake wrangler)', () => {
     expect(res.status).toBe(1);
     expect(res.out).toContain('RSILO_DEV_MODE=true');
     expect(existsSync(join(dir, 'calls.log'))).toBe(false);
+  });
+});
+
+describe('bun run setup sets up Cloudflare Access (fake wrangler + fake Cloudflare API)', () => {
+  let fake: FakeCloudflareApi;
+  let server: Server;
+  let apiBase: string;
+
+  beforeEach(async () => {
+    fake = fakeCloudflareApi();
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => void (async () => {
+        const body = chunks.length ? Buffer.concat(chunks) : undefined;
+        const response = await fake.fetch(`${FAKE_API_BASE.replace(/\/client\/v4$/, '')}${req.url}`, {
+          method: req.method,
+          headers: req.headers as Record<string, string>,
+          body,
+        });
+        res.writeHead(response.status, { 'content-type': 'application/json' });
+        res.end(await response.text());
+      })());
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    apiBase = `http://127.0.0.1:${(server.address() as AddressInfo).port}/client/v4`;
+  });
+
+  afterEach(async () => {
+    await new Promise((done) => server.close(done));
+  });
+
+  // Async, unlike setup(): the fake API answers from this process.
+  function setupWithAccess(args: string[], env: Record<string, string> = {}) {
+    const child = spawn('bun', ['run', SETUP, ...args], {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        RSILO_WRANGLER: join(dir, 'wrangler'),
+        RSILO_CLOUDFLARE_API: apiBase,
+        CLOUDFLARE_ACCESS_API_TOKEN: FAKE_TOKEN,
+        ...env,
+      },
+    });
+    child.stdin.end();
+    let out = '';
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+    child.stderr.on('data', (c: Buffer) => (out += c.toString()));
+    return new Promise<{ status: number | null; out: string }>((done) => child.on('close', (status) => done({ status, out })));
+  }
+
+  it('creates the Access app for the deployed host, so no dashboard steps are printed', async () => {
+    const res = await setupWithAccess(['--owner-email=me@example.com']);
+    expect(res.status, res.out).toBe(0);
+
+    expect(fake.state.apps).toHaveLength(1);
+    expect(fake.state.apps[0]).toMatchObject({
+      domain: 'rsilo.test-sub.workers.dev/account',
+      policies: [{ decision: 'allow', include: [{ email: { email: 'me@example.com' } }] }],
+    });
+    expect(res.out).toContain('✓ Cloudflare Access protects rsilo.test-sub.workers.dev/account (created the RSilo app)');
+    expect(res.out).toContain('Last step: open https://rsilo.test-sub.workers.dev/account and sign in.');
+    expect(res.out).not.toContain('Add an application');
+    expect(res.out).not.toContain(FAKE_TOKEN);
+    expect(readFileSync(join(dir, 'wrangler.prod.toml'), 'utf8')).not.toContain(FAKE_TOKEN);
+  });
+
+  it('on an account that already uses Zero Trust for other apps: adds the RSilo app, touches nothing else, says what it added', async () => {
+    const others = [manualApp('wiki.example.com', [emailPolicy('team@example.com')])];
+    fake.state.apps = structuredClone(others);
+    fake.state.identityProviders = [{ id: 'github-idp', name: 'GitHub', type: 'github' }];
+
+    const res = await setupWithAccess(['--owner-email=me@example.com']);
+    expect(res.status, res.out).toBe(0);
+    expect(fake.state.apps).toHaveLength(2);
+    expect(fake.state.apps[0]).toEqual(others[0]);
+    expect(fake.state.apps[1].domain).toBe('rsilo.test-sub.workers.dev/account');
+    expect(fake.state.identityProviders.map((idp) => idp.type)).toEqual(['github', 'onetimepin']);
+    expect(res.out).toContain('(created the RSilo app)');
+    expect(res.out).toContain('Added the One-time PIN login method to your Zero Trust organization.');
+    expect(res.out).not.toContain('Add an application');
+  });
+
+  it('changes the email in one step: a re-run with --owner-email updates both OWNER_EMAIL and the policy', async () => {
+    expect((await setupWithAccess(['--owner-email=me@example.com'])).status).toBe(0);
+    const res = await setupWithAccess(['--owner-email=new@example.com']);
+    expect(res.status, res.out).toBe(0);
+
+    expect(prodVars().OWNER_EMAIL).toBe('new@example.com');
+    expect(fake.state.apps).toHaveLength(1);
+    expect(fake.state.apps[0].policies[0].include).toEqual([{ email: { email: 'new@example.com' } }]);
+    expect(res.out).toContain('(updated its Allow policy)');
+  });
+
+  it('prefers CLOUDFLARE_ACCOUNT_ID over the account wrangler reports', async () => {
+    const res = await setupWithAccess(['--owner-email=me@example.com'], { CLOUDFLARE_ACCOUNT_ID: 'another-account' });
+    expect(res.status, res.out).toBe(0);
+    // The fake only knows FAKE_ACCOUNT_ID, so the token is refused for the other one and setup falls back.
+    expect(fake.state.apps).toHaveLength(0);
+    expect(res.out).toContain('Cloudflare refused the Access token for account another-account');
+    expect(res.out).toContain('Add an application');
+  });
+
+  it('with a token that may not edit Access: explains, prints the manual steps, and still succeeds', async () => {
+    const res = await setupWithAccess(['--owner-email=me@example.com'], { CLOUDFLARE_ACCESS_API_TOKEN: 'wrangler-only-token' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toMatch(/Cloudflare refused the Access token[\s\S]*Access: Apps and Policies/);
+    expect(res.out).toMatch(/1\. .*\n[\s\S]*domain rsilo\.test-sub\.workers\.dev, path account/);
+    expect(res.out).not.toContain('wrangler-only-token');
+  });
+
+  it('on an account without Zero Trust: sends the Owner to sign up, then back to setup', async () => {
+    fake.state.organization = null;
+    const res = await setupWithAccess(['--owner-email=me@example.com']);
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).toMatch(/Zero Trust is not set up on this account yet/);
+    expect(res.out).toMatch(/team name and the Free plan/);
+    expect(fake.writes()).toEqual([]);
   });
 });
 

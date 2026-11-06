@@ -1,8 +1,8 @@
 // `bun run setup`: provisions R2 + D1, writes wrangler.prod.toml (resource IDs
-// and the Instance vars), checks the bundle, migrates, deploys, and prints the
-// manual Cloudflare Access steps. With R2 it sets no secrets (S3 mode: below).
-// Safe to re-run: existing vars are kept unless changed. Pure logic lives in
-// ./setup-config.ts (unit-tested).
+// and the Instance vars), checks the bundle, migrates, deploys, and sets up
+// Cloudflare Access for /account (or prints the manual steps; see below). With
+// R2 it sets no secrets (S3 mode: below). Safe to re-run: existing vars are
+// kept unless changed. Pure logic lives in ./setup-config.ts (unit-tested).
 //
 // It asks for one thing, OWNER_EMAIL. ACCOUNT_USERNAME (default "me") and
 // PUBLIC_BASE_URL (default: the request's own origin, so the workers.dev URL)
@@ -17,14 +17,25 @@
 // wrangler.prod.toml, and the S3 key is set as the Worker secret
 // S3_SECRET_ACCESS_KEY: from that env var, else prompted for (input hidden)
 // when the Worker does not have it yet. It is never written to a file.
+//
+// Cloudflare Access (#61): wrangler's login cannot manage Access, so setup
+// needs a Cloudflare API token that may edit it: CLOUDFLARE_ACCESS_API_TOKEN,
+// else a hidden prompt (Enter skips). With one, ensureAccessApp creates or
+// fixes the Access app for <host>/account; without, or when that fails, the
+// manual steps are printed. The account is CLOUDFLARE_ACCOUNT_ID, else the
+// one `wrangler whoami` reports. The token is never written to a file.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { DEFAULT_ACCOUNT_USERNAME } from '../config';
+import { CloudflareApiError, cloudflareApi, ensureAccessApp } from './cloudflare-access';
 import {
+  ACCESS_TOKEN_ENV,
   accessSteps,
+  accessSummary,
+  accessTokenSteps,
   changeOwnerEmailSteps,
   parseSetupArgs,
   readVars,
@@ -32,9 +43,11 @@ import {
   S3_SETUP_VARS,
   setVars,
   validateSetting,
+  whoamiAccountId,
   withoutEmptyVars,
   withoutR2Buckets,
   workersDevUrl,
+  type AccessOutcome,
   type InstanceSettings,
   type S3SetupVar,
   type SetupVar,
@@ -46,6 +59,8 @@ const ROOT = process.cwd();
 // RSILO_WRANGLER lets tests substitute a fake wrangler (test/setup-script.test.ts).
 const WRANGLER = process.env.RSILO_WRANGLER
   ?? join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
+// RSILO_CLOUDFLARE_API lets tests substitute a fake Cloudflare API (same test file).
+const CLOUDFLARE_API = process.env.RSILO_CLOUDFLARE_API;
 const CONFIG = join(ROOT, 'wrangler.toml');
 const PROD_CONFIG_PATH = join(ROOT, PROD_CONFIG);
 
@@ -129,8 +144,9 @@ function optionalSetting(name: 'ACCOUNT_USERNAME' | 'PUBLIC_BASE_URL' | S3SetupV
 
 console.log('RSilo setup — provisioning Cloudflare resources and deploying.\n');
 
+const ownerEmail = await askOwnerEmail();
 const settings: InstanceSettings = {
-  OWNER_EMAIL: await askOwnerEmail(),
+  OWNER_EMAIL: ownerEmail,
   ACCOUNT_USERNAME: optionalSetting('ACCOUNT_USERNAME'),
   PUBLIC_BASE_URL: optionalSetting('PUBLIC_BASE_URL'),
 };
@@ -182,11 +198,12 @@ async function ensureS3Secret(): Promise<void> {
   console.log(`✓ Worker secret ${S3_SECRET} set`);
 }
 
-const who = wrangler(['whoami'], true);
+const who = wrangler(['whoami', '--json'], true);
 if (who.status !== 0 || /not authenticated/i.test(who.out)) {
   fail('Not logged in to Cloudflare. Run `wrangler login` (or set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID), then re-run `bun run setup`.');
 }
 console.log('✓ Cloudflare authenticated');
+const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || whoamiAccountId(who.out);
 
 if (s3Mode) {
   console.log(`• Files go to S3 bucket '${settings.S3_BUCKET}' at ${settings.S3_ENDPOINT}; R2 is not used`);
@@ -249,6 +266,35 @@ if (deployResult.status !== 0) fail('Deploy failed.');
 const deployedUrl = workersDevUrl(deployResult.out);
 if (s3Mode) await ensureS3Secret();
 
+// The Access token: from the environment, else asked for (hidden) on a terminal.
+async function accessToken(): Promise<string | undefined> {
+  const fromEnv = process.env[ACCESS_TOKEN_ENV]?.trim();
+  if (fromEnv || !interactive) return fromEnv || undefined;
+  console.log(`\n${accessTokenSteps(cloudflareAccountId)}\n`);
+  return (await askHidden('Paste the token (input hidden), or press Enter to set up Access by hand: ')) || undefined;
+}
+
+async function setUpAccess(host: string): Promise<AccessOutcome> {
+  const token = await accessToken();
+  if (!token) return { status: 'manual' };
+  if (!cloudflareAccountId) {
+    return { status: 'manual', problem: 'wrangler can see several Cloudflare accounts. Set CLOUDFLARE_ACCOUNT_ID to the one to use and re-run, or set Access up by hand:' };
+  }
+  try {
+    const api = cloudflareApi({ token, accountId: cloudflareAccountId, ...(CLOUDFLARE_API ? { baseUrl: CLOUDFLARE_API } : {}) });
+    return await ensureAccessApp(api, { host, ownerEmail });
+  } catch (err) {
+    const detail = (err as Error).message;
+    if (err instanceof CloudflareApiError && err.refused) {
+      return {
+        status: 'manual',
+        problem: `Cloudflare refused the Access token for account ${cloudflareAccountId} (${detail}). It needs Access: Apps and Policies → Edit\n  and Access: Organizations, Identity Providers, and Groups → Edit. Set Access up by hand instead:`,
+      };
+    }
+    return { status: 'manual', problem: `Could not set up Cloudflare Access (${detail}). Set it up by hand instead:` };
+  }
+}
+
 const baseUrl = settings.PUBLIC_BASE_URL ?? deployedUrl;
 const username = settings.ACCOUNT_USERNAME ?? DEFAULT_ACCOUNT_USERNAME;
 
@@ -274,6 +320,8 @@ if (settings.PUBLIC_BASE_URL && deployedUrl && new URL(deployedUrl).host !== new
   );
 }
 
+const access = await setUpAccess(new URL(baseUrl).host);
+
 console.log(`
 ✔ Deployed!
 
@@ -281,7 +329,7 @@ console.log(`
   Storage address: ${username}@${new URL(baseUrl).host}
   Account area:    ${baseUrl}/account
 
-${accessSteps(baseUrl, settings.OWNER_EMAIL)}
+${accessSummary(access, baseUrl, ownerEmail)}
 
 ${changeOwnerEmailSteps()}
 `);
