@@ -1,8 +1,8 @@
 // `bun run setup`: provisions R2 + D1, writes wrangler.prod.toml (resource IDs
 // and the Instance vars), checks the bundle, migrates, deploys, and sets up
-// Cloudflare Access for /account (or prints the manual steps; see below). With R2 it sets no secrets (S3 mode: below).
-// Safe to re-run: existing vars are kept unless changed. Pure logic lives in
-// ./setup-config.ts (unit-tested).
+// Cloudflare Access for /account (or prints the manual steps; see below). With
+// R2 it sets no secrets (S3 mode: below). Safe to re-run: existing vars are
+// kept unless changed. Pure logic lives in ./setup-config.ts (unit-tested).
 //
 // It asks for one thing, OWNER_EMAIL. ACCOUNT_USERNAME (default "me") and
 // PUBLIC_BASE_URL (default: the request's own origin, so the workers.dev URL)
@@ -203,7 +203,7 @@ if (who.status !== 0 || /not authenticated/i.test(who.out)) {
   fail('Not logged in to Cloudflare. Run `wrangler login` (or set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID), then re-run `bun run setup`.');
 }
 console.log('✓ Cloudflare authenticated');
-const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || whoamiAccountId(who.out);
+const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || whoamiAccountId(who.out);
 
 if (s3Mode) {
   console.log(`• Files go to S3 bucket '${settings.S3_BUCKET}' at ${settings.S3_ENDPOINT}; R2 is not used`);
@@ -270,25 +270,25 @@ if (s3Mode) await ensureS3Secret();
 async function accessToken(): Promise<string | undefined> {
   const fromEnv = process.env[ACCESS_TOKEN_ENV]?.trim();
   if (fromEnv || !interactive) return fromEnv || undefined;
-  console.log(`\n${accessTokenSteps(accountId)}\n`);
+  console.log(`\n${accessTokenSteps(cloudflareAccountId)}\n`);
   return (await askHidden('Paste the token (input hidden), or press Enter to set up Access by hand: ')) || undefined;
 }
 
 async function setUpAccess(host: string): Promise<AccessOutcome> {
   const token = await accessToken();
   if (!token) return { status: 'manual' };
-  if (!accountId) {
+  if (!cloudflareAccountId) {
     return { status: 'manual', problem: 'wrangler can see several Cloudflare accounts. Set CLOUDFLARE_ACCOUNT_ID to the one to use and re-run, or set Access up by hand:' };
   }
   try {
-    const api = cloudflareApi({ token, accountId, ...(CLOUDFLARE_API ? { baseUrl: CLOUDFLARE_API } : {}) });
+    const api = cloudflareApi({ token, accountId: cloudflareAccountId, ...(CLOUDFLARE_API ? { baseUrl: CLOUDFLARE_API } : {}) });
     return await ensureAccessApp(api, { host, ownerEmail });
   } catch (err) {
     const detail = (err as Error).message;
     if (err instanceof CloudflareApiError && err.refused) {
       return {
         status: 'manual',
-        problem: `Cloudflare refused the Access token for account ${accountId} (${detail}). It needs Access: Apps and Policies → Edit\n  and Access: Organizations, Identity Providers, and Groups → Edit. Set Access up by hand instead:`,
+        problem: `Cloudflare refused the Access token for account ${cloudflareAccountId} (${detail}). It needs Access: Apps and Policies → Edit\n  and Access: Organizations, Identity Providers, and Groups → Edit. Set Access up by hand instead:`,
       };
     }
     return { status: 'manual', problem: `Could not set up Cloudflare Access (${detail}). Set it up by hand instead:` };

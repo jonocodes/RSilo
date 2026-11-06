@@ -29,7 +29,7 @@ From `GET /accounts/:id/access/apps` on the production Instance's hand-made app:
 
 ## First-time Zero Trust
 
-- `POST /accounts/:id/access/organizations` exists (`name`, `auth_domain`), but choosing the plan (Free) is a dashboard step. **Unverified:** whether the API alone gives a working free organization, and what `GET /access/organizations` returns on an account that never set up Zero Trust. Setup treats any refusal other than 401/403 as "not set up yet", quotes Cloudflare's answer, and links the sign-up page.
+- `POST /accounts/:id/access/organizations` exists (`name`, `auth_domain`), but choosing the plan (Free) is a dashboard step. **Unverified:** whether the API alone gives a working free organization, and what `GET /access/organizations` returns on an account that never set up Zero Trust. Setup treats a client error (4xx) other than 401/403/429 as "not set up yet", quotes Cloudflare's answer, and links the sign-up page; a 5xx stays an error and falls back to the manual steps.
 
 ## Left for later
 

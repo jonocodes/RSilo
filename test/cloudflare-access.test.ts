@@ -114,4 +114,34 @@ describe('ensureAccessApp', () => {
       expect.objectContaining({ name: 'RSilo owner', decision: 'allow', include: [{ email: { email: 'me@example.com' } }] }),
     ]);
   });
+
+  it('finds the app on a later page of a long app list', async () => {
+    const decoys = Array.from({ length: 60 }, (_, i) => manualApp(`app-${i}.example.com`, [emailPolicy('x@example.com')]));
+    const app = manualApp(HOST, [emailPolicy('me@example.com')]);
+    const fake = fakeCloudflareApi({ apps: [...decoys, app] });
+
+    expect(await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'me@example.com' })).toEqual({ status: 'unchanged', appId: app.id });
+    expect(fake.state.apps).toHaveLength(61);
+  });
+
+  it('keeps the Allow policy\'s other settings when it changes the email', async () => {
+    const policy = { ...emailPolicy('old@example.com'), session_duration: '730h' };
+    const fake = fakeCloudflareApi({ apps: [manualApp(HOST, [policy])] });
+
+    await ensureAccessApp(client(fake), { host: HOST, ownerEmail: 'new@example.com' });
+    expect(fake.state.apps[0].policies[0]).toMatchObject({ session_duration: '730h', include: [{ email: { email: 'new@example.com' } }] });
+  });
+
+  it('treats a Cloudflare outage as an error, not as a missing Zero Trust organization', async () => {
+    const fake = fakeCloudflareApi();
+    const flaky = (input: string, init: RequestInit) =>
+      input.endsWith('/access/organizations')
+        ? Promise.resolve(Response.json({ success: false, errors: [{ code: 10001, message: 'Service unavailable' }] }, { status: 503 }))
+        : fake.fetch(input, init);
+    const api = cloudflareApi({ token: FAKE_TOKEN, accountId: FAKE_ACCOUNT_ID, baseUrl: FAKE_API_BASE, fetch: flaky });
+
+    const err = await ensureAccessApp(api, { host: HOST, ownerEmail: 'me@example.com' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CloudflareApiError);
+    expect((err as Error).message).toContain('HTTP 503');
+  });
 });

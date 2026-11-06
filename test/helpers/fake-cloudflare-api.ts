@@ -4,7 +4,9 @@
 // It answers in Cloudflare's { success, errors, result } envelope, refuses any
 // other bearer token with 403 / code 10000 as Cloudflare does, and shapes app
 // policies the way GET /access/apps returns them (checked against the real API
-// in the #61 spike). It does not validate request bodies beyond what it stores.
+// in the #61 spike), paginating that list as Cloudflare's list endpoints do
+// (page / per_page, default 25, with result_info). It does not validate
+// request bodies beyond what it stores.
 
 export interface FakeIdentityProvider {
   id: string;
@@ -13,6 +15,7 @@ export interface FakeIdentityProvider {
 }
 
 export interface FakePolicy {
+  [setting: string]: unknown;
   id: string;
   name: string;
   decision: string;
@@ -62,8 +65,16 @@ export const FAKE_API_BASE = 'https://api.cloudflare.test/client/v4';
 let nextId = 1;
 const newId = (prefix: string) => `${prefix}-${String(nextId++).padStart(4, '0')}`;
 
-function envelope(status: number, result: unknown, errors: { code: number; message: string }[] = []): Response {
-  return Response.json({ success: errors.length === 0, errors, messages: [], result }, { status });
+function envelope(status: number, result: unknown, errors: { code: number; message: string }[] = [], resultInfo?: unknown): Response {
+  return Response.json({ success: errors.length === 0, errors, messages: [], result, result_info: resultInfo }, { status });
+}
+
+function page<T>(url: URL, all: T[]): Response {
+  const perPage = Number(url.searchParams.get('per_page') ?? 25);
+  const n = Number(url.searchParams.get('page') ?? 1);
+  const items = all.slice((n - 1) * perPage, n * perPage);
+  const totalPages = Math.max(1, Math.ceil(all.length / perPage));
+  return envelope(200, items, [], { page: n, per_page: perPage, count: items.length, total_count: all.length, total_pages: totalPages });
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -94,8 +105,10 @@ export function fakeCloudflareApi(init: Partial<FakeCloudflareState> = {}): Fake
     return { ...rest, policies: all.map((p, i) => ({ ...p, uid: p.id, precedence: i + 1 })) };
   }
 
+  // Keeps any other policy settings (session_duration, approvals, …) as given.
   function policyFrom(body: Record<string, unknown>, id: string): FakePolicy {
     return {
+      ...body,
       id,
       name: str(body.name),
       decision: str(body.decision),
@@ -140,7 +153,7 @@ export function fakeCloudflareApi(init: Partial<FakeCloudflareState> = {}): Fake
     }
 
     if (resource === 'apps') {
-      if (!id && method === 'GET') return envelope(200, state.apps.map(appView));
+      if (!id && method === 'GET') return page(url, state.apps.map(appView));
       if (!id && method === 'POST') {
         const appId = newId('app');
         const destinations = (body.destinations as { type: string; uri: string }[]) ?? [];

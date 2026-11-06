@@ -4,11 +4,11 @@
 // Access scope); the fetch is injectable, so it is unit-tested against
 // test/helpers/fake-cloudflare-api.ts.
 
-export const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
+const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
 /** The only path behind Access (ADR-0001); /storage and WebFinger must stay open. */
-export const ACCESS_PATH = 'account';
-export const ACCESS_APP_NAME = 'RSilo';
-export const OWNER_POLICY_NAME = 'RSilo owner';
+const ACCESS_PATH = 'account';
+const ACCESS_APP_NAME = 'RSilo';
+const OWNER_POLICY_NAME = 'RSilo owner';
 
 export class CloudflareApiError extends Error {
   constructor(
@@ -27,7 +27,18 @@ export class CloudflareApiError extends Error {
 export interface CloudflareApi {
   /** Calls an account-level endpoint (`path` is relative to /accounts/:id) and returns `result`. */
   call<T>(method: string, path: string, body?: unknown): Promise<T>;
+  /** GETs every page of an account-level list endpoint. */
+  list<T>(path: string): Promise<T[]>;
 }
+
+interface Envelope<T> {
+  success?: boolean;
+  errors?: { code?: number; message?: string }[];
+  result?: T;
+  result_info?: { total_pages?: number };
+}
+
+const PER_PAGE = 50;
 
 export function cloudflareApi(options: {
   token: string;
@@ -36,21 +47,30 @@ export function cloudflareApi(options: {
   fetch?: (input: string, init: RequestInit) => Promise<Response>;
 }): CloudflareApi {
   const { token, accountId, baseUrl = CLOUDFLARE_API_BASE, fetch = globalThis.fetch } = options;
+  async function request<T>(method: string, path: string, body?: unknown): Promise<Envelope<T>> {
+    const res = await fetch(`${baseUrl}/accounts/${accountId}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => null)) as Envelope<T> | null;
+    if (!res.ok || !json?.success) {
+      const detail = json?.errors?.map((e) => `${e.message ?? 'error'}${e.code ? ` (${e.code})` : ''}`).join('; ');
+      throw new CloudflareApiError(res.status, `${method} ${path}: HTTP ${res.status}${detail ? `, ${detail}` : ''}`);
+    }
+    return json;
+  }
   return {
     async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-      const res = await fetch(`${baseUrl}/accounts/${accountId}${path}`, {
-        method,
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | { success?: boolean; errors?: { code?: number; message?: string }[]; result?: T }
-        | null;
-      if (!res.ok || !json?.success) {
-        const detail = json?.errors?.map((e) => `${e.message ?? 'error'}${e.code ? ` (${e.code})` : ''}`).join('; ');
-        throw new CloudflareApiError(res.status, `${method} ${path}: HTTP ${res.status}${detail ? `, ${detail}` : ''}`);
+      return (await request<T>(method, path, body)).result as T;
+    },
+    async list<T>(path: string): Promise<T[]> {
+      const all: T[] = [];
+      for (let page = 1; ; page++) {
+        const json = await request<T[]>('GET', `${path}?page=${page}&per_page=${PER_PAGE}`);
+        all.push(...(json.result ?? []));
+        if (page >= (json.result_info?.total_pages ?? 1)) return all;
       }
-      return json.result as T;
     },
   };
 }
@@ -61,6 +81,7 @@ interface IdentityProvider {
 }
 
 interface AccessPolicy {
+  [setting: string]: unknown;
   id: string;
   name: string;
   decision: string;
@@ -69,6 +90,10 @@ interface AccessPolicy {
   require?: unknown[];
   reusable?: boolean;
   precedence?: number;
+  uid?: string;
+  created_at?: string;
+  updated_at?: string;
+  app_count?: number;
 }
 
 interface AccessApp {
@@ -118,24 +143,21 @@ function ownerInclude(ownerEmail: string) {
 }
 
 /**
- * Points the app's Allow policy at `ownerEmail`, keeping its name and any
- * exclude/require rules. A reusable policy is edited only when no other app
- * uses it: changing it would change who may open those apps too.
+ * Points the app's Allow policy at `ownerEmail`, keeping everything else about
+ * it (name, exclude/require rules, session duration, …). A reusable policy is
+ * edited only when no other app uses it: changing it would change who may
+ * open those apps too.
  */
-async function updateOwnerPolicy(api: CloudflareApi, appId: string, owner: AccessPolicy, ownerEmail: string): Promise<AccessResult> {
-  const body = {
-    name: owner.name,
-    decision: owner.decision,
-    include: ownerInclude(ownerEmail),
-    exclude: owner.exclude ?? [],
-    require: owner.require ?? [],
-  };
-  if (owner.reusable) {
-    const { app_count: appCount } = await api.call<{ app_count?: number }>('GET', `/access/policies/${owner.id}`);
-    if ((appCount ?? 1) > 1) return { status: 'shared-policy', appId, policyName: owner.name };
-    await api.call('PUT', `/access/policies/${owner.id}`, body);
+async function updateAllowPolicy(api: CloudflareApi, appId: string, policy: AccessPolicy, ownerEmail: string): Promise<AccessResult> {
+  // Read-only fields are dropped; precedence belongs to the app, not a reusable policy.
+  const { id, uid: _uid, created_at: _created, updated_at: _updated, reusable, app_count: _count, precedence, ...settings } = policy;
+  const body = { ...settings, include: ownerInclude(ownerEmail) };
+  if (reusable) {
+    const { app_count: appCount } = await api.call<{ app_count?: number }>('GET', `/access/policies/${id}`);
+    if ((appCount ?? 1) > 1) return { status: 'shared-policy', appId, policyName: policy.name };
+    await api.call('PUT', `/access/policies/${id}`, body);
   } else {
-    await api.call('PUT', `/access/apps/${appId}/policies/${owner.id}`, { ...body, precedence: owner.precedence });
+    await api.call('PUT', `/access/apps/${appId}/policies/${id}`, { ...body, precedence });
   }
   return { status: 'updated', appId };
 }
@@ -150,17 +172,20 @@ export async function ensureAccessApp(api: CloudflareApi, opts: { host: string; 
   try {
     await api.call('GET', '/access/organizations');
   } catch (err) {
-    // What a never-onboarded account answers is not documented; anything but
-    // a refused token is reported as "set up Zero Trust", with Cloudflare's words.
-    if (err instanceof CloudflareApiError && !err.refused) return { status: 'no-zero-trust', detail: err.message };
+    // What a never-onboarded account answers is not documented; a client error
+    // other than a refused token or rate limit is reported as "set up Zero
+    // Trust", with Cloudflare's words. Outages (5xx) stay errors.
+    if (err instanceof CloudflareApiError && err.status >= 400 && err.status < 500 && !err.refused && err.status !== 429) {
+      return { status: 'no-zero-trust', detail: err.message };
+    }
     throw err;
   }
-  const apps =await api.call<AccessApp[]>('GET', '/access/apps');
+  const apps = await api.list<AccessApp>('/access/apps');
   const existing = apps.find((app) => app.type === 'self_hosted' && appDomains(app).includes(domain));
   if (existing) {
-    const owner = (existing.policies ?? []).find((p) => p.decision === 'allow');
-    if (owner && includesOnly(owner, opts.ownerEmail)) return { status: 'unchanged', appId: existing.id };
-    if (owner) return updateOwnerPolicy(api, existing.id, owner, opts.ownerEmail);
+    const allowPolicy = (existing.policies ?? []).find((p) => p.decision === 'allow');
+    if (allowPolicy && includesOnly(allowPolicy, opts.ownerEmail)) return { status: 'unchanged', appId: existing.id };
+    if (allowPolicy) return updateAllowPolicy(api, existing.id, allowPolicy, opts.ownerEmail);
     const last = Math.max(0, ...(existing.policies ?? []).map((p) => p.precedence ?? 0));
     await api.call('POST', `/access/apps/${existing.id}/policies`, {
       name: OWNER_POLICY_NAME,

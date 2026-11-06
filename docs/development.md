@@ -104,11 +104,11 @@ src/
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
   ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
-  scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
+  scripts/            setup (+ setup-config: pure, unit-tested helpers; cloudflare-access: the Access app), deploy, release
                       (bundle check + migrations, shared by both), wrangler-config,
                       dev-token, setup-local-db, render-api-docs, screenshots
 drizzle/migrations/   D1 migrations
-test/                 unit, contract, compliance and E2E suites; helpers/ holds the storage and D1 fakes
+test/                 unit, contract, compliance and E2E suites; helpers/ holds the storage, D1 and Cloudflare API fakes
 ```
 
 ## Testing
@@ -125,14 +125,13 @@ bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 
 Lint is type-aware (typescript-eslint `recommendedTypeChecked`, `no-explicit-any` included). Violations that predate it, nearly all `any` in tests, are baselined in `eslint-suppressions.json`; new ones fail. Once you fix a baselined one, lint fails until you run `bun run lint:prune`.
 
-The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler) and its Cloudflare Access setup (against a fake Cloudflare API), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 
 `test/s3-live.test.ts` runs the S3 adapter against a real S3 server, which checks request signing. It is skipped unless `RSILO_S3_LIVE_ENDPOINT` is set; the file header shows how to run it against a local SeaweedFS. CI runs it, and the remoteStorage spec-check, against a SeaweedFS container (`.github/workflows/spec-check.yml`).
 
 `test/cloudflare-access-live.test.ts` runs the Cloudflare Access part of `bun run setup` against the real Cloudflare API: it creates, re-checks, updates and deletes one Access app for a throwaway `workers.dev` host. It is skipped unless `RSILO_ACCESS_LIVE_TOKEN` is set (the file header shows how to run it); CI does not run it.
-
 
 ## Releasing
 
