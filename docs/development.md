@@ -77,7 +77,7 @@ The README's screenshots live in `docs/images/`. After a UI change, regenerate t
 bun run docs:screenshots
 ```
 
-It starts a throwaway offline server on port 8797 with a temporary database, seeds sample files, connects three apps through the real consent page, captures the dashboard, the file manager and the consent page, then deletes the temporary data. It drives Chromium through `playwright-core`, which uses a browser installed with `bunx playwright install chromium`. Where that browser will not launch (NixOS, for example), point `CHROME_PATH` at another Chromium build:
+It starts a throwaway offline server on port 8797 with a temporary database, seeds sample files, connects three apps through the real consent page, captures the dashboard and the file manager, then deletes the temporary data. It drives Chromium through `playwright-core`, which uses a browser installed with `bunx playwright install chromium`. Where that browser will not launch (NixOS, for example), point `CHROME_PATH` at another Chromium build:
 
 ```bash
 CHROME_PATH=$(ls -d /nix/store/*-playwright-chromium/*/chrome | head -1) bun run docs:screenshots

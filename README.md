@@ -24,10 +24,7 @@ RemoteStorage is an open protocol for syncing app data across devices. A server 
 - **Public sharing** through the `public` module
 - Everything fits inside Cloudflare's **free tier** (see [Running on the Cloudflare free tier](docs/self-hosting.md#running-on-the-cloudflare-free-tier))
 
-<p>
-  <img src="docs/images/files.png" alt="The file manager: browse folders, then view, download, delete or upload files" width="68%">
-  <img src="docs/images/consent.png" alt="The consent page: an app asks for read and write access to the documents module, and you allow or deny it" width="30%">
-</p>
+![The file manager: browse folders, then view, download, delete or upload files](docs/images/files.png)
 
 ## Where to start
 

@@ -6,8 +6,8 @@ import { chromium, type Page } from 'playwright-core';
 
 // Regenerates the README screenshots in docs/images/. Starts a throwaway
 // offline server on a temp directory, seeds sample files, connects three apps
-// through the real consent page, then captures the dashboard, file manager and
-// consent page. Uses the Chromium from `bunx playwright install chromium`, or
+// through the real consent page, then captures the dashboard and the file
+// manager. Uses the Chromium from `bunx playwright install chromium`, or
 // CHROME_PATH where that one will not launch (see docs/development.md).
 
 const PORT = 8797;
@@ -51,10 +51,6 @@ try {
   const files = await page.locator('table').first().locator('xpath=ancestor::*[contains(@class,"card")][1]').boundingBox();
   await shotTo(page, 'files.png', files!.y + files!.height + 32);
 
-  await page.goto(`${BASE}/account/oauth/authorize?${consentQuery('https://litewrite.net', 'documents:rw')}`);
-  const allow = await page.locator('button[value="approve"]').boundingBox();
-  await page.screenshot({ path: `${OUT}/consent.png`, clip: { x: 250, y: 40, width: 500, height: allow!.y + allow!.height + 20 } });
-
   await browser.close();
   console.log(`Screenshots written to ${OUT}/`);
 } finally {
@@ -83,7 +79,7 @@ async function connectApps(page: Page): Promise<void> {
   const apps = [
     ['https://litewrite.net', 'documents:rw'],
     ['https://webmarks.5apps.com', 'bookmarks:rw'],
-    ['https://sharesome.5apps.com', 'pictures:r'],
+    ['https://savr.link', 'savr:rw'],
   ];
   for (const [origin, scope] of apps) {
     await page.goto(`${BASE}/account/oauth/authorize?${consentQuery(origin, scope)}`);
