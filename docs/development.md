@@ -146,3 +146,16 @@ Every test that touches the database runs the real SQL that production runs: the
 3. Create the GitHub release from the tag, with the changelog entry as its notes: `gh release create v0.3.0 --notes-file <entry>`.
 
 Deploy-button Instances follow `main`, not tags, so `main` must stay deployable between releases.
+
+### Fresh-user check
+
+The tests can't tell whether someone non-technical can actually set RSilo up. Before announcing a release that changes deploying, Cloudflare Access or `/account`, watch one such person try it. They need a **new** Cloudflare account and a GitHub account; give them only the README link, and don't help. Ask them to:
+
+1. Get their own RSilo running, using the free option.
+2. Sign in to `/account`.
+3. Connect a remoteStorage app (say [Savr](https://savr.link)) and save something in it.
+4. Open the app on a second device and see the same data.
+5. Find what they saved in the file manager.
+6. Revoke the app.
+
+Note every place they stall or need a hint, and file each one as a `needs-triage` issue. The Cloudflare Access step is the one most likely to go wrong ([#61](https://github.com/jonocodes/RSilo/issues/61)).
