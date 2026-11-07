@@ -47,6 +47,12 @@ describe('finish-setup page: Turn on Cloudflare Access', () => {
     expect(html.indexOf('/account/setup-access')).toBeLessThan(html.indexOf('Self-hosted'));
   });
 
+  it('does not offer it on another host than PUBLIC_BASE_URL: it would protect that host, not this one', async () => {
+    const res = await app.request('https://rsilo.my-sub.workers.dev/account', {}, productionEnv());
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain('/account/setup-access');
+  });
+
   it('does not offer it until OWNER_EMAIL is set: the policy needs it', async () => {
     const res = await app.request(`${BASE}/account`, {}, productionEnv({ OWNER_EMAIL: undefined }));
     expect(await res.text()).not.toContain('/account/setup-access');
@@ -141,5 +147,37 @@ describe('POST /account/setup-access', () => {
     expect(html).toContain('https://one.dash.cloudflare.com/');
     expect(html).toContain('<strong>Free</strong> plan');
     expect(fake.writes()).toEqual([]);
+  });
+
+  it('does nothing on another host than PUBLIC_BASE_URL', async () => {
+    const res = await app.request('https://rsilo.my-sub.workers.dev/account/setup-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' },
+      body: `token=${FAKE_TOKEN}`,
+    }, productionEnv());
+    expect(res.status).toBe(303);
+    expect(fake.requests).toEqual([]);
+  });
+
+  it('shows a Cloudflare failure, escaped', async () => {
+    const failing = (input: string, init: RequestInit) => input.endsWith('/access/organizations')
+      ? Promise.resolve(Response.json({ success: false, errors: [{ code: 1, message: '<b>down</b>' }] }, { status: 503 }))
+      : fake.fetch(input, init);
+    vi.stubGlobal('fetch', failing);
+    const res = await submit({ token: FAKE_TOKEN });
+    expect(res.status).toBe(502);
+    const html = await res.text();
+    expect(html).toContain('&lt;b&gt;down&lt;/b&gt;');
+    expect(html).not.toContain('<b>down</b>');
+  });
+
+  it('logs each attempt with its result, never the token', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await submit({ token: 'not-an-access-token' });
+    await submit({ token: FAKE_TOKEN });
+    const events = log.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>).filter((e) => e.event === 'account.access_setup');
+    expect(events.map((e) => e.result)).toEqual(['refused', 'created']);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('not-an-access-token');
+    log.mockRestore();
   });
 });

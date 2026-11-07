@@ -5,8 +5,6 @@
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
 import { accessTokenUrl, type AccessResult } from '../services/cloudflare-access';
 
-export { accessTokenUrl };
-
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
 /** The vars a fresh Instance must be given; the rest have defaults (src/config.ts). */

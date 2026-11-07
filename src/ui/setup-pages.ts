@@ -116,9 +116,9 @@ function ownerEmailSection(setup: SetupState, host: string): string {
 }
 
 /**
- * Lets RSilo create the Access app itself (routes/account.ts POST
- * /account/setup-access). Offered only once OWNER_EMAIL and the other settings
- * are valid: the app's Allow policy is OWNER_EMAIL.
+ * Lets RSilo create the Access app itself (POST /account/setup-access,
+ * routes/access-setup.ts). Offered only when SetupState.canSetUpAccess: the
+ * app's Allow policy is OWNER_EMAIL, and it protects the public host.
  */
 function automaticAccessForm(): string {
   return `<p>RSilo can set it up for you with a Cloudflare API token that may edit Access:</p>
@@ -159,7 +159,7 @@ export function finishSetupPage(setup: SetupState, host: string): string {
     <h1>Finish setting up RSilo</h1>
     ${configProblemsSection(setup.configProblems, host)}
     ${ownerEmailSection(setup, host)}
-    ${setup.accessMissing ? accessSection(host, !setup.ownerEmail && setup.configProblems.length === 0) : ''}
+    ${setup.accessMissing ? accessSection(host, setup.canSetUpAccess) : ''}
     <p>Then reload this page.</p>`);
 }
 
@@ -168,7 +168,7 @@ export type AccessSetupOutcome =
   | AccessResult
   | { status: 'no-token' | 'refused' }
   /** The token reaches `count` Cloudflare accounts, not exactly one. */
-  | { status: 'accounts'; count: number }
+  | { status: 'not-one-account'; count: number }
   | { status: 'error'; detail: string };
 
 const TRY_AGAIN = '<p><a href="/account">Back to the setup page</a> to try again, or to set Access up by hand.</p>';
@@ -216,7 +216,7 @@ export function accessSetupPage(outcome: AccessSetupOutcome, host: string): stri
     <p>It needs <strong>Access: Apps and Policies → Edit</strong> and
       <strong>Access: Organizations, Identity Providers, and Groups → Edit</strong>.
       The link on the setup page fills both in.</p>${TRY_AGAIN}`);
-    case 'accounts':
+    case 'not-one-account':
       return page('Pick one account', `
     <h1>The token must reach exactly one Cloudflare account</h1>
     <p>It reaches ${outcome.count === 0 ? 'none' : outcome.count}, so RSilo cannot tell which one this Worker is in.

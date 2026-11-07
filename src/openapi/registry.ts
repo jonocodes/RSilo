@@ -218,7 +218,7 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     summary: 'Set up Cloudflare Access from the finish-setup page',
     tags: ['Account'],
     description: 'Form field token: a Cloudflare API token that may edit Access. Acts only while Cloudflare Access is the one '
-      + 'thing missing in front of /account (otherwise redirects to /account): creates or fixes the self-hosted Access app for '
+      + 'thing missing in front of /account, on the public host (otherwise redirects to /account): creates or fixes the self-hosted Access app for '
       + '<host>/account with an Allow policy for OWNER_EMAIL. The token is used once and never stored. Same-origin only, '
       + 'and rate-limited per IP.',
     responses: {

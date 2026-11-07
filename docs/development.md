@@ -92,7 +92,8 @@ src/
   config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL, S3_* settings) and dev defaults
   types.ts            Worker bindings (AppEnv) and the StorageInterface every backend implements
   routes/             storage, webfinger, oauth (discovery, token, legacy consent redirect), account,
-                      consent (/account/oauth/authorize), debug, docs (/api, /openapi.json),
+                      consent (/account/oauth/authorize), access-setup (finish-setup page form that sets up
+                      Access), debug, docs (/api, /openapi.json),
                       mount (shared route table and error handler)
   middleware/         auth (storage authorization), cors, instance (config + Account gates),
                       owner (/account gate + CSRF)

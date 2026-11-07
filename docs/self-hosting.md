@@ -216,7 +216,7 @@ Until Access protects `/account`, that page shows *Finish setting up RSilo*. Onc
 2. Click **Continue to summary → Create Token**, and copy the token.
 3. Paste it into the page and click **Set up Access**.
 
-The Worker then does exactly what `bun run setup` does, for its own address and `OWNER_EMAIL`. The token goes only to your own Worker, is used for that one request, and is never stored. The policy always uses `OWNER_EMAIL` from the Worker's settings, never anything typed into the page, so someone who finds the page before you cannot let themselves in. The form disappears once Access is on. If your account has never used Zero Trust, the page sends you to sign up first. Wait a minute after it says *Cloudflare Access is on*, then open `/account` and sign in.
+The Worker then does exactly what `bun run setup` does, for its own address and `OWNER_EMAIL`. The token goes only to your own Worker, is used for that one request, and is never stored. The policy always uses `OWNER_EMAIL` from the Worker's settings, never anything typed into the page, so someone who finds the page before you cannot let themselves in. The form appears only on your public address (your `PUBLIC_BASE_URL`, if you set one), since that is the address it protects, and disappears once Access is on. If your account has never used Zero Trust, the page sends you to sign up first. Wait a minute after it says *Cloudflare Access is on*, then open `/account` and sign in.
 
 ### By hand, in the Zero Trust dashboard
 
@@ -354,7 +354,7 @@ RSilo writes one JSON line to the Worker's log for each security event. Successf
 | `oauth.invalid_grant` | The token endpoint refused a code or refresh token | `grant_type`, `reason` (`invalid_code`, `redirect_uri_mismatch`, `pkce_mismatch`, `invalid_refresh_token`), `client_id` when known |
 | `account.app_revoked` | You revoked an app on `/account` | `client_id` |
 | `account.owner_rejected` | A signed-in identity other than `OWNER_EMAIL` reached `/account` | `email` |
-| `account.access_setup` | The finish-setup page's form set up (or tried to set up) Cloudflare Access | `result` (`created`, `updated`, `unchanged`, `shared-policy`, `no-zero-trust` or `error`) |
+| `account.access_setup` | The finish-setup page's form set up (or tried to set up) Cloudflare Access | `result`: `created`, `updated`, `unchanged`, `shared-policy`, `no-zero-trust`, `refused` (the token was refused), `not-one-account` or `error` |
 
 Tokens, codes, `code_verifier`s, `Authorization` headers and document contents are never logged. Paths are, so the names of files in refused requests appear in the log.
 
