@@ -15,7 +15,8 @@ export type SecurityEvent =
   | 'oauth.token_refreshed'
   | 'oauth.invalid_grant'
   | 'account.app_revoked'
-  | 'account.owner_rejected';
+  | 'account.owner_rejected'
+  | 'account.access_setup';
 
 /** The client's IP as Cloudflare reports it; rate limits and security logs key on it. */
 export function trustedClientIp(c: Context): string {

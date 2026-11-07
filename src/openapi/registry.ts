@@ -214,6 +214,22 @@ export const ROUTE_METADATA: Record<string, OperationMeta> = {
     tags: ['Account'],
     security: ACCESS,
   },
+  'POST /account/setup-access': {
+    summary: 'Set up Cloudflare Access from the finish-setup page',
+    tags: ['Account'],
+    description: 'Form field token: a Cloudflare API token that may edit Access. Acts only while Cloudflare Access is the one '
+      + 'thing missing in front of /account (otherwise redirects to /account): creates or fixes the self-hosted Access app for '
+      + '<host>/account with an Allow policy for OWNER_EMAIL. The token is used once and never stored. Same-origin only, '
+      + 'and rate-limited per IP.',
+    responses: {
+      '200': { description: 'HTML page: Access is on, or what to do next (set up Zero Trust, check a shared policy).' },
+      '303': { description: 'Access is already in front of /account, or another setting is missing: to /account.' },
+      '400': { description: 'HTML page: no token, the token was refused, or it reaches more than one account.' },
+      '403': { description: 'Cross-site request.' },
+      '429': { description: 'Rate limit exceeded.' },
+      '502': { description: 'HTML page: the Cloudflare API failed.' },
+    },
+  },
   'POST /account/quota': {
     summary: 'Set the storage quota',
     tags: ['Account'],

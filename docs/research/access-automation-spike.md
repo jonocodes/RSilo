@@ -33,5 +33,5 @@ From `GET /accounts/:id/access/apps` on the production Instance's hand-made app:
 
 ## Left for later
 
-- A standalone command for Deploy-button Instances (`bunx rsilo-access …`), as #61 suggests.
+- ~~A standalone command for Deploy-button Instances (`bunx rsilo-access …`), as #61 suggests.~~ Done differently: the Worker's finish-setup page takes the token and sets Access up itself (`src/routes/access-setup.ts`), so Deploy-button Owners need no tools.
 - Other sign-in methods (#27): setup only sets `allowed_idps` when it creates the app, and leaves an existing app's login methods alone.

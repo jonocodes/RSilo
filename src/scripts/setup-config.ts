@@ -3,7 +3,9 @@
 // Access texts (manual steps, token prompt, summary). No I/O here, so it is
 // unit-tested without Cloudflare.
 import { accountUsernameProblem, ownerEmailProblem, publicBaseUrlProblem, s3BucketProblem, s3EndpointProblem } from '../config';
-import type { AccessResult } from '../services/cloudflare-access';
+import { accessTokenUrl, type AccessResult } from '../services/cloudflare-access';
+
+export { accessTokenUrl };
 
 export const INSTANCE_VARS = ['ACCOUNT_USERNAME', 'OWNER_EMAIL', 'PUBLIC_BASE_URL'] as const;
 export type InstanceVar = (typeof INSTANCE_VARS)[number];
@@ -256,23 +258,6 @@ WebFinger, so your apps could no longer sync.`;
 
 /** The env var `bun run setup` reads a Cloudflare API token from, to set up Access itself. */
 export const ACCESS_TOKEN_ENV = 'CLOUDFLARE_ACCESS_API_TOKEN';
-
-/**
- * The dashboard's API token form, pre-filled with the permissions setup needs:
- * Access: Apps and Policies (`access`) and Access: Organizations, Identity
- * Providers, and Groups (`access_acct`, for the one-time PIN login method).
- * See https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
- */
-export function accessTokenUrl(accountId?: string): string {
-  const keys = [{ key: 'access', type: 'edit' }, { key: 'access_acct', type: 'edit' }];
-  const params = new URLSearchParams({
-    permissionGroupKeys: JSON.stringify(keys),
-    accountId: accountId ?? '*',
-    zoneId: 'all',
-    name: 'RSilo Access',
-  });
-  return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`;
-}
 
 /** What setup prints before asking for the Access token (plain text). */
 export function accessTokenSteps(accountId?: string): string {

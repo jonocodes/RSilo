@@ -5,6 +5,7 @@ Notable changes to RSilo, newest first. Versions follow [semantic versioning](ht
 ## Unreleased
 
 - `bun run setup` sets up Cloudflare Access itself ([#61](https://github.com/jonocodes/RSilo/issues/61)). Given a Cloudflare API token that may edit Access (setup links to the token form, pre-filled), it creates or fixes the self-hosted Access application for `<host>/account`: an Allow policy for `OWNER_EMAIL` and the One-time PIN login method. Re-runs never create a second application, and `bun run setup --owner-email=…` now changes the sign-in email in one step. Without a token, setup prints the dashboard steps as before.
+- Deploy-button Instances can set up Cloudflare Access too: while Access is missing, the finish-setup page on `/account` takes a pasted Cloudflare API token and creates the Access application for the Worker's own address and `OWNER_EMAIL`. The token is never stored. The manual steps stay below it.
 
 ## 0.3.0 — 2026-11-05
 

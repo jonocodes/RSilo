@@ -11,6 +11,7 @@ import { maxObjectSize, ObjectTooLargeError, rejectOversizedContentLength } from
 import { requireAccountRow } from '../middleware/instance';
 import { requireOwner, requireSameOrigin } from '../middleware/owner';
 import { consentRouter } from './consent';
+import { setupAccess } from './access-setup';
 import type { Context, HonoEnv, StorageInterface } from '../types';
 
 export const accountRouter = new Hono<HonoEnv>();
@@ -36,6 +37,11 @@ accountRouter.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'no-referrer');
   c.header('X-Content-Type-Options', 'nosniff');
 });
+
+// The one exception: while Access is not in front of /account yet, the
+// finish-setup page's form may ask the Worker to set it up (routes/access-setup.ts
+// guards it on its own).
+accountRouter.post('/setup-access', setupAccess);
 
 // The whole surface is the Owner's (ADR-0001, ADR-0004): Cloudflare Access
 // signs them in, and requireOwner() checks the identity against OWNER_EMAIL on
