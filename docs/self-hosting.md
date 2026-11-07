@@ -10,7 +10,7 @@ Every Instance needs one setting, plain text (with R2, RSilo has no secrets):
 
 - `OWNER_EMAIL` — your email; only you may open `/account`
 
-Everything else has a default: your storage address is `me@<your Worker's host>`, and every URL RSilo advertises uses the address the Worker was reached at. Both deploy options below ask only for your email; the optional settings are in [Instance configuration](#instance-configuration). Afterwards Cloudflare Access must protect `/account`: `bun run setup` does that for you when you give it an Access API token; otherwise it is one manual step in the Cloudflare dashboard. See [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
+Everything else has a default: your storage address is `me@<your Worker's host>`, and every URL RSilo advertises uses the address the Worker was reached at. Both deploy options below ask only for your email; the optional settings are in [Instance configuration](#instance-configuration). Afterwards Cloudflare Access must protect `/account`. RSilo does that for you when you give it a Cloudflare API token, whichever way you deployed: `bun run setup` asks for one, and after a Deploy-button install `/account` has a form for it. Otherwise it is one manual step in the Cloudflare dashboard. See [Set up Cloudflare Access](#set-up-cloudflare-access). No custom domain is needed; the free `workers.dev` address works.
 
 ### Option A — Deploy to Cloudflare button (no CLI)
 
@@ -20,7 +20,7 @@ Clicking the button clones the repo into your account, asks you to name the Work
 
 On the setup page, fill in `OWNER_EMAIL` with your email. If you skip it, add it afterwards (see [Change your sign-in email](#change-your-sign-in-email) for the click path); until then, `/account` shows a *finish setup* page that tells you exactly what to enter.
 
-Then [set up Cloudflare Access](#set-up-cloudflare-access). Your copy of the repository does not pick up later RSilo fixes by itself; see [Updating a Deploy-button Instance](#updating-a-deploy-button-instance).
+Then open `https://<your Worker's host>/account`: it shows a *finish setup* page that can [set up Cloudflare Access](#from-the-finish-setup-page-after-a-deploy-button-install) for you. Your copy of the repository does not pick up later RSilo fixes by itself; see [Updating a Deploy-button Instance](#updating-a-deploy-button-instance).
 
 The committed `wrangler.toml` ships **placeholder** resource IDs so Cloudflare can detect and replace them with real ones in your account. Never commit your own IDs there — see [Deploying updates](#deploying-updates-to-your-own-instance). Its `OWNER_EMAIL` is empty on purpose: an empty value is never accepted, so a deploy that skipped it keeps `/account` closed behind the *finish setup* page.
 
@@ -208,9 +208,19 @@ If your account has never used Zero Trust, setup says so: open [one.dash.cloudfl
 
 Then open `https://<your Worker's host>/account`. Access asks for your email, sends you a code, and you land on your dashboard.
 
+### From the finish-setup page, after a Deploy-button install
+
+Until Access protects `/account`, that page shows *Finish setting up RSilo*. Once `OWNER_EMAIL` is set, its **Turn on Cloudflare Access** section offers to do it for you, with the same kind of token:
+
+1. Click **Open the API token form**. It opens the same pre-filled *RSilo Access* token as above. Under **Account Resources**, pick the account your Worker is in.
+2. Click **Continue to summary → Create Token**, and copy the token.
+3. Paste it into the page and click **Set up Access**.
+
+The Worker then does exactly what `bun run setup` does, for its own address and `OWNER_EMAIL`. The token goes only to your own Worker, is used for that one request, and is never stored. The policy always uses `OWNER_EMAIL` from the Worker's settings, never anything typed into the page, so someone who finds the page before you cannot let themselves in. The form appears only on your public address (your `PUBLIC_BASE_URL`, if you set one), since that is the address it protects, and disappears once Access is on. If your account has never used Zero Trust, the page sends you to sign up first. Wait a minute after it says *Cloudflare Access is on*, then open `/account` and sign in.
+
 ### By hand, in the Zero Trust dashboard
 
-Use this after a Deploy-button install, or if you skipped the token; `bun run setup` prints these steps with your address filled in.
+Use this if you'd rather not create a token; `bun run setup` and the finish-setup page show these steps with your address filled in.
 
 1. Open the Zero Trust dashboard, [one.dash.cloudflare.com](https://one.dash.cloudflare.com/). If it is your first time, pick a team name and the **Free** plan.
 2. Go to **Access → Applications → Add an application**, choose **Self-hosted**, and name it **RSilo**.
@@ -235,7 +245,7 @@ Nothing needs to be set in RSilo after creating the Access application.
 
 - ***Finish setup* (503).** Shown on `/account` (and the consent page) when they are not ready yet. It has up to three parts:
   - **Set your sign-in email (OWNER_EMAIL)** — `OWNER_EMAIL` is missing or not an email address. If you are already signed in through Access, the page says *"You're signed in through Cloudflare Access as …"* and shows that email ready to copy: set `OWNER_EMAIL` to exactly that. It gives the click path (**Workers & Pages → \<worker name\> → Settings → Variables and Secrets → Add → Type: Text, Variable name: OWNER_EMAIL, Value: your email → Deploy**; for an invalid value, edit the existing one instead). It never repeats an invalid value back. Apps already connected keep syncing meanwhile.
-  - **Turn on Cloudflare Access** — Access is not in front of `/account` yet: repeat the steps above, and check the domain and the `account` path. Until then nobody can open `/account` or approve an app, so a fresh deploy is safe. When both parts apply, the email part comes first.
+  - **Turn on Cloudflare Access** — Access is not in front of `/account` yet. Once `OWNER_EMAIL` is set, paste an API token into the form there and RSilo sets Access up ([details](#from-the-finish-setup-page-after-a-deploy-button-install)); or follow the manual steps it lists, and check the domain and the `account` path. Until then nobody can open `/account` or approve an app, so a fresh deploy is safe. When both parts apply, the email part comes first.
   - **Invalid settings** — an optional setting such as `ACCOUNT_USERNAME` or `PUBLIC_BASE_URL` is set to an invalid value (named, not repeated); fix or delete it.
 - ***Not allowed* (403).** You signed in through Access, but with an email other than `OWNER_EMAIL`; the page shows the email it saw (never the configured one) and the two places to update if you changed your sign-in email (see [Change your sign-in email](#change-your-sign-in-email)). Getting back in depends only on your Cloudflare account; there is no RSilo password to recover.
 - ***Username mismatch* (503).** `ACCOUNT_USERNAME` (default `me`) does not match the account already stored. The page names the stored username and the click path to set `ACCOUNT_USERNAME` to it; see [The Account row](#instance-configuration).
@@ -344,6 +354,7 @@ RSilo writes one JSON line to the Worker's log for each security event. Successf
 | `oauth.invalid_grant` | The token endpoint refused a code or refresh token | `grant_type`, `reason` (`invalid_code`, `redirect_uri_mismatch`, `pkce_mismatch`, `invalid_refresh_token`), `client_id` when known |
 | `account.app_revoked` | You revoked an app on `/account` | `client_id` |
 | `account.owner_rejected` | A signed-in identity other than `OWNER_EMAIL` reached `/account` | `email` |
+| `account.access_setup` | The finish-setup page's form set up (or tried to set up) Cloudflare Access | `result`: `created`, `updated`, `unchanged`, `shared-policy`, `no-zero-trust`, `refused` (the token was refused), `not-one-account` or `error` |
 
 Tokens, codes, `code_verifier`s, `Authorization` headers and document contents are never logged. Paths are, so the names of files in refused requests appear in the log.
 

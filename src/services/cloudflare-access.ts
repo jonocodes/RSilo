@@ -1,5 +1,6 @@
-// Cloudflare Access for `bun run setup` (#61): makes sure a self-hosted Access
-// app protects <host>/account and lets only OWNER_EMAIL in, by one-time PIN.
+// Cloudflare Access for `bun run setup` and the finish-setup page (#61): makes
+// sure a self-hosted Access app protects <host>/account and lets only
+// OWNER_EMAIL in, by one-time PIN.
 // Talks to the Cloudflare API with an API token (wrangler's OAuth login has no
 // Access scope); the fetch is injectable, so it is unit-tested against
 // test/helpers/fake-cloudflare-api.ts.
@@ -9,6 +10,23 @@ const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
 const ACCESS_PATH = 'account';
 const ACCESS_APP_NAME = 'RSilo';
 const OWNER_POLICY_NAME = 'RSilo owner';
+
+/**
+ * The dashboard's API token form, pre-filled with the permissions setup needs:
+ * Access: Apps and Policies (`access`) and Access: Organizations, Identity
+ * Providers, and Groups (`access_acct`, for the one-time PIN login method).
+ * See https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
+ */
+export function accessTokenUrl(accountId?: string): string {
+  const keys = [{ key: 'access', type: 'edit' }, { key: 'access_acct', type: 'edit' }];
+  const params = new URLSearchParams({
+    permissionGroupKeys: JSON.stringify(keys),
+    accountId: accountId ?? '*',
+    zoneId: 'all',
+    name: 'RSilo Access',
+  });
+  return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`;
+}
 
 export class CloudflareApiError extends Error {
   constructor(
@@ -40,39 +58,55 @@ interface Envelope<T> {
 
 const PER_PAGE = 50;
 
-export function cloudflareApi(options: {
+/** How to reach the Cloudflare API: the token, and (for tests) another base URL or fetch. */
+export interface CloudflareConnection {
   token: string;
-  accountId: string;
   baseUrl?: string;
   fetch?: (input: string, init: RequestInit) => Promise<Response>;
-}): CloudflareApi {
-  const { token, accountId, baseUrl = CLOUDFLARE_API_BASE, fetch = globalThis.fetch } = options;
-  async function request<T>(method: string, path: string, body?: unknown): Promise<Envelope<T>> {
-    const res = await fetch(`${baseUrl}/accounts/${accountId}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const json = (await res.json().catch(() => null)) as Envelope<T> | null;
-    if (!res.ok || !json?.success) {
-      const detail = json?.errors?.map((e) => `${e.message ?? 'error'}${e.code ? ` (${e.code})` : ''}`).join('; ');
-      throw new CloudflareApiError(res.status, `${method} ${path}: HTTP ${res.status}${detail ? `, ${detail}` : ''}`);
-    }
-    return json;
+}
+
+/** One API call; `path` is relative to `prefix` and names the call in errors. */
+async function request<T>(conn: CloudflareConnection, prefix: string, method: string, path: string, body?: unknown): Promise<Envelope<T>> {
+  const fetch = conn.fetch ?? ((input: string, init: RequestInit) => globalThis.fetch(input, init));
+  const res = await fetch(`${conn.baseUrl ?? CLOUDFLARE_API_BASE}${prefix}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${conn.token}`, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => null)) as Envelope<T> | null;
+  if (!res.ok || !json?.success) {
+    const detail = json?.errors?.map((e) => `${e.message ?? 'error'}${e.code ? ` (${e.code})` : ''}`).join('; ');
+    throw new CloudflareApiError(res.status, `${method} ${path}: HTTP ${res.status}${detail ? `, ${detail}` : ''}`);
   }
+  return json;
+}
+
+/** GETs every page of a list endpoint. */
+async function listAll<T>(conn: CloudflareConnection, prefix: string, path: string): Promise<T[]> {
+  const all: T[] = [];
+  for (let page = 1; ; page++) {
+    const json = await request<T[]>(conn, prefix, 'GET', `${path}?page=${page}&per_page=${PER_PAGE}`);
+    all.push(...(json.result ?? []));
+    if (page >= (json.result_info?.total_pages ?? 1)) return all;
+  }
+}
+
+export function cloudflareApi(options: CloudflareConnection & { accountId: string }): CloudflareApi {
+  const prefix = `/accounts/${options.accountId}`;
   return {
     async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-      return (await request<T>(method, path, body)).result as T;
+      return (await request<T>(options, prefix, method, path, body)).result as T;
     },
-    async list<T>(path: string): Promise<T[]> {
-      const all: T[] = [];
-      for (let page = 1; ; page++) {
-        const json = await request<T[]>('GET', `${path}?page=${page}&per_page=${PER_PAGE}`);
-        all.push(...(json.result ?? []));
-        if (page >= (json.result_info?.total_pages ?? 1)) return all;
-      }
-    },
+    list: <T>(path: string) => listAll<T>(options, prefix, path),
   };
+}
+
+/**
+ * The Cloudflare accounts the token can reach. The finish-setup page uses it to
+ * find the account: the Worker does not know its own account id.
+ */
+export function listAccounts(conn: CloudflareConnection): Promise<{ id: string; name: string }[]> {
+  return listAll(conn, '', '/accounts');
 }
 
 interface IdentityProvider {

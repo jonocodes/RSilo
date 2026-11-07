@@ -1,3 +1,4 @@
+import { accessTokenUrl, type AccessResult } from '../services/cloudflare-access';
 import type { SetupState } from '../services/identity';
 
 // Pages shown instead of /account when the Instance is not ready for the Owner,
@@ -25,6 +26,9 @@ function page(title: string, body: string): string {
     code { background: #f0f0f0; padding: 0.1rem 0.35rem; border-radius: 4px; }
     pre.copy { background: #f0f0f0; padding: 0.6rem 0.9rem; border-radius: 4px; user-select: all; overflow-x: auto; }
     pre.copy code { background: none; padding: 0; }
+    form.access-token { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0 1.5rem; }
+    form.access-token input { flex: 1; min-width: 16rem; padding: 0.45rem 0.6rem; font: inherit; border: 1px solid #ccc; border-radius: 4px; }
+    form.access-token button { padding: 0.45rem 1rem; font: inherit; border: 0; border-radius: 4px; background: #f38020; color: white; cursor: pointer; }
     .problems { background: #fff5f5; color: #a12; padding: 0.75rem 1rem 0.75rem 2rem; border-radius: 4px; }
   </style>
 </head>
@@ -111,9 +115,30 @@ function ownerEmailSection(setup: SetupState, host: string): string {
     <p>Apps already connected to your storage keep syncing meanwhile; only this account area waits for it.</p>`;
 }
 
-function accessSection(host: string): string {
+/**
+ * Lets RSilo create the Access app itself (POST /account/setup-access,
+ * routes/access-setup.ts). Offered only when SetupState.canSetUpAccess: the
+ * app's Allow policy is OWNER_EMAIL, and it protects the public host.
+ */
+function automaticAccessForm(): string {
+  return `<p>RSilo can set it up for you with a Cloudflare API token that may edit Access:</p>
+    <ol>
+      <li><a href="${escapeHtml(accessTokenUrl())}" target="_blank" rel="noopener">Open the API token form</a>,
+        already filled in. Under <strong>Account Resources</strong>, pick the account this Worker is in.</li>
+      <li>Click <strong>Continue to summary → Create Token</strong>, and copy the token.</li>
+      <li>Paste it here. It is used once, to create the Access application, and never stored.</li>
+    </ol>
+    <form method="post" action="/account/setup-access" class="access-token">
+      <input type="password" name="token" autocomplete="off" required placeholder="Cloudflare API token" aria-label="Cloudflare API token">
+      <button type="submit">Set up Access</button>
+    </form>
+    <p>Or set it up yourself in the Cloudflare dashboard:</p>`;
+}
+
+function accessSection(host: string, offerAutomatic: boolean): string {
   return `<h2>Turn on Cloudflare Access</h2>
-    <p>Your account area is protected by Cloudflare Access, which signs you in. To turn it on:</p>
+    <p>Your account area is protected by Cloudflare Access, which signs you in.${offerAutomatic ? '' : ' To turn it on:'}</p>
+    ${offerAutomatic ? automaticAccessForm() : ''}
     <ol>
       <li>In the Cloudflare dashboard, open <strong>Zero Trust</strong> (the free plan is enough).</li>
       <li>Go to <strong>Access → Applications</strong> and add a <strong>Self-hosted</strong> application named <strong>RSilo</strong>.</li>
@@ -134,8 +159,73 @@ export function finishSetupPage(setup: SetupState, host: string): string {
     <h1>Finish setting up RSilo</h1>
     ${configProblemsSection(setup.configProblems, host)}
     ${ownerEmailSection(setup, host)}
-    ${setup.accessMissing ? accessSection(host) : ''}
+    ${setup.accessMissing ? accessSection(host, setup.canSetUpAccess) : ''}
     <p>Then reload this page.</p>`);
+}
+
+/** How the finish-setup page's "Set up Access" form went (routes/access-setup.ts). */
+export type AccessSetupOutcome =
+  | AccessResult
+  | { status: 'no-token' | 'refused' }
+  /** The token reaches `count` Cloudflare accounts, not exactly one. */
+  | { status: 'not-one-account'; count: number }
+  | { status: 'error'; detail: string };
+
+const TRY_AGAIN = '<p><a href="/account">Back to the setup page</a> to try again, or to set Access up by hand.</p>';
+
+/** The answer to the "Set up Access" form. Never shows the token or OWNER_EMAIL. */
+export function accessSetupPage(outcome: AccessSetupOutcome, host: string): string {
+  const target = `<code>${escapeHtml(host)}/account</code>`;
+  switch (outcome.status) {
+    case 'created':
+    case 'updated':
+    case 'unchanged': {
+      const pin = outcome.status === 'created' && outcome.addedOneTimePin
+        ? `<p>RSilo also added the <strong>One-time PIN</strong> login method to your Zero Trust organization.
+      Your other Access applications that allow every login method offer it too; their policies still decide who may sign in.</p>`
+        : '';
+      return page('Access is on', `
+    <h1>Cloudflare Access is on</h1>
+    <p>Cloudflare Access now protects ${target}. Only the email set as <code>OWNER_EMAIL</code> may sign in,
+      with a one-time PIN sent to it.</p>
+    ${pin}
+    <p>It can take a minute to take effect. Then <a href="/account">open your account area</a> and sign in.</p>
+    <p>To sign in less often (24 hours by default), raise the session duration in the Zero Trust dashboard:
+      <strong>Access → Applications → RSilo → Edit → Session Duration</strong>.</p>`);
+    }
+    case 'shared-policy':
+      return page('Check your Access policy', `
+    <h1>Check your Access policy</h1>
+    <p>An Access application for ${target} already exists. It lets people in through the reusable policy
+      <strong>${escapeHtml(outcome.policyName)}</strong>, which other applications use too, so RSilo left it alone.</p>
+    <p>Make sure it includes the email set as <code>OWNER_EMAIL</code>:
+      <strong>Zero Trust → Access → Policies → ${escapeHtml(outcome.policyName)}</strong>.
+      Then <a href="/account">open your account area</a>.</p>`);
+    case 'no-zero-trust':
+      return page('Set up Zero Trust first', `
+    <h1>Set up Cloudflare Zero Trust first</h1>
+    <p>Access is part of Cloudflare Zero Trust, which this Cloudflare account has not set up yet.</p>
+    <p>Open <a href="https://one.dash.cloudflare.com/" target="_blank" rel="noopener">one.dash.cloudflare.com</a>,
+      pick a team name and the <strong>Free</strong> plan. Then <a href="/account">go back to the setup page</a>
+      and submit the token again.</p>`);
+    case 'no-token':
+      return page('Paste the token', `<h1>Paste the API token first</h1>${TRY_AGAIN}`);
+    case 'refused':
+      return page('Token refused', `
+    <h1>Cloudflare refused the token</h1>
+    <p>It needs <strong>Access: Apps and Policies → Edit</strong> and
+      <strong>Access: Organizations, Identity Providers, and Groups → Edit</strong>.
+      The link on the setup page fills both in.</p>${TRY_AGAIN}`);
+    case 'not-one-account':
+      return page('Pick one account', `
+    <h1>The token must reach exactly one Cloudflare account</h1>
+    <p>It reaches ${outcome.count === 0 ? 'none' : outcome.count}, so RSilo cannot tell which one this Worker is in.
+      Create the token again and, under <strong>Account Resources</strong>, include only the account this Worker is in.</p>${TRY_AGAIN}`);
+    case 'error':
+      return page('Could not set up Access', `
+    <h1>Could not set up Access</h1>
+    <p>Cloudflare answered: <code>${escapeHtml(outcome.detail)}</code></p>${TRY_AGAIN}`);
+  }
 }
 
 /** 403 for a signed-in identity that is not OWNER_EMAIL. Never shows OWNER_EMAIL itself. */

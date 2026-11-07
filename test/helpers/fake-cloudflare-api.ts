@@ -1,5 +1,5 @@
 // An in-memory Cloudflare API for the Access endpoints `bun run setup` uses
-// (src/scripts/cloudflare-access.ts): the Zero Trust organization, identity
+// (src/services/cloudflare-access.ts): the Zero Trust organization, identity
 // providers, self-hosted apps with app-scoped policies, and reusable policies.
 // It answers in Cloudflare's { success, errors, result } envelope, refuses any
 // other bearer token with 403 / code 10000 as Cloudflare does, and shapes app
@@ -42,6 +42,8 @@ export interface FakeApp {
 export interface FakeCloudflareState {
   token: string;
   accountId: string;
+  /** Further accounts the token can reach (GET /accounts), besides this one. */
+  otherAccounts: { id: string; name: string }[];
   /** null: Zero Trust was never set up on the account. */
   organization: { name: string; auth_domain: string } | null;
   identityProviders: FakeIdentityProvider[];
@@ -85,6 +87,7 @@ export function fakeCloudflareApi(init: Partial<FakeCloudflareState> = {}): Fake
   const state: FakeCloudflareState = {
     token: FAKE_TOKEN,
     accountId: FAKE_ACCOUNT_ID,
+    otherAccounts: [],
     organization: { name: 'team.cloudflareaccess.com', auth_domain: 'team.cloudflareaccess.com' },
     identityProviders: [{ id: 'otp-idp', name: '', type: 'onetimepin' }],
     apps: [],
@@ -123,6 +126,10 @@ export function fakeCloudflareApi(init: Partial<FakeCloudflareState> = {}): Fake
       return envelope(403, null, [{ code: 10000, message: 'Authentication error' }]);
     }
     const url = new URL(request.url);
+    if (url.pathname === `${new URL(FAKE_API_BASE).pathname}/accounts` && request.method === 'GET') {
+      requests.push('GET /accounts');
+      return page(url, [{ id: state.accountId, name: 'Test account' }, ...state.otherAccounts]);
+    }
     const prefix = `${new URL(FAKE_API_BASE).pathname}/accounts/${state.accountId}`;
     if (!url.pathname.startsWith(prefix)) {
       // Another account: Cloudflare refuses the token rather than saying "not found".

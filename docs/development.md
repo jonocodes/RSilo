@@ -92,7 +92,8 @@ src/
   config.ts           per-Instance config (OWNER_EMAIL required; ACCOUNT_USERNAME, PUBLIC_BASE_URL, S3_* settings) and dev defaults
   types.ts            Worker bindings (AppEnv) and the StorageInterface every backend implements
   routes/             storage, webfinger, oauth (discovery, token, legacy consent redirect), account,
-                      consent (/account/oauth/authorize), debug, docs (/api, /openapi.json),
+                      consent (/account/oauth/authorize), access-setup (finish-setup page form that sets up
+                      Access), debug, docs (/api, /openapi.json),
                       mount (shared route table and error handler)
   middleware/         auth (storage authorization), cors, instance (config + Account gates),
                       owner (/account gate + CSRF)
@@ -100,11 +101,12 @@ src/
                       account (Account row lifecycle), discovery (advertised URLs, WebFinger matching),
                       tokens (codes, tokens, refresh rotation), pkce, rate-limit, security-log,
                       r2 (+ getStorage), s3, local-storage, quota-storage (quota-aware writes),
-                      object-size, storage-errors, db/ (schema types, SQLite D1 shim)
+                      object-size, storage-errors, cloudflare-access (creates the Access app; used
+                      by setup and the finish-setup page), db/ (schema types, SQLite D1 shim)
   openapi/            route registry, OpenAPI spec and the docs/api.md renderer
   ui/                 account client script, setup and not-allowed pages
   protocol/           constants (ETag normalisation), item-path (item names), range (byte ranges)
-  scripts/            setup (+ setup-config: pure, unit-tested helpers; cloudflare-access: the Access app), deploy, release
+  scripts/            setup (+ setup-config: pure, unit-tested helpers), deploy, release
                       (bundle check + migrations, shared by both), wrangler-config,
                       dev-token, setup-local-db, render-api-docs, screenshots
 drizzle/migrations/   D1 migrations
@@ -125,7 +127,7 @@ bun run test -- test/e2e/storage-e2e.test.ts  # one E2E suite
 
 Lint is type-aware (typescript-eslint `recommendedTypeChecked`, `no-explicit-any` included). Violations that predate it, nearly all `any` in tests, are baselined in `eslint-suppressions.json`; new ones fail. Once you fix a baselined one, lint fails until you run `bun run lint:prune`.
 
-The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler) and its Cloudflare Access setup (against a fake Cloudflare API), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
+The suite covers protocol compliance (RemoteStorage, WebFinger, edge cases), single-Account discovery and the Account row lifecycle, optional-config defaults and the setup pages, storage, auth, rate limiting, security event logging, OAuth and the consent page, token hashing, PKCE and refresh rotation, Cloudflare Access identity and CSRF, the account dashboard, debug/observability, wrangler config, the setup script (against a fake wrangler) and its Cloudflare Access setup, from the CLI and from the finish-setup page (against a fake Cloudflare API), file manager, quota accounting, the R2 and S3 storage adapters (S3 against an in-memory fake), the SQLite D1 shim and migration/schema checks, and E2E against the offline server.
 
 Every test that touches the database runs the real SQL that production runs: the schema lives only in `drizzle/migrations`, and the SQLite D1 shim applies it to each test database.
 

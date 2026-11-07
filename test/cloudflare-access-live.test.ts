@@ -7,7 +7,7 @@
 //   RSILO_ACCESS_LIVE_TOKEN=<token with Access edit> RSILO_ACCESS_LIVE_ACCOUNT_ID=<account id> \
 //   RSILO_ACCESS_LIVE_SUBDOMAIN=<subdomain>.workers.dev bun run test test/cloudflare-access-live.test.ts
 import { afterAll, describe, expect, it } from 'vitest';
-import { cloudflareApi, ensureAccessApp } from '../src/scripts/cloudflare-access';
+import { cloudflareApi, ensureAccessApp } from '../src/services/cloudflare-access';
 
 const token = process.env.RSILO_ACCESS_LIVE_TOKEN;
 

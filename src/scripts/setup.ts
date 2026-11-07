@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { DEFAULT_ACCOUNT_USERNAME } from '../config';
-import { CloudflareApiError, cloudflareApi, ensureAccessApp } from './cloudflare-access';
+import { CloudflareApiError, cloudflareApi, ensureAccessApp } from '../services/cloudflare-access';
 import {
   ACCESS_TOKEN_ENV,
   accessSteps,

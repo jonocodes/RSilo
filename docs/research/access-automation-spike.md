@@ -1,6 +1,6 @@
 # Can `bun run setup` create the Cloudflare Access app itself?
 
-> **Status:** a snapshot from 2026-11-06, the spike for [#61](https://github.com/jonocodes/RSilo/issues/61). It was built from these findings: `src/scripts/cloudflare-access.ts`.
+> **Status:** a snapshot from 2026-11-06, the spike for [#61](https://github.com/jonocodes/RSilo/issues/61). It was built from these findings: `src/services/cloudflare-access.ts`.
 
 Checked 2026-11-06 against wrangler 4.147.0, Cloudflare's API docs, and read-only calls to the Access API of the production account. Anything not settled that way is marked **unverified**.
 
@@ -33,5 +33,5 @@ From `GET /accounts/:id/access/apps` on the production Instance's hand-made app:
 
 ## Left for later
 
-- A standalone command for Deploy-button Instances (`bunx rsilo-access …`), as #61 suggests.
+- ~~A standalone command for Deploy-button Instances (`bunx rsilo-access …`), as #61 suggests.~~ Done differently: the Worker's finish-setup page takes the token and sets Access up itself (`src/routes/access-setup.ts`), so Deploy-button Owners need no tools.
 - Other sign-in methods (#27): setup only sets `allowed_idps` when it creates the app, and leaves an existing app's login methods alone.

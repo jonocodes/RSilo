@@ -54,6 +54,7 @@ app — the interactive view is at `GET /api`, the raw spec at `GET /openapi.jso
 | `GET` | `/account/download/{path}` | Cloudflare Access | Download a file |
 | `POST` | `/account/quota` | Cloudflare Access | Set the storage quota |
 | `POST` | `/account/save/{path}` | Cloudflare Access | Save edits to a text file |
+| `POST` | `/account/setup-access` |  | Set up Cloudflare Access from the finish-setup page |
 | `GET` | `/account/tokens` |  | Redirect to the dashboard |
 | `POST` | `/account/upload/{path}` | Cloudflare Access | Upload files to a folder |
 | `GET` | `/account/view/{path}` | Cloudflare Access | View a text file |

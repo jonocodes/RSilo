@@ -7,7 +7,6 @@ import {
   REQUIRED_VARS,
   accessSteps,
   accessSummary,
-  accessTokenUrl,
   parseSetupArgs,
   readVars,
   resolveSetting,
@@ -16,6 +15,7 @@ import {
   withoutEmptyVars,
   workersDevUrl,
 } from '../src/scripts/setup-config';
+import { accessTokenUrl } from '../src/services/cloudflare-access';
 
 const TEMPLATE = `name = "rsilo"
 main = "src/index.ts"

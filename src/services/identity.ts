@@ -38,6 +38,12 @@ export interface SetupState {
   accessMissing: boolean;
   /** The visitor's email as Cloudflare Access reports it, when there is one. */
   accessEmail: string | null;
+  /**
+   * The finish-setup page may set Access up itself (routes/access-setup.ts):
+   * Access is the one thing missing, and the request is on the public host,
+   * the one the Access app would protect.
+   */
+  canSetUpAccess: boolean;
 }
 
 export type OwnerResolution =
@@ -106,6 +112,8 @@ export async function resolveOwner(c: Context): Promise<OwnerResolution> {
     ownerEmail: 'problem' in owner ? { problem: owner.problem, missing: owner.missing } : null,
     accessMissing: email === undefined,
     accessEmail: accessContext(c) ? email ?? null : null,
+    canSetUpAccess: email === undefined && ownerEmail !== null && 'config' in instance
+      && new URL(c.req.url).host === instance.config.publicHost,
   };
   if ('problems' in instance || !ownerEmail || email === undefined) return { status: 'not_configured', setup };
 
