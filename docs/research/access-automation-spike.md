@@ -2,7 +2,7 @@
 
 > **Status:** a snapshot from 2026-11-06, the spike for [#61](https://github.com/jonocodes/RSilo/issues/61). It was built from these findings: `src/services/cloudflare-access.ts`.
 
-Checked 2026-11-06 against wrangler 4.147.0, Cloudflare's API docs, and read-only calls to the Access API of the production account. Anything not settled that way is marked **unverified**.
+Checked 2026-11-06 against wrangler 4.147.0, Cloudflare's API docs, and read-only calls to the Access API of the production account; the create and update calls were then verified by the live test (see *The app's shape*). Anything not settled that way is marked **unverified**.
 
 **Verdict:** yes, with a separate API token. Wrangler's login cannot manage Access. The token is pre-filled from one link, so the Owner's seven error-prone dashboard steps become three mechanical ones (open the link, create the token, paste it). Nothing in those three can produce a wrong hostname, path or email. The one thing setup cannot do is a first-time Zero Trust sign-up; it detects that and sends the Owner to that single page.
 
@@ -20,7 +20,7 @@ From `GET /accounts/:id/access/apps` on the production Instance's hand-made app:
 - `type: "self_hosted"`, `domain: "<host>.workers.dev/account"`, `self_hosted_domains: [same]`, `destinations: [{ type: "public", uri: same }]`. The API takes a `workers.dev` hostname plus path, the same as the dashboard does (ADR-0001).
 - `allowed_idps: [<one-time PIN idp id>]` with `auto_redirect_to_identity: true`.
 - `policies[]` with `decision`, `include: [{ email: { email } }]`, `reusable`, `precedence`. App-scoped policies come back `reusable: false`; reusable ones (`/access/policies`) are shared between apps and carry `app_count`.
-- Inline policy objects are accepted in the `POST /access/apps` body (API reference: "Reusable and inline policies are mutually exclusive"). **Unverified until `test/cloudflare-access-live.test.ts` runs:** the exact create and update bodies setup sends. The guard on this machine blocked creating a throwaway app during the spike.
+- Inline policy objects are accepted in the `POST /access/apps` body (API reference: "Reusable and inline policies are mutually exclusive"). **Verified 2026-11-06** by `test/cloudflare-access-live.test.ts` against the production account, on a throwaway `workers.dev` host that it deleted afterwards. Cloudflare accepted the exact create body setup sends (domain plus `public` destination, `allowed_idps` with the one-time PIN, `auto_redirect_to_identity`, an inline Allow policy) and stored it as sent. A re-run found the app and changed nothing. Cloudflare also accepted the app-scoped policy update (`PUT /access/apps/:id/policies/:id`), with the policy's other settings carried over. Still untested live: updating a reusable policy (`PUT /access/policies/:id`), and adding the One-time PIN login method, since the account already has it.
 
 ## One-time PIN
 
